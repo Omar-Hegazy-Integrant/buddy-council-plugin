@@ -1,0 +1,12 @@
+{
+  "requirements": {
+    "provider": "excel",
+    "excel_path": "/path/to/Clinical Window App Requirements.xls"
+  },
+  "test_cases": {
+    "provider": "testrail",
+    "base_url": "https://your-instance.testrail.io",
+    "project_id": 1,
+    "suite_id": null
+  }
+}
