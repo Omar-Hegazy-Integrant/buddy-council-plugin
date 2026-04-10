@@ -1,0 +1,33 @@
+# Secrets & credentials
+config/secrets.json
+*.secrets.json
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (if MCP servers are added later)
+node_modules/
+dist/
+*.tgz
+
+# Python (if scripts are added)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Claude Code local state
+.claude/settings.local.json
+
+# Temporary files
+*.tmp
+*.bak
