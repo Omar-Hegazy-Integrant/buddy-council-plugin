@@ -1,22 +1,26 @@
+---
+description: Fetch test cases from the configured source (TestRail). Reads config/sources.json and delegates to the correct provider.
+---
+
 # Fetch Test Cases — Router Skill
 
 Fetch test cases from the configured source. This skill reads the user's configuration and delegates to the correct provider.
 
 ## How It Works
 
-1. Read `config/sources.json` from the plugin directory
+1. Read `config/sources.json` from the plugin root (`${CLAUDE_PLUGIN_ROOT}/config/sources.json`)
 2. Check the `test_cases.provider` field
 3. Delegate to the matching provider:
 
 | Provider | Delegate To |
 |----------|-------------|
-| `testrail` | Follow instructions in `providers/testrail/fetch.md` |
+| `testrail` | Follow instructions in `${CLAUDE_PLUGIN_ROOT}/providers/testrail/fetch.md` |
 
 4. Return the results in canonical schema format
 
 ## Input
 
-- `scope`: Optional — test case ID, section/feature name, or "all"
+- `scope`: Optional — test case ID, section/feature name, or "all". Passed via $ARGUMENTS.
 
 ## Error Handling
 

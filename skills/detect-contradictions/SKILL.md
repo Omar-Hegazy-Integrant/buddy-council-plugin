@@ -1,3 +1,7 @@
+---
+description: Analyze normalized requirements and test cases to find contradictions, inconsistencies, and missing alignment. Core analysis engine for the contradiction agent.
+---
+
 # Detect Contradictions — Skill
 
 Analyze normalized requirements and test cases to find contradictions, inconsistencies, and missing alignment.

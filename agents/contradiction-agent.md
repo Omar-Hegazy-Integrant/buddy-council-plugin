@@ -8,7 +8,7 @@ When invoked, follow these steps in order:
 
 ### Step 1: Load Configuration
 
-Read `config/sources.json` from the plugin root directory. If it does not exist, stop and tell the user to run `/bc:setup` first.
+Read `${CLAUDE_PLUGIN_ROOT}/config/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
 
 ### Step 2: Determine Scope
 
@@ -19,35 +19,35 @@ Based on the arguments you received:
 
 ### Step 3: Fetch Requirements
 
-Follow the instructions in `skills/fetch-requirements.md`:
+Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md`:
 - It will read the config and delegate to the correct provider (Excel or Jama)
 - Pass the scope from Step 2
 - Collect the returned requirements in canonical schema format
 
 ### Step 4: Fetch Test Cases
 
-Follow the instructions in `skills/fetch-test-cases.md`:
+Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`:
 - It will read the config and delegate to TestRail
 - Fetch all test cases (or scoped by section if scope is a feature)
 - Collect the returned test cases in canonical schema format
 
 ### Step 5: Normalize and Link
 
-Follow the instructions in `skills/normalize-artifacts.md`:
+Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/normalize-artifacts/SKILL.md`:
 - Clean all text fields
 - Normalize IDs
 - Cross-link requirements and test cases bidirectionally via their `linked_ids`
 
 ### Step 6: Detect Contradictions
 
-Follow the instructions in `skills/detect-contradictions.md`:
+Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/detect-contradictions/SKILL.md`:
 - Analyze the normalized, linked artifacts
 - Detect all seven contradiction types
 - Classify by severity
 
 ### Step 7: Report
 
-Present the findings as a human-readable report following the format specified in `skills/detect-contradictions.md`. The report should:
+Present the findings as a human-readable report following the format specified in `${CLAUDE_PLUGIN_ROOT}/skills/detect-contradictions/SKILL.md`. The report should:
 - Start with a summary
 - Group findings by severity (CRITICAL → HIGH → MEDIUM → LOW)
 - Quote specific text from requirements and test cases

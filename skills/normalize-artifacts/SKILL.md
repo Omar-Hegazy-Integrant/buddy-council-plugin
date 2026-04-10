@@ -1,3 +1,7 @@
+---
+description: Normalize fetched requirements and test cases into canonical schema, clean text, normalize IDs, and cross-link artifacts bidirectionally.
+---
+
 # Normalize Artifacts — Skill
 
 Normalize fetched requirements and test cases into a consistent canonical schema, then link them together by cross-referencing IDs.
@@ -12,7 +16,7 @@ Every artifact must conform to this shape:
 
 ```json
 {
-  "type": "requirement" | "test_case",
+  "type": "requirement | test_case",
   "id": "string",
   "title": "string",
   "description": "string",

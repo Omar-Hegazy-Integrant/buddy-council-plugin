@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "Buddy Council",
+  "owner": {
+    "name": "Omar Hegazy"
+  },
+  "plugins": [
+    {
+      "name": "bc",
+      "source": ".",
+      "description": "Multi-agent requirements/test-case analysis — contradiction detection, alignment validation, and cross-artifact reasoning",
+      "version": "0.1.0"
+    }
+  ]
+}
