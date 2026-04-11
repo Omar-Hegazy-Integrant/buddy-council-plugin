@@ -1,56 +1,39 @@
 # TestRail Test Cases Fetch — Provider Skill
 
-Fetch test cases from TestRail via its REST API.
+Fetch test cases from TestRail using the `testrail` MCP server tools.
+
+## Prerequisites
+
+The `testrail` MCP server must be configured and running. If the MCP tools (`testrail_get_cases`, etc.) are not available, tell the user to check their `.mcp.json` configuration or run `/bc:setup`.
 
 ## Input
 
-- `base_url`: TestRail instance URL (from `config/sources.json`)
 - `project_id`: TestRail project ID (from `config/sources.json`)
 - `suite_id`: Optional suite ID filter (from `config/sources.json`)
 - `scope`: Optional — a specific test case ID, section name, or "all"
 
-## Credentials
-
-Read from `~/.buddy-council-secrets.json`:
-```json
-{
-  "testrail": {
-    "username": "user@company.com",
-    "api_key": "xxx"
-  }
-}
-```
-
 ## How to Fetch
 
-1. Read `config/sources.json` for connection details
-2. Read `~/.buddy-council-secrets.json` for credentials
-3. Fetch test cases using the TestRail API with pagination:
+1. Read `config/sources.json` for `project_id` and `suite_id`
 
-```bash
-# Fetch test cases (paginated — TestRail returns max 250 per request)
-OFFSET=0
-while true; do
-  RESPONSE=$(curl -s -u "USERNAME:API_KEY" \
-    "BASE_URL/index.php?/api/v2/get_cases/PROJECT_ID&suite_id=SUITE_ID&limit=250&offset=$OFFSET")
+2. **Fetch sections** to build a section ID → name map:
+   - Call `testrail_get_sections(project_id, suite_id)` 
+   - Build a lookup: `{section_id: section_name}` for resolving the `feature` field
 
-  # Extract cases from response
-  # TestRail v2 API returns: {"offset":0,"limit":250,"size":N,"_links":{},"cases":[...]}
-  # Check if "cases" array is empty or size < limit to know when to stop
+3. **Fetch test cases** with pagination:
+   - Call `testrail_get_cases(project_id, suite_id, offset=0)`
+   - If `size == limit` in the response, call again with `offset += limit`
+   - Repeat until all cases are collected
 
-  OFFSET=$((OFFSET + 250))
-  # Break when no more results
-done
-```
+4. **If scope is a specific test case ID**: Call `testrail_get_case(case_id)` instead (strip the "TC-" prefix if present)
 
-4. For each test case, extract relevant fields:
+5. For each test case, extract relevant fields:
    - `id` → TestRail case ID (prefixed as "TC-{id}")
    - `title` → test case title
    - `custom_desc` or `custom_preconds` → description/preconditions
    - `custom_steps_separated` → structured test steps (array of {content, expected})
    - `custom_jama_req_id` → linked Jama requirement ID (critical for linking)
-   - `section_id` → section for grouping
-   - `suite_id` → suite reference
+   - `section_id` → resolve to section name using the lookup from step 2
 
 ## Output
 
@@ -85,16 +68,15 @@ Return a JSON array of test case objects in the canonical schema:
 | `id` | `id` (prefixed with "TC-") |
 | `title` | `title` |
 | `custom_desc` + `custom_preconds` | `description` |
-| `section_id` → section name via API | `feature` |
+| `section_id` → section name via lookup | `feature` |
 | `custom_jama_req_id` | parsed into `linked_ids` |
 | `custom_steps_separated` | `raw_fields.steps` |
 
-## Pagination Notes
+## Pagination
 
-- TestRail limits responses to 250 items
-- Use `offset` parameter to page through results
-- Stop when returned `size` < `limit` or `cases` array is empty
-- For large projects, consider fetching by section to reduce payload size
+- `testrail_get_cases` returns max 250 cases per call
+- Check if `size == limit` in the response — if true, there are more pages
+- Call again with `offset += limit` until all cases are collected
 
 ## Linking
 

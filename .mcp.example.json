@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "testrail": {
+      "command": "uv",
+      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/testrail-server", "mcp", "run", "server.py"],
+      "env": {
+        "TESTRAIL_BASE_URL": "",
+        "TESTRAIL_USERNAME": "",
+        "TESTRAIL_API_KEY": ""
+      }
+    }
+  }
+}

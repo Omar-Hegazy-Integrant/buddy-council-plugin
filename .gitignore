@@ -1,6 +1,7 @@
 # Secrets & credentials
 config/secrets.json
 config/sources.json
+.mcp.json
 *.secrets.json
 .env
 .env.*

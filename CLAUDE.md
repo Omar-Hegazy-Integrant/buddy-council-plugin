@@ -11,7 +11,8 @@ Buddy-Council helps teams detect contradictions, inconsistencies, and alignment 
 - **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:setup`)
 - **Agents** (`agents/`) — reasoning engines that orchestrate skills to complete tasks
 - **Skills** (`skills/`) — reusable capabilities (fetch data, normalize, analyze)
-- **Providers** (`providers/`) — platform-specific data fetching (TestRail, Excel, Jama)
+- **Providers** (`providers/`) — platform-specific data fetching instructions (TestRail, Excel, Jama)
+- **MCP Servers** (`mcp-servers/`) — standalone MCP servers wrapping external APIs (TestRail, Jama)
 - **Config** (`config/`) — source selection and non-secret configuration
 
 ## Data Flow
@@ -25,7 +26,7 @@ Requirements and test cases are fetched live from configured sources, normalized
 ## Key Conventions
 
 - All commands use the `bc:` prefix
-- No hardcoded secrets — credentials live in `~/.buddy-council-secrets.json`
+- No hardcoded secrets — credentials live in `~/.buddy-council-secrets.json` and `.mcp.json` (both gitignored)
 - Source configuration lives in `config/sources.json`
 - Provider skills are swappable — adding a new platform means adding a `providers/<name>/` folder
 - Agents never call providers directly — they go through router skills (`fetch-requirements`, `fetch-test-cases`)

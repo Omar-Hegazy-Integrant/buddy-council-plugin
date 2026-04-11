@@ -30,7 +30,6 @@ Ask the user:
 For **TestRail**:
 - Ask for: base URL (e.g., `https://company.testrail.io`)
 - Ask for: username (email) and API key
-- Store credentials in `~/.buddy-council-secrets.json` under the `testrail` key
 - Test the connection by running:
   ```bash
   curl -s -u "USERNAME:API_KEY" "BASE_URL/index.php?/api/v2/get_projects" | head -c 500
@@ -39,6 +38,8 @@ For **TestRail**:
 - Ask if they want to filter by suite (optional)
 
 ## Step 3: Write Configuration
+
+### 3a: Write source config
 
 Write `config/sources.json` with the selected providers and non-secret settings:
 
@@ -57,6 +58,8 @@ Write `config/sources.json` with the selected providers and non-secret settings:
 }
 ```
 
+### 3b: Write credentials
+
 Write `~/.buddy-council-secrets.json` with credentials:
 
 ```json
@@ -73,16 +76,44 @@ Set restrictive permissions on the secrets file:
 chmod 600 ~/.buddy-council-secrets.json
 ```
 
+### 3c: Configure the TestRail MCP server
+
+If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.json`.
+
+Then update the `env` block in `.mcp.json` with the TestRail credentials:
+
+```json
+{
+  "mcpServers": {
+    "testrail": {
+      "command": "uv",
+      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/testrail-server", "mcp", "run", "server.py"],
+      "env": {
+        "TESTRAIL_BASE_URL": "https://company.testrail.io",
+        "TESTRAIL_USERNAME": "user@company.com",
+        "TESTRAIL_API_KEY": "the-api-key"
+      }
+    }
+  }
+}
+```
+
+**Important**: Tell the user that after setup completes, they need to restart Claude Code (or run `/mcp` to toggle the testrail server) for the MCP server to become available.
+
 ## Step 4: Validate
 
 - Confirm `config/sources.json` was written
 - Confirm `~/.buddy-council-secrets.json` was written
-- If TestRail was configured, confirm the test connection succeeded
+- Confirm `.mcp.json` was written with TestRail credentials
 - If Excel was configured, confirm the file is readable
-- Tell the user they can now run `/bc:contradiction` to detect contradictions
+- Tell the user:
+  1. Restart Claude Code or toggle the MCP server with `/mcp` for the TestRail connection to activate
+  2. Then run `/bc:contradiction` to detect contradictions
 
 ## Important
 
-- NEVER write credentials into `config/sources.json` — that file is committed to git
-- ALWAYS write credentials to `~/.buddy-council-secrets.json` — that file stays local
+- NEVER write credentials into `config/sources.json` — that file is user-specific and contains no secrets
+- ALWAYS write credentials to both `~/.buddy-council-secrets.json` (for backward compatibility) and `.mcp.json` (for the MCP server)
+- `.mcp.json` is gitignored (it contains secrets in the env block)
 - If `~/.buddy-council-secrets.json` already exists, merge new entries without overwriting existing ones
+- If `.mcp.json` already exists, merge the testrail server config without overwriting other servers

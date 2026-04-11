@@ -22,10 +22,17 @@ buddy_council_plugin/
 │   ├── fetch-test-cases/        # Router: delegates to configured provider
 │   ├── normalize-artifacts/     # Clean, normalize IDs, cross-link
 │   └── detect-contradictions/   # Core analysis (7 contradiction types)
-├── providers/                   # Platform-specific data fetching
+├── providers/                   # Platform-specific data fetching instructions
 │   ├── excel/fetch.md           # Jama Excel export parser
-│   ├── testrail/fetch.md        # TestRail REST API client
+│   ├── testrail/fetch.md        # TestRail via MCP tools
 │   └── jama/fetch.md            # Jama API (placeholder, auth blocked)
+├── mcp-servers/                 # Standalone MCP servers wrapping external APIs
+│   ├── testrail-server/         # Python MCP server for TestRail REST API
+│   │   ├── server.py            # 5 read-only tools (projects, suites, sections, cases, case)
+│   │   └── pyproject.toml       # Dependencies: mcp[cli], httpx
+│   └── jama-server/             # Placeholder for future Jama MCP server
+│       └── server.py            # Empty skeleton
+├── .mcp.example.json            # Template for MCP server config (committed)
 ├── config/
 │   ├── sources.json             # Active provider config (no secrets)
 │   └── sources.example.json     # Template for new setups
@@ -54,7 +61,7 @@ User runs /bc:contradiction [scope]
   │    │
   │    Step 4: Fetch test cases
   │    │  └─ skills/fetch-test-cases/ → reads config → delegates to provider
-  │    │     └─ providers/testrail/fetch.md
+  │    │     └─ providers/testrail/fetch.md → MCP tools → TestRail API
   │    │
   │    Step 5: Normalize & cross-link
   │    │  └─ skills/normalize-artifacts/
@@ -119,9 +126,11 @@ Agent → Router Skill → Provider Skill
 
 Secrets are separated from configuration:
 
-- `config/sources.json` — committed to git, contains provider selection and non-secret settings (base URLs, project IDs)
+- `config/sources.json` — user-specific (gitignored), contains provider selection and non-secret settings (base URLs, project IDs)
 - `~/.buddy-council-secrets.json` — user-local, `chmod 600`, contains API keys and usernames
-- `/bc:setup` writes both files and validates the connection
+- `.mcp.json` — gitignored, contains MCP server config with credentials in env block
+- `.mcp.example.json` — committed template with empty credential placeholders
+- `/bc:setup` writes all three files and validates the connection
 
 ## Contradiction Detection
 
@@ -157,6 +166,21 @@ The agent detects 7 types of issues:
 | Coverage | `/bc:coverage` | Find untested requirements |
 | QA | `/bc:ask` | Answer general questions about artifacts |
 
-### MCP Servers (Phase 1)
+### MCP Servers
 
-Replace curl-based provider skills with proper MCP servers for TestRail and Jama, providing structured tool interfaces.
+The `mcp-servers/` directory contains standalone MCP servers that wrap external APIs:
+
+```
+Agent → Router Skill → Provider Skill → MCP Tool → External API
+```
+
+- **MCP servers** are the transport layer — thin API wrappers returning raw JSON
+- **Provider skills** are the mapping layer — field extraction, canonical schema conversion
+- **Normalization skill** handles cross-cutting concerns — cleaning, linking, deduplication
+
+| Server | Status | Tools |
+|--------|--------|-------|
+| `testrail-server` | Active | `testrail_get_projects`, `testrail_get_suites`, `testrail_get_sections`, `testrail_get_cases`, `testrail_get_case` |
+| `jama-server` | Placeholder | None yet (auth blocked) |
+
+MCP servers are configured in `.mcp.json` (gitignored) with credentials in the `env` block. See `.mcp.example.json` for the template.
