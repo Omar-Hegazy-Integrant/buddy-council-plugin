@@ -30,10 +30,12 @@ Ask the user:
 For **TestRail**:
 - Ask for: base URL (e.g., `https://company.testrail.io`)
 - Ask for: username (email) and API key
-- Test the connection by running:
-  ```bash
-  curl -s -u "USERNAME:API_KEY" "BASE_URL/index.php?/api/v2/get_projects" | head -c 500
-  ```
+- Test the connection:
+  - If the `mcp__testrail__testrail_get_projects` MCP tool is available, use it to verify the connection
+  - If MCP tools are not yet available (first-time setup), fall back to:
+    ```bash
+    curl -s -u "USERNAME:API_KEY" "BASE_URL/index.php?/api/v2/get_projects" | head -c 500
+    ```
 - If successful, ask which project to use (list the projects returned)
 - Ask if they want to filter by suite (optional)
 

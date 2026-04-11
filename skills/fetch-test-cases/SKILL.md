@@ -1,5 +1,5 @@
 ---
-description: Fetch test cases from the configured source (TestRail). Reads config/sources.json and delegates to the correct provider.
+description: Fetch test cases from the configured source. Reads config/sources.json and delegates to the correct provider, which uses MCP tools for data access.
 ---
 
 # Fetch Test Cases — Router Skill
@@ -16,7 +16,8 @@ Fetch test cases from the configured source. This skill reads the user's configu
 |----------|-------------|
 | `testrail` | Follow instructions in `${CLAUDE_PLUGIN_ROOT}/providers/testrail/fetch.md` |
 
-4. Return the results in canonical schema format
+4. **IMPORTANT**: The provider skill will instruct you to use specific MCP tools. Use those MCP tools directly — do NOT use curl or Bash to call APIs.
+5. Return the results in canonical schema format
 
 ## Input
 
@@ -26,4 +27,4 @@ Fetch test cases from the configured source. This skill reads the user's configu
 
 - If `config/sources.json` does not exist → tell the user to run `/bc:setup` first
 - If the configured provider file does not exist → report which provider was expected and that it's not yet implemented
-- If credentials are missing from `~/.buddy-council-secrets.json` → tell the user to run `/bc:setup` to configure credentials
+- If MCP tools specified by the provider are not available → tell the user to check `.mcp.json` and restart Claude Code

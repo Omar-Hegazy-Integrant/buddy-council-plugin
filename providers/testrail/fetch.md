@@ -1,10 +1,15 @@
 # TestRail Test Cases Fetch — Provider Skill
 
-Fetch test cases from TestRail using the `testrail` MCP server tools.
+Fetch test cases from TestRail using the `testrail` MCP server.
 
 ## Prerequisites
 
-The `testrail` MCP server must be configured and running. If the MCP tools (`testrail_get_cases`, etc.) are not available, tell the user to check their `.mcp.json` configuration or run `/bc:setup`.
+The `testrail` MCP server must be configured in `.mcp.json` and running. Check if the MCP tools are available by looking for tools prefixed with `mcp__testrail__` (e.g., `mcp__testrail__testrail_get_cases`).
+
+If the MCP tools are NOT available:
+- Tell the user to run `/bc:setup` to configure the MCP server
+- Then restart Claude Code or toggle the server with `/mcp`
+- Do NOT fall back to curl — the MCP server is the required data access method
 
 ## Input
 
@@ -14,25 +19,29 @@ The `testrail` MCP server must be configured and running. If the MCP tools (`tes
 
 ## How to Fetch
 
+**IMPORTANT: Always use the MCP tools below. Never use curl or Bash to call the TestRail API directly.**
+
 1. Read `config/sources.json` for `project_id` and `suite_id`
 
 2. **Fetch sections** to build a section ID → name map:
-   - Call `testrail_get_sections(project_id, suite_id)` 
+   - Call the MCP tool `mcp__testrail__testrail_get_sections` with `project_id` and `suite_id`
    - Build a lookup: `{section_id: section_name}` for resolving the `feature` field
 
 3. **Fetch test cases** with pagination:
-   - Call `testrail_get_cases(project_id, suite_id, offset=0)`
-   - If `size == limit` in the response, call again with `offset += limit`
+   - Call the MCP tool `mcp__testrail__testrail_get_cases` with `project_id`, `suite_id`, `offset=0`
+   - Parse the response — it returns `{"cases": [...], "size": N, "offset": N, "limit": N}`
+   - If `size == limit`, call again with `offset += limit`
    - Repeat until all cases are collected
+   - Combine all pages into a single list
 
-4. **If scope is a specific test case ID**: Call `testrail_get_case(case_id)` instead (strip the "TC-" prefix if present)
+4. **If scope is a specific test case ID**: Call `mcp__testrail__testrail_get_case` with `case_id` (strip the "TC-" prefix if present)
 
-5. For each test case, extract relevant fields:
-   - `id` → TestRail case ID (prefixed as "TC-{id}")
+5. For each test case, extract and map fields:
+   - `id` → prefix with "TC-" (e.g., `id: 1234` becomes `"TC-1234"`)
    - `title` → test case title
-   - `custom_desc` or `custom_preconds` → description/preconditions
-   - `custom_steps_separated` → structured test steps (array of {content, expected})
-   - `custom_jama_req_id` → linked Jama requirement ID (critical for linking)
+   - `custom_desc` or `custom_preconds` → combine into description
+   - `custom_steps_separated` → structured test steps (array of `{content, expected}`)
+   - `custom_jama_req_id` → parse into `linked_ids` (see Linking section below)
    - `section_id` → resolve to section name using the lookup from step 2
 
 ## Output
@@ -74,7 +83,7 @@ Return a JSON array of test case objects in the canonical schema:
 
 ## Pagination
 
-- `testrail_get_cases` returns max 250 cases per call
+- `mcp__testrail__testrail_get_cases` returns max 250 cases per call
 - Check if `size == limit` in the response — if true, there are more pages
 - Call again with `offset += limit` until all cases are collected
 
