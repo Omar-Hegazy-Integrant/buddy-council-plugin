@@ -8,7 +8,7 @@ Buddy-Council helps teams detect contradictions, inconsistencies, and alignment 
 
 ## Architecture
 
-- **Commands** (`.claude/commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:setup`)
+- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:setup`)
 - **Agents** (`agents/`) — reasoning engines that orchestrate skills to complete tasks
 - **Skills** (`skills/`) — reusable capabilities (fetch data, normalize, analyze)
 - **Providers** (`providers/`) — platform-specific data fetching (TestRail, Excel, Jama)

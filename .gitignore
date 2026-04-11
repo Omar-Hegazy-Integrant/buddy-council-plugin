@@ -1,5 +1,6 @@
 # Secrets & credentials
 config/secrets.json
+config/sources.json
 *.secrets.json
 .env
 .env.*
