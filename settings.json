@@ -1,0 +1,10 @@
+{
+  "allowedTools": [
+    "Read",
+    "mcp__testrail__testrail_get_projects",
+    "mcp__testrail__testrail_get_suites",
+    "mcp__testrail__testrail_get_sections",
+    "mcp__testrail__testrail_get_cases",
+    "mcp__testrail__testrail_get_case"
+  ]
+}

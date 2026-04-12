@@ -1,11 +1,12 @@
 {
   "name": "bc",
   "description": "Multi-agent requirements/test-case analysis — contradiction detection, alignment validation, and cross-artifact reasoning",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Omar Hegazy"
   },
   "repository": "https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin",
   "license": "MIT",
-  "keywords": ["requirements", "test-cases", "contradictions", "testrail", "jama", "qa"]
+  "keywords": ["requirements", "test-cases", "contradictions", "testrail", "jama", "qa"],
+  "hooks": "./hooks/hooks.json"
 }
