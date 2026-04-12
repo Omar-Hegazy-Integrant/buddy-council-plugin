@@ -1,7 +1,7 @@
 #!/bin/bash
 # PreToolUse hook for Bash: allow only safe commands used by the plugin.
 # Reads tool input JSON from stdin, inspects the command field.
-# Exit 0 = allow, Exit 2 = block.
+# Exit 0 = allow, Exit 1 = warn + ask user, Exit 2 = hard block.
 
 set -e
 
@@ -33,7 +33,11 @@ if echo "$COMMAND" | grep -qE '^(pip|uv)\s+install'; then
   exit 0
 fi
 
-# Block everything else
-echo "[Hook] BLOCKED: Bash command not in plugin allowlist." >&2
-echo "[Hook] Allowed: python3, chmod on secrets, curl to testrail, pip/uv install" >&2
-exit 2
+# Not in allowlist — warn and ask for user approval
+echo "[bc plugin] This Bash command is not in the auto-approved list." >&2
+echo "" >&2
+echo "  Auto-approved: python3, chmod secrets, curl testrail, pip/uv install" >&2
+echo "  Command: $(echo "$COMMAND" | head -c 120)" >&2
+echo "" >&2
+echo "  You can approve this manually if it looks safe." >&2
+exit 1
