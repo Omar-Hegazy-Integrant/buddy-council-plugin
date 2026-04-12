@@ -1,6 +1,7 @@
 {
   "allowedTools": [
     "Read",
+    "Bash",
     "mcp__testrail__testrail_get_projects",
     "mcp__testrail__testrail_get_suites",
     "mcp__testrail__testrail_get_sections",
