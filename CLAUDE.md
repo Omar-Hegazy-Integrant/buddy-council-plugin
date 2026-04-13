@@ -8,7 +8,7 @@ Buddy-Council helps teams detect contradictions, inconsistencies, and alignment 
 
 ## Architecture
 
-- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:setup`)
+- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:coverage`, `/bc:ask`, `/bc:setup`)
 - **Agents** (`agents/`) — reasoning engines that orchestrate skills to complete tasks
 - **Skills** (`skills/`) — reusable capabilities (fetch data, normalize, analyze)
 - **Providers** (`providers/`) — platform-specific data fetching instructions (TestRail, Excel, Jama)
@@ -35,6 +35,8 @@ Requirements and test cases are fetched live from configured sources, normalized
 
 - `/bc:setup` — Configure data sources and credentials
 - `/bc:contradiction` — Detect contradictions between requirements and test cases
+- `/bc:coverage` — Find untested requirements, orphan test cases, and coverage gaps
+- `/bc:ask` — Natural language query — routes to the right agent or answers directly
 
 ## Canonical Artifact Schema
 

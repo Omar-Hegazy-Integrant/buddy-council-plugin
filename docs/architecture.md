@@ -12,16 +12,19 @@ buddy_council_plugin/
 │   ├── plugin.json              # Plugin identity (name: "bc")
 │   └── marketplace.json         # Marketplace catalog for distribution
 ├── commands/                    # User-facing slash commands
-│   ├── contradiction.md         # /bc:contradiction
-│   ├── setup.md                 # /bc:setup
-│   └── ask.md                   # /bc:ask (future orchestration)
+│   ├── contradiction.md         # /bc:contradiction — direct contradiction analysis
+│   ├── coverage.md              # /bc:coverage — direct coverage analysis
+│   ├── ask.md                   # /bc:ask — intent classification + routing
+│   └── setup.md                 # /bc:setup — onboarding and configuration
 ├── agents/                      # Reasoning engines
-│   └── contradiction-agent.md   # Orchestrates the contradiction workflow
+│   ├── contradiction-agent.md   # Orchestrates the contradiction workflow
+│   └── coverage-agent.md        # Orchestrates the coverage workflow
 ├── skills/                      # Reusable capabilities (SKILL.md with frontmatter)
 │   ├── fetch-requirements/      # Router: delegates to configured provider
 │   ├── fetch-test-cases/        # Router: delegates to configured provider
 │   ├── normalize-artifacts/     # Clean, normalize IDs, cross-link
-│   └── detect-contradictions/   # Core analysis (7 contradiction types)
+│   ├── detect-contradictions/   # Core analysis (7 contradiction types)
+│   └── analyze-coverage/        # Coverage gap detection and metrics
 ├── providers/                   # Platform-specific data fetching instructions
 │   ├── excel/fetch.md           # Jama Excel export parser
 │   ├── testrail/fetch.md        # TestRail via MCP tools
@@ -146,25 +149,41 @@ The agent detects 7 types of issues:
 | Temporal/state conflicts | MEDIUM | Conflicting state or timing expectations |
 | Missing alignment | LOW | Untested requirements or orphan test cases |
 
-## Future Architecture
-
-### Multi-Agent Orchestration (Phase 2)
-
-```
-/bc:ask "Why does TC-1234 contradict REQ-85?"
-  └─ ask.md → intent classification → routes to contradiction-agent
-
-/bc:ask "What's the test coverage for login?"
-  └─ ask.md → intent classification → routes to coverage-agent (future)
-```
-
-### Planned Agents
+## Available Agents
 
 | Agent | Command | Purpose |
 |-------|---------|---------|
 | Contradiction | `/bc:contradiction` | Detect conflicts between artifacts |
-| Coverage | `/bc:coverage` | Find untested requirements |
-| QA | `/bc:ask` | Answer general questions about artifacts |
+| Coverage | `/bc:coverage` | Find untested requirements and coverage gaps |
+| QA (via orchestration) | `/bc:ask` | Answer general questions about artifacts |
+
+## Orchestration (`/bc:ask`)
+
+The `/bc:ask` command classifies intent and routes to the right agent:
+
+```
+/bc:ask "Why does TC-1234 contradict REQ-85?"
+  └─ ask.md → CONTRADICTION intent → follows contradiction-agent.md
+
+/bc:ask "What requirements have no tests?"
+  └─ ask.md → COVERAGE intent → follows coverage-agent.md
+
+/bc:ask "What does CWA-REQ-85 do?"
+  └─ ask.md → QA intent → fetches data, answers directly
+```
+
+Intent classification uses Claude's native reasoning with trigger phrases and examples — no regex or external classifier. When intent is ambiguous, the command asks a clarifying question.
+
+## Coverage Detection
+
+The coverage agent detects 3 types of gaps:
+
+| Type | Severity | Description |
+|------|----------|-------------|
+| Untested requirement (critical) | HIGH | Safety-critical requirement with no test cases |
+| Untested requirement (other) | MEDIUM | Non-critical requirement with no test cases |
+| Orphan test case | MEDIUM | Test case with no linked requirement |
+| Weak coverage | LOW | Test exists but doesn't fully exercise the requirement |
 
 ### MCP Servers
 
