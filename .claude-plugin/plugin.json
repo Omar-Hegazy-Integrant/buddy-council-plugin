@@ -1,7 +1,7 @@
 {
   "name": "bc",
   "description": "Multi-agent requirements/test-case analysis — contradiction detection, alignment validation, and cross-artifact reasoning",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": {
     "name": "Omar Hegazy"
   },
