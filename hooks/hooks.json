@@ -1,9 +1,17 @@
 {
-  "PreToolUse": [
-    {
-      "matcher": "Bash",
-      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/validate-bash.sh",
-      "description": "Allow only safe Bash commands (python, chmod secrets, curl testrail, pip/uv install)"
-    }
-  ]
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/validate-bash.sh",
+            "description": "Allow only safe Bash commands (python, chmod secrets, curl testrail, pip/uv install)",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }
