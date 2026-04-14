@@ -61,6 +61,14 @@ Present the findings as a human-readable report following the format specified i
 - Provide actionable recommendations
 - End with the missing alignment section
 
+## Follow-Up Handling
+
+After delivering the report, if the user asks a follow-up question:
+
+- **About data already in this conversation** (e.g., "explain that critical issue in more detail", "what exactly does REQ-85 say?"): Answer directly from the data and findings already in context. Do not re-fetch.
+- **About a different requirement or feature not yet analyzed** (e.g., "what about REQ-48?", "check the Login feature"): Tell the user that this data wasn't included in the current analysis, and offer to run a new analysis for the new scope. For example:
+  > REQ-48 wasn't part of this analysis (I analyzed the Patient Monitoring feature). Want me to run `/bc:contradiction CWA-REQ-48` to check it?
+
 ## Error Handling
 
 - If config is missing → direct user to `/bc:setup`
@@ -72,8 +80,8 @@ Present the findings as a human-readable report following the format specified i
 ## Boundaries
 
 This agent ONLY detects contradictions. It does not:
-- Suggest new test cases (that's the future Coverage Agent)
-- Answer general questions (that's the future QA Agent)
+- Suggest new test cases (use `/bc:coverage`)
+- Answer general questions (use `/bc:ask`)
 - Modify any source data
 
-If the user asks for something outside scope, acknowledge it and suggest the appropriate future command.
+If the user asks for something outside scope, acknowledge it and suggest the appropriate command.

@@ -61,6 +61,14 @@ Present the findings as a human-readable report following the format specified i
 - Flag weak coverage with specific gaps identified
 - End with prioritized recommendations
 
+## Follow-Up Handling
+
+After delivering the report, if the user asks a follow-up question:
+
+- **About data already in this conversation** (e.g., "tell me more about that untested requirement", "which tests cover REQ-85?"): Answer directly from the data and findings already in context. Do not re-fetch.
+- **About a different requirement or feature not yet analyzed** (e.g., "what about the Login feature?", "check REQ-48"): Tell the user that this data wasn't included in the current analysis, and offer to run a new analysis for the new scope. For example:
+  > The Login feature wasn't part of this analysis (I analyzed Patient Monitoring). Want me to run `/bc:coverage "Login"` to check it?
+
 ## Error Handling
 
 - If config is missing → direct user to `/bc:setup`
@@ -72,7 +80,7 @@ Present the findings as a human-readable report following the format specified i
 ## Boundaries
 
 This agent ONLY analyzes coverage. It does not:
-- Detect contradictions (that's the Contradiction Agent — use `/bc:contradiction`)
+- Detect contradictions (use `/bc:contradiction`)
 - Answer general questions (use `/bc:ask`)
 - Modify any source data
 - Write new test cases (it recommends where tests are needed, not what they should contain)
