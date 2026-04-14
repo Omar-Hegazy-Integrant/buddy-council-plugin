@@ -12,7 +12,7 @@
         "repo": "Omar-Hegazy-Integrant/buddy-council-plugin"
       },
       "description": "Multi-agent requirements/test-case analysis — contradiction detection, alignment validation, and cross-artifact reasoning",
-      "version": "0.3.0"
+      "version": "0.4.0"
     }
   ]
 }
