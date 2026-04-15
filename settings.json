@@ -1,11 +1,15 @@
 {
   "allowedTools": [
     "Read",
+    "Glob",
+    "Grep",
     "Bash",
+    "Agent",
     "mcp__testrail__testrail_get_projects",
     "mcp__testrail__testrail_get_suites",
     "mcp__testrail__testrail_get_sections",
     "mcp__testrail__testrail_get_cases",
+    "mcp__testrail__testrail_get_cases_by_refs",
     "mcp__testrail__testrail_get_case"
   ]
 }
