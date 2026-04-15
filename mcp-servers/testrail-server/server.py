@@ -150,6 +150,43 @@ async def testrail_get_cases(
 
 
 @mcp.tool()
+async def testrail_get_cases_by_refs(
+    project_id: int,
+    refs: str,
+    suite_id: int | None = None,
+) -> str:
+    """Fetch test cases that reference specific requirement IDs.
+
+    Uses TestRail's built-in filter parameter to search by the refs/reference field.
+    This is much faster than fetching all cases when you only need cases linked to
+    specific requirements.
+
+    Args:
+        project_id: The TestRail project ID.
+        refs: Comma-separated requirement IDs to search for (e.g., "CWA-REQ-85,CWA-REQ-86").
+        suite_id: Optional suite ID to filter by.
+
+    Returns a JSON object with cases array (same format as testrail_get_cases).
+    Note: TestRail's refs filter searches the built-in "References" field.
+    For custom fields like custom_jama_req_id, use testrail_get_cases with section_id filtering instead.
+    """
+    params: dict[str, Any] = {"refs": refs, "limit": 250, "offset": 0}
+    if suite_id is not None:
+        params["suite_id"] = suite_id
+
+    all_cases: list[dict[str, Any]] = []
+    while True:
+        data = await _get(f"get_cases/{project_id}", params=params)
+        cases = data.get("cases", [])
+        all_cases.extend(cases)
+        if data.get("size", 0) < params["limit"]:
+            break
+        params["offset"] = params["offset"] + params["limit"]
+
+    return json.dumps({"cases": all_cases, "size": len(all_cases)}, indent=2)
+
+
+@mcp.tool()
 async def testrail_get_case(case_id: int) -> str:
     """Fetch a single test case by its ID.
 

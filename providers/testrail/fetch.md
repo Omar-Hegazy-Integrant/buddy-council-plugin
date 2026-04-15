@@ -15,34 +15,67 @@ If the MCP tools are NOT available:
 
 - `project_id`: TestRail project ID (from `config/sources.json`)
 - `suite_id`: Optional suite ID filter (from `config/sources.json`)
-- `scope`: Optional — a specific test case ID, section name, or "all"
+- `scope`: Optional — a specific test case ID, feature/section name, requirement IDs, or "all"
+- `feature_name`: Optional — the feature name from the requirements (used to narrow the fetch)
+- `requirement_ids`: Optional — list of requirement IDs to find linked test cases for
 
-## How to Fetch
+## Fetching Strategy
 
 **IMPORTANT: Always use the MCP tools below. Never use curl or Bash to call the TestRail API directly.**
 
-1. Read `config/sources.json` for `project_id` and `suite_id`
+**Choose the narrowest fetch strategy based on available context:**
 
-2. **Fetch sections** to build a section ID → name map:
-   - Call the MCP tool `mcp__testrail__testrail_get_sections` with `project_id` and `suite_id`
-   - Build a lookup: `{section_id: section_name}` for resolving the `feature` field
+### Strategy 1: Single Test Case (scope is a test case ID like "TC-1234")
+- Call `mcp__testrail__testrail_get_case` with `case_id` (strip the "TC-" prefix)
+- Done — return a single test case
 
-3. **Fetch test cases** with pagination:
-   - Call the MCP tool `mcp__testrail__testrail_get_cases` with `project_id`, `suite_id`, `offset=0`
-   - Parse the response — it returns `{"cases": [...], "size": N, "offset": N, "limit": N}`
-   - If `size == limit`, call again with `offset += limit`
-   - Repeat until all cases are collected
-   - Combine all pages into a single list
+### Strategy 2: By Section (scope is a feature name, or feature_name was passed from requirements)
+This is the **preferred strategy** when analyzing a specific feature — avoids fetching all cases.
 
-4. **If scope is a specific test case ID**: Call `mcp__testrail__testrail_get_case` with `case_id` (strip the "TC-" prefix if present)
+1. Call `mcp__testrail__testrail_get_sections` with `project_id` and `suite_id`
+2. Find the section(s) whose name matches the feature name (case-insensitive, partial match)
+3. For each matching section, call `mcp__testrail__testrail_get_cases` with `project_id`, `suite_id`, AND `section_id`
+4. Paginate within each section if needed (check `size == limit`)
+5. Combine results from all matching sections
 
-5. For each test case, extract and map fields:
-   - `id` → prefix with "TC-" (e.g., `id: 1234` becomes `"TC-1234"`)
-   - `title` → test case title
-   - `custom_desc` or `custom_preconds` → combine into description
-   - `custom_steps_separated` → structured test steps (array of `{content, expected}`)
-   - `custom_jama_req_id` → parse into `linked_ids` (see Linking section below)
-   - `section_id` → resolve to section name using the lookup from step 2
+### Strategy 3: By Requirement References (requirement_ids were passed)
+Use when you know which requirement IDs you care about and want to find their linked test cases.
+
+1. Call `mcp__testrail__testrail_get_cases_by_refs` with `project_id`, `suite_id`, and `refs` (comma-separated requirement IDs)
+2. This searches TestRail's built-in References field
+3. If results are empty (the instance may use custom fields instead of refs), fall back to Strategy 2 or 4
+
+### Strategy 4: All Cases (scope is "all" or no narrower context is available)
+Use only when no feature or requirement context is available.
+
+1. Call `mcp__testrail__testrail_get_cases` with `project_id`, `suite_id`, `offset=0`
+2. Paginate: if `size == limit`, call again with `offset += limit`
+3. Repeat until all cases are collected
+
+## How to Choose
+
+| Context Available | Strategy |
+|-------------------|----------|
+| Specific test case ID | Strategy 1 |
+| Feature/section name known (from requirements or scope) | Strategy 2 |
+| Specific requirement IDs to find linked tests for | Strategy 3, then fall back to 2 |
+| "all" or no context | Strategy 4 |
+
+## Section Lookup (required for all strategies except 1)
+
+Before fetching cases (unless using Strategy 1), always fetch sections first:
+- Call `mcp__testrail__testrail_get_sections` with `project_id` and `suite_id`
+- Build a lookup: `{section_id: section_name}` for resolving the `feature` field
+
+## Field Mapping
+
+For each test case returned, extract and map fields:
+- `id` → prefix with "TC-" (e.g., `id: 1234` becomes `"TC-1234"`)
+- `title` → test case title
+- `custom_desc` or `custom_preconds` → combine into description
+- `custom_steps_separated` → structured test steps (array of `{content, expected}`)
+- `custom_jama_req_id` → parse into `linked_ids` (see Linking section below)
+- `section_id` → resolve to section name using the section lookup
 
 ## Output
 
@@ -69,17 +102,6 @@ Return a JSON array of test case objects in the canonical schema:
   }
 ]
 ```
-
-## Field Mapping
-
-| TestRail Field | Canonical Field |
-|----------------|----------------|
-| `id` | `id` (prefixed with "TC-") |
-| `title` | `title` |
-| `custom_desc` + `custom_preconds` | `description` |
-| `section_id` → section name via lookup | `feature` |
-| `custom_jama_req_id` | parsed into `linked_ids` |
-| `custom_steps_separated` | `raw_fields.steps` |
 
 ## Pagination
 

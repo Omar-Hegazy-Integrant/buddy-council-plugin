@@ -35,6 +35,10 @@ Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKIL
 Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`:
 - It will read the config and delegate to the correct provider
 - The provider skill will specify which MCP tools to use — follow those instructions exactly
+- **Pass context from Step 3 to narrow the fetch**:
+  - If scope is a **feature name**: pass it as the feature context so the provider fetches only that section's test cases
+  - If scope is a **requirement ID**: pass the requirement's feature name (from the fetched requirements) AND the requirement IDs, so the provider can fetch by section or by reference instead of fetching everything
+  - If scope is **"all"**: still try to fetch section-by-section rather than all at once for better performance
 - Collect the returned test cases in canonical schema format
 
 ### Step 5: Normalize and Link
