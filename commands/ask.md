@@ -16,7 +16,7 @@ Analyze the user's question and classify it into one of these intents:
 - "Find conflicts between requirements and test cases"
 - "What's mismatched in the BGM feature?"
 
-**Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/contradiction-agent.md`, using the user's question to determine scope (extract requirement ID, feature name, or default to "all").
+**Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/contradiction-agent.agent.md`, using the user's question to determine scope (extract requirement ID, feature name, or default to "all").
 
 ### Intent: COVERAGE
 **Trigger phrases**: coverage, untested, orphan, missing tests, gaps, "what's not tested", "which requirements have no tests", "test coverage"
@@ -26,7 +26,7 @@ Analyze the user's question and classify it into one of these intents:
 - "Find orphan test cases"
 - "Are there untested requirements in Patient Monitoring?"
 
-**Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/coverage-agent.md`, using the user's question to determine scope.
+**Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/coverage-agent.agent.md`, using the user's question to determine scope.
 
 ### Intent: QA (General Question)
 **Trigger phrases**: "what does", "tell me about", "which test cases", "list", "summarize", "describe", "how many", "what is", "show me", "explain"

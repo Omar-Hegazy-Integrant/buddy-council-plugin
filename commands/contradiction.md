@@ -17,7 +17,7 @@ Analyze requirements and test cases to find contradictions, inconsistencies, and
 1. First, verify that `config/sources.json` exists in the plugin directory. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
-2. Invoke the contradiction agent by following the instructions in `agents/contradiction-agent.md`, passing any arguments as the analysis scope.
+2. Invoke the contradiction agent by following the instructions in `agents/contradiction-agent.agent.md`, passing any arguments as the analysis scope.
 
 3. The agent will:
    - Fetch requirements from the configured source (Excel or Jama)

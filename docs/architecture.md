@@ -17,8 +17,8 @@ buddy_council_plugin/
 │   ├── ask.md                   # /bc:ask — intent classification + routing
 │   └── setup.md                 # /bc:setup — onboarding and configuration
 ├── agents/                      # Reasoning engines
-│   ├── contradiction-agent.md   # Orchestrates the contradiction workflow
-│   └── coverage-agent.md        # Orchestrates the coverage workflow
+│   ├── contradiction-agent.agent.md   # Orchestrates the contradiction workflow
+│   └── coverage-agent.agent.md        # Orchestrates the coverage workflow
 ├── skills/                      # Reusable capabilities (SKILL.md with frontmatter)
 │   ├── fetch-requirements/      # Router: delegates to configured provider
 │   ├── fetch-test-cases/        # Router: delegates to configured provider
@@ -51,7 +51,7 @@ User runs /bc:contradiction [scope]
   ├─ Command (commands/contradiction.md)
   │    └─ Validates config exists
   │
-  ├─ Agent (agents/contradiction-agent.md)
+  ├─ Agent (agents/contradiction-agent.agent.md)
   │    └─ Orchestrates the full pipeline:
   │
   │    Step 1: Load config/sources.json
@@ -163,10 +163,10 @@ The `/bc:ask` command classifies intent and routes to the right agent:
 
 ```
 /bc:ask "Why does TC-1234 contradict REQ-85?"
-  └─ ask.md → CONTRADICTION intent → follows contradiction-agent.md
+  └─ ask.md → CONTRADICTION intent → follows contradiction-agent.agent.md
 
 /bc:ask "What requirements have no tests?"
-  └─ ask.md → COVERAGE intent → follows coverage-agent.md
+  └─ ask.md → COVERAGE intent → follows coverage-agent.agent.md
 
 /bc:ask "What does CWA-REQ-85 do?"
   └─ ask.md → QA intent → fetches data, answers directly
