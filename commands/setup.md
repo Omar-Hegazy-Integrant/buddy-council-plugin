@@ -7,15 +7,18 @@ You are the Buddy-Council setup assistant. Walk the user through configuring the
 Ask the user:
 
 > Which tool are you using for hosting requirements?
+>
 > 1. **Jama** (not yet supported — authentication in progress)
 > 2. **Excel sheet** (Jama export file)
 
 If they choose **Excel**:
+
 - Ask for the absolute file path to the Excel file
 - Verify the file exists using the Read tool
 - Confirm it looks like a Jama export (check for columns like ID, Description, Item Type, Folder structure)
 
 If they choose **Jama**:
+
 - Inform them that Jama integration is in progress and suggest using the Excel export as a temporary fallback
 - If they still want Jama, collect: base URL, username, API key
 - Store credentials in `~/.buddy-council-secrets.json` under the `jama` key
@@ -25,9 +28,11 @@ If they choose **Jama**:
 Ask the user:
 
 > Which tool are you using for hosting test cases?
+>
 > 1. **TestRail** (supported)
 
 For **TestRail**:
+
 - Ask for: base URL (e.g., `https://company.testrail.io`)
 - Ask for: username (email) and API key
 - Test the connection:
@@ -44,10 +49,12 @@ For **TestRail**:
 Ask the user:
 
 > Do you want to configure Jira for creating tickets from the `/bc:validate` command?
+>
 > - **Yes** — Configure Jira Cloud integration
 > - **No** — Skip this step
 
 If they choose **Yes**:
+
 - Ask for: Jira base URL (e.g., `https://yourorg.atlassian.net`)
 - Ask for: Email address for Jira account
 - Ask for: API token (guide them to https://id.atlassian.com/manage-profile/security/api-tokens)
@@ -58,9 +65,10 @@ If they choose **Yes**:
     curl -s -u "EMAIL:API_TOKEN" "BASE_URL/rest/api/3/project" | head -c 500
     ```
 - If successful, ask which project to use for ticket creation (list the projects returned, or ask for project key)
-- Ask for default issue type (Story, Task, Bug, etc.) — default to "Story" if skipped
+- Ask for default issue type (Story, Task, Bug, etc.) — default to "Task" if skipped
 
 If they choose **No**:
+
 - Skip Jira configuration
 - The `/bc:validate` command will still work with `--dry-run` mode but won't create real tickets
 
@@ -112,6 +120,7 @@ Write `~/.buddy-council-secrets.json` with credentials:
 If Jira was not configured, omit the `"jira"` section.
 
 Set restrictive permissions on the secrets file:
+
 ```bash
 chmod 600 ~/.buddy-council-secrets.json
 ```
