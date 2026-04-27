@@ -8,5 +8,10 @@
     "base_url": "https://your-instance.testrail.io",
     "project_id": 1,
     "suite_id": null
+  },
+  "jira": {
+    "base_url": "https://yourorg.atlassian.net",
+    "project_key": "PROJ",
+    "default_issue_type": "Story"
   }
 }

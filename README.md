@@ -12,6 +12,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | **Excel** (Jama export) | Requirements | Supported (temporary Jama fallback) |
 | **Jama** | Requirements | Planned (auth in progress) |
 | **Jira** | Requirements | Planned |
+| **Jira** | Ticket creation | Supported (via MCP server) |
 | **Qase** | Test cases | Planned |
 
 ## Available Commands
@@ -21,6 +22,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | `/bc:setup` | Configure data sources and credentials |
 | `/bc:contradiction` | Detect contradictions between requirements and test cases |
 | `/bc:coverage` | Find untested requirements, orphan tests, and coverage gaps |
+| `/bc:validate` | Validate ticket description and create Jira ticket (with dry-run support) |
 | `/bc:ask` | Natural language query — routes to the right agent |
 
 ## Prerequisites
@@ -183,6 +185,15 @@ The agent fetches requirements and test cases, normalizes and cross-links them, 
 /bc:coverage                             # Full coverage analysis
 /bc:coverage "Login"                     # Coverage for a specific feature
 ```
+
+### Validate and Create Tickets
+
+```
+/bc:validate "Add login button to checkout page"                    # Validate and create Jira ticket
+/bc:validate "Add real-time heart rate monitor" --dry-run          # Test without creating real ticket
+```
+
+The agent validates the ticket description against existing requirements, detects contradictions, asks questions to fill gaps, generates a draft, and creates the Jira ticket. Use `--dry-run` to test the workflow and save a draft markdown file without creating a real ticket.
 
 ### Ask Questions
 

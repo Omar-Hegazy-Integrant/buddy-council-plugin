@@ -39,9 +39,34 @@ For **TestRail**:
 - If successful, ask which project to use (list the projects returned)
 - Ask if they want to filter by suite (optional)
 
-## Step 3: Write Configuration
+## Step 3: Jira (Optional — for Ticket Creation)
 
-### 3a: Write source config
+Ask the user:
+
+> Do you want to configure Jira for creating tickets from the `/bc:validate` command?
+> - **Yes** — Configure Jira Cloud integration
+> - **No** — Skip this step
+
+If they choose **Yes**:
+- Ask for: Jira base URL (e.g., `https://yourorg.atlassian.net`)
+- Ask for: Email address for Jira account
+- Ask for: API token (guide them to https://id.atlassian.com/manage-profile/security/api-tokens)
+- Test the connection:
+  - If the `mcp__jira__jira_get_projects` MCP tool is available, use it to verify the connection
+  - If MCP tools are not yet available (first-time setup), fall back to:
+    ```bash
+    curl -s -u "EMAIL:API_TOKEN" "BASE_URL/rest/api/3/project" | head -c 500
+    ```
+- If successful, ask which project to use for ticket creation (list the projects returned, or ask for project key)
+- Ask for default issue type (Story, Task, Bug, etc.) — default to "Story" if skipped
+
+If they choose **No**:
+- Skip Jira configuration
+- The `/bc:validate` command will still work with `--dry-run` mode but won't create real tickets
+
+## Step 4: Write Configuration
+
+### 4a: Write source config
 
 Write `config/sources.json` with the selected providers and non-secret settings:
 
@@ -56,11 +81,18 @@ Write `config/sources.json` with the selected providers and non-secret settings:
     "base_url": "https://company.testrail.io",
     "project_id": 1,
     "suite_id": null
+  },
+  "jira": {
+    "base_url": "https://yourorg.atlassian.net",
+    "project_key": "PROJ",
+    "default_issue_type": "Story"
   }
 }
 ```
 
-### 3b: Write credentials
+If Jira was not configured, omit the `"jira"` section.
+
+### 4b: Write credentials
 
 Write `~/.buddy-council-secrets.json` with credentials:
 
@@ -69,20 +101,26 @@ Write `~/.buddy-council-secrets.json` with credentials:
   "testrail": {
     "username": "user@company.com",
     "api_key": "the-api-key"
+  },
+  "jira": {
+    "email": "user@company.com",
+    "api_token": "jira-api-token"
   }
 }
 ```
+
+If Jira was not configured, omit the `"jira"` section.
 
 Set restrictive permissions on the secrets file:
 ```bash
 chmod 600 ~/.buddy-council-secrets.json
 ```
 
-### 3c: Configure the TestRail MCP server
+### 4c: Configure MCP servers
 
 If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.json`.
 
-Then update the `env` block in `.mcp.json` with the TestRail credentials:
+Then update the `env` blocks in `.mcp.json` with credentials:
 
 ```json
 {
@@ -95,27 +133,39 @@ Then update the `env` block in `.mcp.json` with the TestRail credentials:
         "TESTRAIL_USERNAME": "user@company.com",
         "TESTRAIL_API_KEY": "the-api-key"
       }
+    },
+    "jira": {
+      "command": "uv",
+      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/jira-server", "mcp", "run", "server.py"],
+      "env": {
+        "JIRA_BASE_URL": "https://yourorg.atlassian.net",
+        "JIRA_EMAIL": "user@company.com",
+        "JIRA_API_TOKEN": "jira-api-token"
+      }
     }
   }
 }
 ```
 
-**Important**: Tell the user that after setup completes, they need to restart Claude Code (or run `/mcp` to toggle the testrail server) for the MCP server to become available.
+If Jira was not configured, omit the `"jira"` section from `.mcp.json`.
 
-## Step 4: Validate
+**Important**: Tell the user that after setup completes, they need to restart Claude Code (or run `/mcp` to toggle the servers) for the MCP servers to become available.
+
+## Step 5: Validate
 
 - Confirm `config/sources.json` was written
 - Confirm `~/.buddy-council-secrets.json` was written
-- Confirm `.mcp.json` was written with TestRail credentials
+- Confirm `.mcp.json` was written with TestRail (and optionally Jira) credentials
 - If Excel was configured, confirm the file is readable
 - Tell the user:
-  1. Restart Claude Code or toggle the MCP server with `/mcp` for the TestRail connection to activate
-  2. Then run `/bc:contradiction` to detect contradictions
+  1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate
+  2. Then run `/bc:contradiction` to detect contradictions or `/bc:validate` to create tickets
 
 ## Important
 
 - NEVER write credentials into `config/sources.json` — that file is user-specific and contains no secrets
-- ALWAYS write credentials to both `~/.buddy-council-secrets.json` (for backward compatibility) and `.mcp.json` (for the MCP server)
+- ALWAYS write credentials to both `~/.buddy-council-secrets.json` (for backward compatibility) and `.mcp.json` (for the MCP servers)
 - `.mcp.json` is gitignored (it contains secrets in the env block)
 - If `~/.buddy-council-secrets.json` already exists, merge new entries without overwriting existing ones
-- If `.mcp.json` already exists, merge the testrail server config without overwriting other servers
+- If `.mcp.json` already exists, merge new server configs without overwriting other servers
+- Jira configuration is **optional** — users can run `/bc:validate --dry-run` without configuring Jira
