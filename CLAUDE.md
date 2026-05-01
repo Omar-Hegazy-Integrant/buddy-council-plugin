@@ -8,7 +8,7 @@ Buddy-Council helps teams detect contradictions, inconsistencies, and alignment 
 
 ## Architecture
 
-- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:coverage`, `/bc:ask`, `/bc:setup`)
+- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:coverage`, `/bc:ask`, `/bc:setup`, `/bc:onboarding`, `/bc:validate`)
 - **Agents** (`agents/`) — reasoning engines that orchestrate skills to complete tasks
 - **Skills** (`skills/`) — reusable capabilities (fetch data, normalize, analyze)
 - **Providers** (`providers/`) — platform-specific data fetching instructions (TestRail, Excel, Jama)
@@ -37,6 +37,8 @@ Requirements and test cases are fetched live from configured sources, normalized
 - `/bc:contradiction` — Detect contradictions between requirements and test cases
 - `/bc:coverage` — Find untested requirements, orphan test cases, and coverage gaps
 - `/bc:ask` — Natural language query — routes to the right agent or answers directly
+- `/bc:onboarding` — Walk a new team member through the product feature-by-feature with paced demos, do/don't pairs from test cases, and an assessment phase. Progress is logged to `.buddy-council/onboarding-progress.json` in the user's project root and resumes across sessions.
+- `/bc:validate` — Validate Jira tickets against requirements and test cases (gap and contradiction detection)
 
 ## Canonical Artifact Schema
 
