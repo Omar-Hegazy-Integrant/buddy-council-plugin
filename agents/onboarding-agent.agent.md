@@ -82,6 +82,25 @@ If `current_phase == "demo"`:
   - The user types `skip feature` (mark `"skipped"`, advance to next feature, skip assessment)
   - The user types `pause` (write log, exit cleanly — tell the user how to resume)
 
+#### 6b.5. Code Mapping phase (optional)
+
+After the demo phase completes and before the assessment, if:
+- `requirements.project.enabled !== false` in `config/sources.json` (default true), AND
+- The current working directory contains a code repo marker (per `${CLAUDE_PLUGIN_ROOT}/skills/map-feature-to-code/SKILL.md` Step 1)
+
+Then invoke `${CLAUDE_PLUGIN_ROOT}/skills/map-feature-to-code/SKILL.md` in `mode: "in_onboarding"` with the feature plan, the normalized requirements + test cases, and the progress log path.
+
+The skill will:
+- Detect cwd as a code repo (or return `{detected: false}` and exit silently if not)
+- Use surgical SHA-diff caching if the codebase is a git repo, otherwise recompute fresh
+- Render the files+flow narrative + per-requirement locations
+- Honor inline deepening commands (`show snippet`, `show diagram`, `show callers`, `read`, `recompute code map`)
+- Return one of `{phase: "advance"}` (continue to assessment), `{phase: "skip_feature"}` (mark feature skipped, advance to next feature), or `{phase: "pause"}` (write log, exit cleanly)
+
+If `project.enabled === false` OR the cwd is not a code repo, **silently skip** this phase. The agent does not announce that code mapping was skipped — the user shouldn't be aware of the phase's existence when they're learning from a docs-only directory.
+
+The agent also honors `skip code map` as an inline control during this phase: the skill yields back with `{phase: "advance"}` and the agent moves to assessment.
+
 #### 6c. Assessment phase
 
 If `current_phase == "assessment"`:

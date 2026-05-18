@@ -95,6 +95,25 @@ Assessment schema (when populated):
 }
 ```
 
+Optional `code_mapping` schema (populated by `${CLAUDE_PLUGIN_ROOT}/skills/map-feature-to-code/SKILL.md` when an onboarding session runs from inside a code repo):
+
+```json
+{
+  "computed_at": "<ISO 8601 UTC>",
+  "git_sha": "<full SHA at compute time, or null if not a git repo>",
+  "files": [
+    { "path": "src/features/x.tsx", "role": "<one-line description>" }
+  ],
+  "flow": "<prose narrative of how files communicate>",
+  "requirement_locations": [
+    { "req_id": "CWA-REQ-85", "files": [{ "path": "...", "lines": "42-78" }] }
+  ],
+  "notes": ["<observations or unlocated requirements>"]
+}
+```
+
+`code_mapping` is **optional**. Absence means either the cwd wasn't a code repo on this run, the user disabled `project.enabled`, or the field hasn't been computed yet for that feature. The map-feature-to-code skill manages all reads and writes — when updating the log, preserve `code_mapping` unchanged unless that skill is the writer.
+
 ### 3. Read the Log (Resume)
 
 When resuming an existing journey:

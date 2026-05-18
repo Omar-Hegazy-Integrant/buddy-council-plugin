@@ -16,6 +16,104 @@ If they choose **Excel**:
 - Ask for the absolute file path to the Excel file
 - Verify the file exists using the Read tool
 - Confirm it looks like a Jama export (check for columns like ID, Description, Item Type, Folder structure)
+- Run the **column-mapping wizard** (Step 1a) so the parser knows which column means what
+- Then run the **GitHub enrichment wizard** (Step 1b) if the user mapped a GitHub doc URL column
+
+### Step 1a: Column-mapping wizard (Excel only)
+
+Read the Excel file's header row to detect actual column names. Use a Python one-liner via Bash:
+
+```bash
+python3 - <<'PYEOF'
+import pandas as pd, json, sys, os
+df = pd.read_excel(os.environ['BC_EXCEL_PATH'], skiprows=int(os.environ.get('BC_SKIP_ROWS', '3')))
+print(json.dumps([str(c) for c in df.columns]))
+PYEOF
+```
+
+Show the user the detected column headers and prompt them to map each canonical field. Use smart defaults from header names (case-insensitive substring match — e.g., a header named "ID" defaults to `id`, "Linked to Github" defaults to `github_url`):
+
+```
+Reading <excel_path>...
+Found these columns: [ID, Name, Description, Rationale, Item Type, Status, Jira ID, Linked to Github, Tags, Configuration]
+
+Map each canonical field to a column (Enter to accept the guess, leave blank to skip):
+  Requirement ID column [ID]: _
+  Title column [Name]: _
+  Description column [Description]: _
+  Status column [Status]: _
+  Item Type column [Item Type]: _
+  GitHub doc URL column [Linked to Github]: _
+
+Feature grouping:
+  1. Hierarchical — rows under a "Folder" row belong to that folder (current)
+  2. By column — one column literally names each requirement's feature
+  3. None
+  Choose [1]: _
+```
+
+If the user picks strategy 2, ask for the feature column name. Persist the mapping in `column_mapping` and the strategy under `feature_inference` in `config/sources.json`.
+
+Also offer to set `item_type_filter` — show a brief one-liner: *"Only include rows whose Item Type matches one of these (comma-separated, blank for no filter):"*. Common picks: `Functional Requirement, Requirement`.
+
+### Step 1b: GitHub enrichment wizard
+
+**Only run this step if the user mapped a `github_url` column in Step 1a.** Otherwise skip silently and proceed to Step 2.
+
+Detect available GitHub access strategies in parallel:
+
+- **CLI**: run `gh --version` and `gh auth status` (capture exit codes). If both succeed, CLI is available; capture the authenticated user from `gh auth status`.
+- **MCP**: check whether `mcp__github__get_file_contents` is a callable tool in this session.
+
+Tell the user what was detected and offer a choice, defaulting to CLI when both are available:
+
+```
+A GitHub doc URL column was configured. Setting up GitHub access...
+  Detected: gh CLI v2.x (authenticated as <user>) [ok]
+  Detected: github-mcp-server <available | not installed>
+
+Strategy [cli]: _
+```
+
+**If neither is available**: warn-and-continue. Write `enrichment.enabled: false` to config, tell the user enrichment is disabled (links will be detected but not fetched at runtime), and offer install hints:
+- For CLI: `brew install gh && gh auth login` (macOS) or visit https://cli.github.com/
+- For MCP: visit https://github.com/github/github-mcp-server for installation
+
+**If CLI is chosen**: nothing more to configure — `gh auth login` already handles auth. Write `enrichment.strategy: "cli"`.
+
+**If MCP is chosen**: ask the user for a GitHub Personal Access Token with `repo` scope (read access). Write the token to:
+- `~/.buddy-council-secrets.json` under `"github": { "token": "<PAT>" }` (chmod 600)
+- `.mcp.json` `mcpServers.github.env.GITHUB_TOKEN` (see Step 4c)
+
+Tell the user they'll need to restart Claude Code or toggle `/mcp` to activate the new server.
+
+#### Smoke test
+
+After the strategy is configured, pull one example URL from the sheet and try fetching it end-to-end. Use the column you just mapped:
+
+```bash
+python3 - <<'PYEOF'
+import pandas as pd, os, re
+df = pd.read_excel(os.environ['BC_EXCEL_PATH'], skiprows=int(os.environ.get('BC_SKIP_ROWS', '3')))
+col = os.environ['BC_GITHUB_URL_COL']
+for v in df[col].dropna().astype(str):
+    for u in re.split(r'[\s,;]+', v):
+        if u.startswith('https://github.com/'):
+            print(u); raise SystemExit
+PYEOF
+```
+
+If a URL is found, fetch it via the chosen strategy (CLI: `gh api repos/.../contents/...` and base64-decode; MCP: call `mcp__github__get_file_contents`). Show the user the first 200 chars of the decoded content as a preview:
+
+```
+Smoke test: fetching <first URL from sheet>...
+  Fetched 4,231 chars from <url>
+  Preview: "# Patient Monitoring Architecture\n\nThe patient monitoring..."
+
+Save config? [y]: _
+```
+
+If the smoke test fails (auth, repo not accessible, network), offer to retry, switch strategies, or save the config with enrichment disabled.
 
 If they choose **Jama**:
 
@@ -43,6 +141,49 @@ For **TestRail**:
     ```
 - If successful, ask which project to use (list the projects returned)
 - Ask if they want to filter by suite (optional)
+
+## Step 2.5: Code Mapping (auto-detected project)
+
+The `/bc:onboarding` command can optionally map each feature to the code that implements it, between the demo and assessment phases. This only fires when `/bc:onboarding` is run from inside a codebase. Setup auto-detects whether the current working directory looks like a code project and configures accordingly.
+
+Probe the cwd for these markers:
+
+| Marker | Indicates |
+|--------|-----------|
+| `package.json` | Node/JS/TS |
+| `pyproject.toml`, `setup.py`, `requirements.txt` | Python |
+| `Cargo.toml` | Rust |
+| `go.mod` | Go |
+| `pom.xml`, `build.gradle` | JVM |
+| `*.csproj` | .NET |
+| `Gemfile` | Ruby |
+| `composer.json` | PHP |
+| `.git/` | any git repo (fallback signal) |
+
+If at least one marker is present, report it and confirm:
+
+```
+Detected: this looks like a <language> project (saw <marker>).
+Code mapping will run during /bc:onboarding to show where each feature
+lives in the codebase.
+
+Enable code mapping during onboarding? [y]: _
+```
+
+If none of the markers are present, set `project.enabled: false` without prompting (the user is running setup from a docs-only directory; code mapping wouldn't have anything to map).
+
+Offer to configure two more knobs (with sensible defaults — accept Enter to skip):
+
+```
+ID patterns for grep (regex, comma-separated)
+  [CWA-REQ-\d+, TC-\d+]: _
+
+Extra directories to ignore (comma-separated, in addition to defaults
+  node_modules, dist, .next, build, vendor, __pycache__, .venv, target)
+  []: _
+```
+
+Persist as `project: { enabled, ignore_dirs, id_patterns }` in `config/sources.json` (see Step 4a).
 
 ## Step 3: Jira (Optional — for Ticket Creation)
 
@@ -76,13 +217,32 @@ If they choose **No**:
 
 ### 4a: Write source config
 
-Write `config/sources.json` with the selected providers and non-secret settings:
+Write `config/sources.json` with the selected providers and non-secret settings. Include the new column-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and 2.5:
 
 ```json
 {
   "requirements": {
     "provider": "excel",
-    "excel_path": "/absolute/path/to/requirements.xls"
+    "excel_path": "/absolute/path/to/requirements.xls",
+    "skip_rows": 3,
+    "column_mapping": {
+      "id": "ID",
+      "title": "Name",
+      "description": "Description",
+      "status": "Status",
+      "item_type": "Item Type",
+      "github_url": "Linked to Github"
+    },
+    "feature_inference": {
+      "strategy": "hierarchical_folder",
+      "folder_item_type": "Folder"
+    },
+    "item_type_filter": ["Functional Requirement", "Requirement"],
+    "enrichment": {
+      "enabled": true,
+      "strategy": "cli",
+      "max_doc_chars": 50000
+    }
   },
   "test_cases": {
     "provider": "testrail",
@@ -94,11 +254,16 @@ Write `config/sources.json` with the selected providers and non-secret settings:
     "base_url": "https://yourorg.atlassian.net",
     "project_key": "PROJ",
     "default_issue_type": "Story"
+  },
+  "project": {
+    "enabled": true,
+    "ignore_dirs": ["node_modules", "dist", ".next", "build", "vendor", "__pycache__", ".venv", "target"],
+    "id_patterns": ["CWA-REQ-\\d+", "TC-\\d+"]
   }
 }
 ```
 
-If Jira was not configured, omit the `"jira"` section.
+If Jira was not configured, omit the `"jira"` section. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. If the cwd is not a code project, set `project.enabled: false`.
 
 ### 4b: Write credentials
 
@@ -113,11 +278,14 @@ Write `~/.buddy-council-secrets.json` with credentials:
   "jira": {
     "email": "user@company.com",
     "api_token": "jira-api-token"
+  },
+  "github": {
+    "token": "<github-personal-access-token>"
   }
 }
 ```
 
-If Jira was not configured, omit the `"jira"` section.
+If Jira was not configured, omit the `"jira"` section. If the GitHub enrichment strategy is **not** `mcp` (e.g., CLI was chosen, or enrichment is disabled), omit the `"github"` section — `gh` CLI handles its own credentials.
 
 Set restrictive permissions on the secrets file:
 
@@ -157,6 +325,24 @@ Then update the `env` blocks in `.mcp.json` with credentials:
 ```
 
 If Jira was not configured, omit the `"jira"` section from `.mcp.json`.
+
+If GitHub enrichment was configured with `strategy: "mcp"`, also add a `github` server entry. The `github-mcp-server` binary is NOT vendored by this plugin — the user must install it externally (per `.mcp.example.json`). Example entry:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "github-mcp-server",
+      "args": ["stdio"],
+      "env": {
+        "GITHUB_TOKEN": "<the same PAT you stored in ~/.buddy-council-secrets.json>"
+      }
+    }
+  }
+}
+```
+
+If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github` server entry. The `gh` CLI handles auth via its own keychain.
 
 **Important**: Tell the user that after setup completes, they need to restart Claude Code (or run `/mcp` to toggle the servers) for the MCP servers to become available.
 

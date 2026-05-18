@@ -8,6 +8,14 @@
         "TESTRAIL_USERNAME": "",
         "TESTRAIL_API_KEY": ""
       }
+    },
+    "github": {
+      "_comment": "OPTIONAL: only needed if you chose the 'mcp' GitHub enrichment strategy in /bc:setup. Otherwise delete this entry. Requires `github-mcp-server` installed externally — see https://github.com/github/github-mcp-server. If you chose the 'cli' strategy, gh CLI handles auth via its own keychain and this entry is not used.",
+      "command": "github-mcp-server",
+      "args": ["stdio"],
+      "env": {
+        "GITHUB_TOKEN": ""
+      }
     }
   }
 }

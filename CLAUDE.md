@@ -8,11 +8,11 @@ Buddy-Council helps teams detect contradictions, inconsistencies, and alignment 
 
 ## Architecture
 
-- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:coverage`, `/bc:ask`, `/bc:setup`, `/bc:onboarding`, `/bc:validate`)
+- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:coverage`, `/bc:ask`, `/bc:setup`, `/bc:onboarding`, `/bc:validate`, `/bc:codemap`)
 - **Agents** (`agents/`) — reasoning engines that orchestrate skills to complete tasks
-- **Skills** (`skills/`) — reusable capabilities (fetch data, normalize, analyze)
-- **Providers** (`providers/`) — platform-specific data fetching instructions (TestRail, Excel, Jama)
-- **MCP Servers** (`mcp-servers/`) — standalone MCP servers wrapping external APIs (TestRail, Jama)
+- **Skills** (`skills/`) — reusable capabilities (fetch data, normalize, analyze, enrich, map to code)
+- **Providers** (`providers/`) — platform-specific data fetching instructions (TestRail, Excel, Jama, GitHub)
+- **MCP Servers** (`mcp-servers/`) — standalone MCP servers wrapping external APIs (TestRail, Jama). GitHub access is handled either via the official external `github-mcp-server` (not vendored) or via the `gh` CLI.
 - **Config** (`config/`) — source selection and non-secret configuration
 
 ## Data Flow
@@ -33,12 +33,13 @@ Requirements and test cases are fetched live from configured sources, normalized
 
 ## Available Commands
 
-- `/bc:setup` — Configure data sources and credentials
+- `/bc:setup` — Configure data sources and credentials. Also runs the Excel column-mapping wizard, GitHub enrichment strategy selection, and code-project auto-detection.
 - `/bc:contradiction` — Detect contradictions between requirements and test cases
 - `/bc:coverage` — Find untested requirements, orphan test cases, and coverage gaps
 - `/bc:ask` — Natural language query — routes to the right agent or answers directly
-- `/bc:onboarding` — Walk a new team member through the product feature-by-feature with paced demos, do/don't pairs from test cases, and an assessment phase. Progress is logged to `.buddy-council/onboarding-progress.json` in the user's project root and resumes across sessions.
+- `/bc:onboarding` — Walk a new team member through the product feature-by-feature with paced demos, do/don't pairs from test cases, optional code mapping when run from inside a codebase, and an assessment phase. Progress is logged to `.buddy-council/onboarding-progress.json` in the user's project root and resumes across sessions.
 - `/bc:validate` — Validate Jira tickets against requirements and test cases (gap and contradiction detection)
+- `/bc:codemap "<feature>"` — Map a single feature to where it lives in the current codebase (files, communication flow, per-requirement locations). Same output as the onboarding code-mapping phase, invokable standalone.
 
 ## Canonical Artifact Schema
 
@@ -53,6 +54,40 @@ All providers normalize data to this shape before analysis:
   "feature": "Feature Name",
   "status": "Active",
   "linked_ids": ["TC-1234"],
-  "raw_fields": {}
+  "raw_fields": {},
+  "extended_context": [
+    {
+      "source": "github",
+      "url": "https://github.com/org/repo/blob/main/docs/sds.md",
+      "locator": { "owner": "org", "repo": "repo", "path": "docs/sds.md", "ref": "main", "anchor": null },
+      "content": "<markdown verbatim>",
+      "fetched_at": "ISO 8601 UTC",
+      "referenced_images": [{ "alt": "...", "url": "https://raw.githubusercontent.com/..." }],
+      "truncated": false
+    }
+  ]
 }
 ```
+
+The `extended_context` field is **optional** — populated only when:
+- The provider extracted a `_enrichment_urls` transient field from the source (e.g., the Excel sheet has a `github_url` column mapped), AND
+- `requirements.enrichment.enabled === true` in `config/sources.json`, AND
+- The fetch succeeded.
+
+Every downstream skill treats it as optional and reads `description` non-exclusively, so legacy data and disabled-enrichment paths work unchanged.
+
+## Configuration Schema Additions
+
+`config/sources.json` supports these additional blocks for richer onboarding and analysis:
+
+- **`requirements.column_mapping`** — maps canonical fields (`id`, `title`, `description`, `status`, `item_type`, `github_url`, `feature`) to actual Excel column names. Set by the `/bc:setup` wizard. When absent, the Excel parser falls back to its legacy positional mode.
+- **`requirements.feature_inference`** — `{strategy: "hierarchical_folder" | "column" | "none", folder_item_type: "Folder"}`. Controls how requirements are grouped into features.
+- **`requirements.item_type_filter`** — array of `Item Type` values to include (everything else is ignored). Optional.
+- **`requirements.enrichment`** — `{enabled: bool, strategy: "cli" | "mcp", max_doc_chars: int}`. Drives GitHub-doc enrichment when a `github_url` column is mapped.
+- **`project`** — `{enabled: bool, ignore_dirs: [string], id_patterns: [regex]}`. Controls code mapping for `/bc:onboarding` and `/bc:codemap`. When `enabled` is true and cwd contains code markers, the onboarding agent runs a code-mapping phase between demo and assessment for each feature.
+
+## Progress Log Schema Additions
+
+`<user-project>/.buddy-council/onboarding-progress.json` `features[i]` now supports one additional optional field:
+
+- **`code_mapping`** — `{computed_at: ISO 8601 UTC, git_sha: string|null, files: [{path, role}], flow: string, requirement_locations: [{req_id, files: [{path, lines}]}], notes: [string]}`. Written by the `map-feature-to-code` skill. Cached with surgical SHA-diff invalidation when the codebase is a git repo. Stays in the gitignored `.buddy-council/` directory so it never reaches the team's repo.
