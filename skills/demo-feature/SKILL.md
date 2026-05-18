@@ -58,16 +58,33 @@ Source: <REQ-XYZ>
 
 <plain-language explanation, 2-4 sentences>
 
-✅ DO
+<if requirement.extended_context is populated, insert:>
+Linked documentation (from <source>:<owner>/<repo>:<path>)
+  <full content of extended_context[0].content, verbatim markdown>
+
+<if extended_context[0].referenced_images is non-empty, insert:>
+Referenced diagrams
+  • <alt text> — <raw image URL>
+  • <alt text> — <raw image URL>
+
+DO
   • <do rule 1>  (TC-1001)
   • <do rule 2>  (TC-1003)
 
-❌ DON'T
+DON'T
   • <don't rule 1>  (TC-1002)
   • <don't rule 2>  (TC-1004)
 
 [next / back / explain more / skip step / skip feature / note: ... / quiz me now / pause]
 ```
+
+**Weaving rules for `extended_context`:**
+
+- One requirement may have multiple `extended_context` entries (multiple URLs per cell). Render all of them, each as its own "Linked documentation" block headed by `source:owner/repo:path` so the user knows which doc they're reading.
+- If `extended_context[i].truncated === true`, the content already includes a trailing `[...truncated, see <URL> for full document]` line. Surface it as-is.
+- The image URLs in `referenced_images` are clickable; do not fetch the image bytes inline. The user can click through.
+- If a requirement has NO `extended_context`, omit both the "Linked documentation" and "Referenced diagrams" sections entirely — do not show empty headers.
+- The feature intro card (Phase 1) does NOT weave extended_context. Only per-step explanations do.
 
 ### 2b. Wait for user input
 
