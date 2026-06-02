@@ -69,6 +69,21 @@ copilot plugin marketplace add https://github.com/Omar-Hegazy-Integrant/buddy-co
 copilot plugin install bc
 ```
 
+### Copilot CLI — fewer permission prompts
+
+Claude Code auto-approves the plugin's read-only operations via a bundled hook. Copilot CLI has no equivalent shippable hook, so pre-approve the plugin's read-only tools at launch with `--allow-tool` (curated — write operations like Jira ticket creation still prompt):
+
+```bash
+copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),shell(jq:*),shell(gh api:*)'
+```
+
+Append the read-only tools for any other sources you configured:
+
+- **Jira** (ticket validation): `jira(jira_get_projects),jira(jira_get_issue_types),jira(jira_get_issue)`
+- **GitHub MCP** (doc enrichment): `github(get_file_contents)`
+
+The Excel parser (`python3 … parse.py`) and the TestRail connection test run once per analysis — when Copilot first prompts for them, choose **"always allow"** for the directory and it won't ask again. `/bc:setup` prints this recipe tailored to your configuration.
+
 ### Local Development (either platform)
 
 ```bash
@@ -227,7 +242,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - Secrets live in a single file, `~/.buddy-council-secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
 - All MCP tools are **read-only** — no write operations to external systems
-- A PreToolUse hook blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
+- A PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
+- The same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches) so you aren't prompted for harmless commands. Write operations — notably Jira ticket creation (`jira_create_issue`) — still prompt. This hook is **Claude Code**-only; for **Copilot CLI**, use the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts).
 
 ## Adding a New Provider
 

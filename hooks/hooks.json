@@ -7,7 +7,18 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/validate-bash.sh",
-            "description": "Allow only safe Bash commands (python, chmod secrets, curl testrail, pip/uv install)",
+            "description": "Hard-block destructive Bash; auto-approve the plugin's curated read-only commands",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-approve-mcp.sh",
+            "description": "Auto-approve read-only MCP fetches (testrail/github/jira get_*); write tools still prompt",
             "timeout": 10
           }
         ]

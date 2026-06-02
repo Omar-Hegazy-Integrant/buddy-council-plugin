@@ -356,6 +356,23 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
   1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate
   2. Then run `/bc:contradiction` to detect contradictions or `/bc:validate` to create tickets
 
+## Step 6: Reduce permission prompts (Copilot CLI)
+
+Claude Code auto-approves the plugin's read-only operations via the bundled hook — no action needed there. **Copilot CLI** has no shippable hook, so print a ready-to-paste `--allow-tool` launch recipe tailored to what was just configured, and tell the user to launch Copilot with it (writes like Jira creation still prompt):
+
+- Always include the TestRail read tools and safe shell:
+  `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),shell(jq:*),shell(gh api:*)`
+- If Jira was configured, also add: `jira(jira_get_projects),jira(jira_get_issue_types),jira(jira_get_issue)`
+- If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
+
+Present it as a single command, e.g.:
+
+```bash
+copilot --allow-tool='<comma-separated list from above>'
+```
+
+Also tell the user: the Excel parser and the TestRail connection test run once per analysis — when Copilot first prompts for them, choose **"always allow"** for the directory. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
+
 ## Important
 
 - NEVER write credentials into `config/sources.json` — that file is user-specific and contains no secrets
