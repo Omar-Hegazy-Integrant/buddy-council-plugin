@@ -172,12 +172,38 @@ Enable code mapping during onboarding? [y]: _
 
 If none of the markers are present, set `project.enabled: false` without prompting (the user is running setup from a docs-only directory; code mapping wouldn't have anything to map).
 
-Offer to configure two more knobs (with sensible defaults — accept Enter to skip):
+Configure two more knobs:
+
+#### Requirement ID pattern — infer from the sheet, then confirm
+
+Do **not** ask the user to type the ID pattern blind. Infer it from the actual values in the column they mapped to `id` in Step 1a. Sample that column (set `BC_ID_COLUMN` to the mapped column name and `BC_SKIP_ROWS` to the value used in Step 1a):
+
+```bash
+python3 - <<'PYEOF'
+import pandas as pd, os, json
+df = pd.read_excel(os.environ['BC_EXCEL_PATH'], skiprows=int(os.environ.get('BC_SKIP_ROWS', '3')))
+col = os.environ['BC_ID_COLUMN']
+vals = [s for s in (str(v).strip() for v in df[col].dropna()) if s and s.lower() not in ('nan', 'none')][:20]
+print(json.dumps(vals))
+PYEOF
+```
+
+From the sample values, derive a grep regex: escape the literal prefix and generalize the numeric part to `\d+` (e.g. samples `CWA-REQ-85, CWA-REQ-86, CWA-REQ-92` → `CWA-REQ-\d+`). If the samples contain more than one distinct prefix, produce one pattern per prefix. Present it for confirmation, defaulting to accept:
 
 ```
-ID patterns for grep (regex, comma-separated)
-  [CWA-REQ-\d+, TC-\d+]: _
+Detected requirement ID pattern from your sheet: CWA-REQ-\d+
+  (from samples: CWA-REQ-85, CWA-REQ-86, CWA-REQ-92)
+Use this, or enter your own?
+  [Enter to accept · or type one or more regexes, comma-separated]: _
+```
 
+Accept → use the inferred pattern(s); otherwise use what the user types. Always also append a test-case ID pattern for code references (default `TC-\d+`; adjust if the team uses a different convention). If sampling fails (no `id` column mapped, unreadable sheet), fall back to asking with the default `CWA-REQ-\d+, TC-\d+`.
+
+#### Ignore directories
+
+Then offer the ignore-dirs knob (Enter to accept defaults):
+
+```
 Extra directories to ignore (comma-separated, in addition to defaults
   node_modules, dist, .next, build, vendor, __pycache__, .venv, target)
   []: _
