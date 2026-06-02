@@ -10,6 +10,10 @@ Analyze normalized requirements and test cases to find contradictions, inconsist
 
 After artifacts have been fetched and normalized. This is the core analysis skill invoked by the contradiction agent.
 
+## Preconditions (MANDATORY)
+
+This skill requires BOTH normalized requirements AND test cases as input. If you were handed zero test cases (or zero requirements), do NOT produce a contradiction report — there is nothing valid to compare against. Stop and tell the calling agent the required data is missing so it can re-fetch or report the gap. Never fabricate test cases or treat requirements' `linked_ids` as a substitute for fetched test cases.
+
 ## Contradiction Types
 
 Detect these seven types of issues:

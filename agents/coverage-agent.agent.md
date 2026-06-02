@@ -30,12 +30,27 @@ Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKIL
 - Pass the scope from Step 2
 - Collect the returned requirements in canonical schema format
 
-### Step 4: Fetch Test Cases
+### Step 4: Fetch Test Cases — MANDATORY
+
+This step is **required** and must not be skipped. Coverage analysis is *defined* by comparing requirements against test cases, so running it without fetched test cases is meaningless. Do **not** infer test cases from requirements' `linked_ids` — fetch them via the provider's MCP tools.
 
 Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`:
 - It will read the config and delegate to the correct provider
 - The provider skill will specify which MCP tools to use — follow those instructions exactly
 - Collect the returned test cases in canonical schema format
+
+### Step 4.5: Data-Readiness Gate — MANDATORY, do not skip
+
+Before any analysis, verify both fetches actually ran and print exactly one line:
+
+`Readiness: <N> requirements, <M> test cases fetched for scope "<scope>".`
+
+Then:
+- If Step 3 or Step 4 did not actually execute, STOP and execute it now.
+- If **M (test cases) == 0**: do NOT silently report "0% coverage" — a zero-test-case result almost always means the fetch was skipped or failed, not that coverage is genuinely zero. Stop and tell the user no test cases were retrieved, distinguishing an empty result (recheck the feature/section name or broaden scope) from a provider/MCP error (surface it + the `.mcp.json` / `/mcp` remedy). Only report true 0% coverage after confirming the scope genuinely has no test cases.
+- If **N (requirements) == 0**: stop and report.
+
+Proceed to Step 5 only when the data is confirmed.
 
 ### Step 5: Normalize and Link
 

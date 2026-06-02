@@ -10,6 +10,10 @@ Identify coverage gaps between requirements and test cases after they have been 
 
 After artifacts have been fetched and normalized. This is the core analysis skill invoked by the coverage agent.
 
+## Preconditions (MANDATORY)
+
+This skill requires normalized requirements AND test cases. If you were handed zero test cases, do NOT report "0% coverage" as a finding — a zero-test-case input almost always means the fetch was skipped or failed. Stop and tell the calling agent to verify the test-case fetch (empty result vs. provider error). Only compute true 0% coverage when the caller has confirmed the scope genuinely has no test cases.
+
 ## Coverage Categories
 
 ### 1. Untested Requirements

@@ -37,13 +37,17 @@ If no ticket description is provided, prompt the user:
 
 > Please provide a ticket description. Usage: `/bc:validate "Your ticket description here"`
 
-### Step 3: Fetch Requirements
+### Step 3: Fetch Requirements — MANDATORY
+
+This step is **required** and must not be skipped. Ticket validation is meaningless without the requirement set to match against. (This agent does not fetch test cases — requirements are the data it needs.)
 
 Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md`:
 
 - Read the config and delegate to the correct provider (Excel or Jama)
 - Fetch ALL requirements (needed for matching against the ticket description)
 - Collect the returned requirements in canonical schema format
+
+Then print one line: `Readiness: <N> requirements fetched.` If **N == 0** or the fetch did not run, STOP — do not proceed to matching/validation. Report whether it was an empty result or a provider/MCP error (with the `.mcp.json` / `/mcp` remedy). Do not fabricate requirements.
 
 ### Step 4: Find Related Requirements
 

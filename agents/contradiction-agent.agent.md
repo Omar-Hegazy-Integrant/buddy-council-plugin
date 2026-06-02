@@ -30,7 +30,9 @@ Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKIL
 - Pass the scope from Step 2
 - Collect the returned requirements in canonical schema format
 
-### Step 4: Fetch Test Cases
+### Step 4: Fetch Test Cases — MANDATORY
+
+This step is **required**. Do not skip it, defer it, or substitute it. Contradiction analysis compares requirements against test cases, so it is invalid without them. Do **not** infer or fabricate test cases from requirements' `linked_ids` — those are reference IDs, not test cases. You must actually fetch test cases via the provider's MCP tools.
 
 Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`:
 - It will read the config and delegate to the correct provider
@@ -40,6 +42,19 @@ Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.
   - If scope is a **requirement ID**: pass the requirement's feature name (from the fetched requirements) AND the requirement IDs, so the provider can fetch by section or by reference instead of fetching everything
   - If scope is **"all"**: still try to fetch section-by-section rather than all at once for better performance
 - Collect the returned test cases in canonical schema format
+
+### Step 4.5: Data-Readiness Gate — MANDATORY, do not skip
+
+Before any analysis, verify both fetches actually ran and print exactly one line:
+
+`Readiness: <N> requirements, <M> test cases fetched for scope "<scope>".`
+
+Then:
+- If Step 3 or Step 4 did not actually execute, STOP and execute it now — analysis on un-fetched data is invalid.
+- If **M (test cases) == 0**: do NOT proceed to analysis and do NOT report contradictions. Tell the user no test cases were retrieved for this scope and state the likely cause — either an empty result (the feature/section genuinely has none, or the narrowing name didn't match: suggest rechecking the feature/section name or broadening scope) or a provider/MCP error (surface it, plus the `.mcp.json` / `/mcp` remedy). Never substitute requirements' `linked_ids` for real test cases.
+- If **N (requirements) == 0**: likewise stop and report.
+
+Proceed to Step 5 only when N > 0 and M > 0.
 
 ### Step 5: Normalize and Link
 
