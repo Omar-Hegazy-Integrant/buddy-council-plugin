@@ -139,7 +139,7 @@ If you prefer to configure manually instead of using `/bc:setup`:
 chmod 600 ~/.buddy-council-secrets.json
 ```
 
-**3. Create `.mcp.json`** in the plugin root (copy from `.mcp.example.json` and fill in credentials):
+**3. Create `.mcp.json`** in the plugin root (copy from `.mcp.example.json`). It holds **no secrets** — only the non-secret base URL and `BC_SECRETS_FILE`, a pointer to the secrets file; the server reads credentials from `~/.buddy-council-secrets.json`:
 
 ```json
 {
@@ -149,8 +149,7 @@ chmod 600 ~/.buddy-council-secrets.json
       "args": ["run", "--directory", "mcp-servers/testrail-server", "mcp", "run", "server.py"],
       "env": {
         "TESTRAIL_BASE_URL": "https://your-instance.testrail.io",
-        "TESTRAIL_USERNAME": "user@company.com",
-        "TESTRAIL_API_KEY": "your-testrail-api-key"
+        "BC_SECRETS_FILE": "~/.buddy-council-secrets.json"
       }
     }
   }
@@ -225,8 +224,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 
 - Credentials are **never** committed to git
 - `config/sources.json` contains only provider names and non-secret settings
-- Secrets live in `~/.buddy-council-secrets.json` (user home directory)
-- `.mcp.json` is gitignored (contains credentials in env block)
+- Secrets live in a single file, `~/.buddy-council-secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
+- `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
 - All MCP tools are **read-only** — no write operations to external systems
 - A PreToolUse hook blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
 

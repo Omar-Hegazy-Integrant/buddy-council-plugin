@@ -26,7 +26,7 @@ Requirements and test cases are fetched live from configured sources, normalized
 ## Key Conventions
 
 - All commands use the `bc:` prefix
-- No hardcoded secrets — credentials live in `~/.buddy-council-secrets.json` and `.mcp.json` (both gitignored)
+- No hardcoded secrets — credentials live only in `~/.buddy-council-secrets.json` (gitignored, `chmod 600`), the single source of truth. `.mcp.json` is gitignored and holds no secrets — only non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE` (the path the MCP servers read). The external GitHub MCP server is the lone exception (its token stays in `.mcp.json` env).
 - Source configuration lives in `config/sources.json`
 - Provider skills are swappable — adding a new platform means adding a `providers/<name>/` folder
 - Agents never call providers directly — they go through router skills (`fetch-requirements`, `fetch-test-cases`)
@@ -90,4 +90,4 @@ Every downstream skill treats it as optional and reads `description` non-exclusi
 
 `<user-project>/.buddy-council/onboarding-progress.json` `features[i]` now supports one additional optional field:
 
-- **`code_mapping`** — `{computed_at: ISO 8601 UTC, git_sha: string|null, files: [{path, role}], flow: string, requirement_locations: [{req_id, files: [{path, lines}]}], notes: [string]}`. Written by the `map-feature-to-code` skill. Cached with surgical SHA-diff invalidation when the codebase is a git repo. Stays in the gitignored `.buddy-council/` directory so it never reaches the team's repo.
+- **`code_mapping`** — `{computed_at: ISO 8601 UTC, git_sha: string|null, files: [{path, role}], flow: string, requirement_locations: [{req_id, files: [{path, lines}]}], notes: [string]}`. Written by the `map-feature-to-code` skill. Cached with surgical SHA-diff invalidation when the codebase is a git repo. Stays inside `.buddy-council/`, which is kept out of git via the repo-local `.git/info/exclude`, so it never reaches the team's repo.

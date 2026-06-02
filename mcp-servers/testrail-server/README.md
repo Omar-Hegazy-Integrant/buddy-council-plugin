@@ -2,13 +2,17 @@
 
 Read-only MCP server wrapping the TestRail REST API.
 
-## Environment Variables
+## Configuration
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TESTRAIL_BASE_URL` | Yes | TestRail instance URL (e.g., `https://company.testrail.io`) |
-| `TESTRAIL_USERNAME` | Yes | TestRail username (email) |
-| `TESTRAIL_API_KEY` | Yes | TestRail API key (from My Settings > API Keys) |
+The server resolves each value with this precedence: **environment variable → secrets file → empty**.
+
+| Setting | Source | Description |
+|---------|--------|-------------|
+| `TESTRAIL_BASE_URL` | `.mcp.json` env (non-secret) | TestRail instance URL (e.g., `https://company.testrail.io`) |
+| `username` | `~/.buddy-council-secrets.json` → `testrail.username` | TestRail username (email) |
+| `api_key` | `~/.buddy-council-secrets.json` → `testrail.api_key` | TestRail API key (from My Settings > API Keys) |
+
+Credentials are read from the secrets file at `BC_SECRETS_FILE` (default `~/.buddy-council-secrets.json`), so no secret needs to live in `.mcp.json`. The equivalent env vars (`TESTRAIL_USERNAME`, `TESTRAIL_API_KEY`) still take precedence if set, for the legacy inline style.
 
 ## Setup
 

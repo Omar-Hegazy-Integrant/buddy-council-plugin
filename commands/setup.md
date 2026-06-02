@@ -267,7 +267,7 @@ If Jira was not configured, omit the `"jira"` section. If `github_url` column wa
 
 ### 4b: Write credentials
 
-Write `~/.buddy-council-secrets.json` with credentials:
+Write `~/.buddy-council-secrets.json` with credentials — this file is the **single source of truth** for all credentials (`chmod 600`):
 
 ```json
 {
@@ -297,7 +297,7 @@ chmod 600 ~/.buddy-council-secrets.json
 
 If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.json`.
 
-Then update the `env` blocks in `.mcp.json` with credentials:
+`.mcp.json` must contain **no credentials** — only non-secret config (`*_BASE_URL`) and `BC_SECRETS_FILE`, the path to the secrets file the servers read. Update the `env` blocks like this:
 
 ```json
 {
@@ -307,8 +307,7 @@ Then update the `env` blocks in `.mcp.json` with credentials:
       "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/testrail-server", "mcp", "run", "server.py"],
       "env": {
         "TESTRAIL_BASE_URL": "https://company.testrail.io",
-        "TESTRAIL_USERNAME": "user@company.com",
-        "TESTRAIL_API_KEY": "the-api-key"
+        "BC_SECRETS_FILE": "~/.buddy-council-secrets.json"
       }
     },
     "jira": {
@@ -316,17 +315,18 @@ Then update the `env` blocks in `.mcp.json` with credentials:
       "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/jira-server", "mcp", "run", "server.py"],
       "env": {
         "JIRA_BASE_URL": "https://yourorg.atlassian.net",
-        "JIRA_EMAIL": "user@company.com",
-        "JIRA_API_TOKEN": "jira-api-token"
+        "BC_SECRETS_FILE": "~/.buddy-council-secrets.json"
       }
     }
   }
 }
 ```
 
+The TestRail and Jira servers read their credentials (`username`/`api_key` and `email`/`api_token`) from `~/.buddy-council-secrets.json`. `BC_SECRETS_FILE` is optional — the servers default to `~/.buddy-council-secrets.json` — but write it explicitly for clarity. Env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working.
+
 If Jira was not configured, omit the `"jira"` section from `.mcp.json`.
 
-If GitHub enrichment was configured with `strategy: "mcp"`, also add a `github` server entry. The `github-mcp-server` binary is NOT vendored by this plugin — the user must install it externally (per `.mcp.example.json`). Example entry:
+**GitHub exception.** If GitHub enrichment was configured with `strategy: "mcp"`, add a `github` server entry. The external `github-mcp-server` (NOT vendored — install it externally per `.mcp.example.json`) reads `GITHUB_TOKEN` from its env and cannot read the secrets file, so this is the one place a token still lives in `.mcp.json`:
 
 ```json
 {
@@ -335,7 +335,7 @@ If GitHub enrichment was configured with `strategy: "mcp"`, also add a `github` 
       "command": "github-mcp-server",
       "args": ["stdio"],
       "env": {
-        "GITHUB_TOKEN": "<the same PAT you stored in ~/.buddy-council-secrets.json>"
+        "GITHUB_TOKEN": "<the PAT you also stored in ~/.buddy-council-secrets.json>"
       }
     }
   }
@@ -350,7 +350,7 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
 
 - Confirm `config/sources.json` was written
 - Confirm `~/.buddy-council-secrets.json` was written
-- Confirm `.mcp.json` was written with TestRail (and optionally Jira) credentials
+- Confirm `.mcp.json` was written (base URLs + `BC_SECRETS_FILE`, no secrets)
 - If Excel was configured, confirm the file is readable
 - Tell the user:
   1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate
@@ -359,8 +359,8 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
 ## Important
 
 - NEVER write credentials into `config/sources.json` — that file is user-specific and contains no secrets
-- ALWAYS write credentials to both `~/.buddy-council-secrets.json` (for backward compatibility) and `.mcp.json` (for the MCP servers)
-- `.mcp.json` is gitignored (it contains secrets in the env block)
+- ALWAYS write credentials ONLY to `~/.buddy-council-secrets.json` — it is the single source of truth. `.mcp.json` gets non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE`, never tokens (the external GitHub MCP server is the sole exception)
+- `.mcp.json` is gitignored; under this design it carries no secrets (except the GitHub MCP token)
 - If `~/.buddy-council-secrets.json` already exists, merge new entries without overwriting existing ones
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
 - Jira configuration is **optional** — users can run `/bc:validate --dry-run` without configuring Jira

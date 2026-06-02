@@ -34,7 +34,7 @@ Follow `${CLAUDE_PLUGIN_ROOT}/skills/manage-progress-log/SKILL.md`:
 
 - Resolve the user's project root (the current working directory).
 - Ensure `<user-project>/.buddy-council/` exists.
-- Ensure `.buddy-council/` is in `<user-project>/.gitignore` (ask the user once before mutating).
+- Ensure `.buddy-council/` is ignored via the repo-local `.git/info/exclude` (no `.gitignore` edit, no confirmation prompt — see the skill). Skip silently if the project is not a git repo.
 - For `start` with no existing log: prepare to write a fresh log (population happens after Step 5).
 - For `resume`: read the existing log.
 - For `start` with existing log: ask the user `resume / reset / cancel`.
@@ -202,7 +202,7 @@ The demo and assessment skills handle most of these; the agent honors `pause` an
 | Progress log is corrupted | Per `manage-progress-log`: do not delete; offer archive-and-restart or manual repair |
 | User runs `resume` but no log exists | Offer to start a new journey |
 | User runs `start` but a log exists | Ask: resume / reset / cancel |
-| Project is not a git repo | Skip `.gitignore` mutation silently; still create log dir |
+| Project is not a git repo | Skip the `.git/info/exclude` step silently; still create log dir |
 | Feature in plan has zero requirements after filtering | Skip with a warning, do not include in flow |
 
 ## Boundaries

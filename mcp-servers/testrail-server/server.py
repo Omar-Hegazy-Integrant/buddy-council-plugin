@@ -9,12 +9,39 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
-# Configuration from environment
+# Configuration — env vars take precedence, then the buddy-council secrets file
 # ---------------------------------------------------------------------------
 
-BASE_URL = os.environ.get("TESTRAIL_BASE_URL", "").rstrip("/")
-USERNAME = os.environ.get("TESTRAIL_USERNAME", "")
-API_KEY = os.environ.get("TESTRAIL_API_KEY", "")
+
+def _load_secrets(section: str) -> dict[str, Any]:
+    """Load one section from the buddy-council secrets file.
+
+    Path comes from BC_SECRETS_FILE, defaulting to ~/.buddy-council-secrets.json.
+    Returns {} if the file is missing or unreadable, so the env-var path and the
+    missing-values check below still apply (fail safe, never raise on startup).
+    """
+    path = os.path.expanduser(
+        os.environ.get("BC_SECRETS_FILE", "~/.buddy-council-secrets.json")
+    )
+    try:
+        if (os.stat(path).st_mode & 0o077) != 0:
+            print(
+                f"WARNING: {path} is group/world-accessible; run `chmod 600` on it.",
+                file=sys.stderr,
+            )
+        with open(path) as f:
+            data = json.load(f)
+        section_data = data.get(section, {}) if isinstance(data, dict) else {}
+        return section_data if isinstance(section_data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, PermissionError, OSError):
+        return {}
+
+
+_secrets = _load_secrets("testrail")
+
+BASE_URL = (os.environ.get("TESTRAIL_BASE_URL") or _secrets.get("base_url", "")).rstrip("/")
+USERNAME = os.environ.get("TESTRAIL_USERNAME") or _secrets.get("username", "")
+API_KEY = os.environ.get("TESTRAIL_API_KEY") or _secrets.get("api_key", "")
 
 if not all([BASE_URL, USERNAME, API_KEY]):
     missing = [
@@ -27,8 +54,10 @@ if not all([BASE_URL, USERNAME, API_KEY]):
         if not val
     ]
     print(
-        f"ERROR: Missing required environment variables: {', '.join(missing)}. "
-        "Set them in .mcp.json env block or export them before starting.",
+        f"ERROR: Missing required TestRail config: {', '.join(missing)}. "
+        "Provide credentials in ~/.buddy-council-secrets.json (or BC_SECRETS_FILE) "
+        "and non-secret values like TESTRAIL_BASE_URL in the .mcp.json env block. "
+        "Run /bc:setup to configure.",
         file=sys.stderr,
     )
     sys.exit(1)

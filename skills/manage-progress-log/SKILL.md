@@ -20,7 +20,7 @@ The log lives in the **user's project root** (where Claude Code was invoked), no
 └── onboarding-notes.md         # append-only human-readable transcript
 ```
 
-Both files are gitignored.
+Both files live inside `.buddy-council/`, which is kept out of git via the repo-local `.git/info/exclude` (never the tracked `.gitignore`) — see Operation 1.
 
 ## Operations
 
@@ -30,10 +30,11 @@ Before any read or write:
 
 1. Determine the user's project root (current working directory at command invocation).
 2. If `<user-project>/.buddy-council/` does not exist, create it.
-3. Ensure `.buddy-council/` is in `<user-project>/.gitignore`:
-   - If `.gitignore` does not exist, create it with `.buddy-council/` as the only entry.
-   - If `.gitignore` exists and does not already contain `.buddy-council/` or `.buddy-council`, append `.buddy-council/` on a new line, after asking the user once for confirmation.
-   - If the project is not a git repository, skip the gitignore step silently.
+3. Ensure `.buddy-council/` is ignored **without touching any tracked file** — use git's per-repo local exclude file, never `.gitignore`:
+   - Check whether the project is a git repository (e.g. `git rev-parse --is-inside-work-tree` succeeds).
+   - If it is, resolve the exclude file with `git rev-parse --git-path info/exclude` (this correctly handles worktrees and submodules, where `.git` is a file rather than a directory). Create the file's parent directory if needed.
+   - If that file does not already contain a `.buddy-council/` or `.buddy-council` line, append `.buddy-council/` on a new line. **No confirmation prompt is needed** — `.git/info/exclude` is local to the clone, never tracked, and never appears in `git status` or history, so this leaves zero git footprint. Do **not** edit `.gitignore`.
+   - If the project is **not** a git repository, skip the exclude step silently and just keep `.buddy-council/` in the project root (no git means no footprint to avoid).
 
 ### 2. Initialize the Progress File
 
@@ -183,7 +184,7 @@ Open items:
 | `onboarding-progress.json` is corrupted | Do not delete. Offer archive-and-restart or manual repair |
 | User runs `resume` but no log exists | Tell the user there's no saved progress, offer to start a new journey |
 | User runs `start` but a log exists | Ask whether to resume, reset, or cancel |
-| Project is not a git repo | Skip `.gitignore` mutation silently; still create the log directory |
+| Project is not a git repo | Skip the `.git/info/exclude` step silently; still create the log directory in the project root |
 
 ## Guidelines
 

@@ -2,13 +2,17 @@
 
 MCP server wrapping the Jira Cloud REST API for creating and reading issues.
 
-## Environment Variables
+## Configuration
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `JIRA_BASE_URL` | Yes | Jira instance URL (e.g., `https://yourorg.atlassian.net`) |
-| `JIRA_EMAIL` | Yes | Jira account email |
-| `JIRA_API_TOKEN` | Yes | Jira API token (from Account Settings > Security > API tokens) |
+The server resolves each value with this precedence: **environment variable → secrets file → empty**.
+
+| Setting | Source | Description |
+|---------|--------|-------------|
+| `JIRA_BASE_URL` | `.mcp.json` env (non-secret) | Jira instance URL (e.g., `https://yourorg.atlassian.net`) |
+| `email` | `~/.buddy-council-secrets.json` → `jira.email` | Jira account email |
+| `api_token` | `~/.buddy-council-secrets.json` → `jira.api_token` | Jira API token (from Account Settings > Security > API tokens) |
+
+Credentials are read from the secrets file at `BC_SECRETS_FILE` (default `~/.buddy-council-secrets.json`), so no secret needs to live in `.mcp.json`. The equivalent env vars (`JIRA_EMAIL`, `JIRA_API_TOKEN`) still take precedence if set, for the legacy inline style.
 
 ## Getting a Jira API Token
 
@@ -118,15 +122,14 @@ Add this to your `.mcp.json` in the plugin root:
       "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/jira-server", "mcp", "run", "server.py"],
       "env": {
         "JIRA_BASE_URL": "https://yourorg.atlassian.net",
-        "JIRA_EMAIL": "your.email@company.com",
-        "JIRA_API_TOKEN": "your-api-token-here"
+        "BC_SECRETS_FILE": "~/.buddy-council-secrets.json"
       }
     }
   }
 }
 ```
 
-**Note:** `.mcp.json` should be in your `.gitignore` to keep credentials secure.
+**Note:** Credentials (`jira.email`, `jira.api_token`) live in `~/.buddy-council-secrets.json`, not here — `.mcp.json` carries no secrets. It should still be in your `.gitignore`.
 
 ## Permissions
 

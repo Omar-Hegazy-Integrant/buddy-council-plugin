@@ -127,13 +127,13 @@ Agent → Router Skill → Provider Skill
 
 ## Credential Management
 
-Secrets are separated from configuration:
+Secrets live in exactly one place; configuration is separate:
 
-- `config/sources.json` — user-specific (gitignored), contains provider selection and non-secret settings (base URLs, project IDs)
-- `~/.buddy-council-secrets.json` — user-local, `chmod 600`, contains API keys and usernames
-- `.mcp.json` — gitignored, contains MCP server config with credentials in env block
-- `.mcp.example.json` — committed template with empty credential placeholders
-- `/bc:setup` writes all three files and validates the connection
+- `config/sources.json` — user-specific (gitignored), provider selection and non-secret settings (base URLs, project IDs)
+- `~/.buddy-council-secrets.json` — user-local, `chmod 600`, the **single source of truth** for API keys/tokens. The MCP servers read it directly (path overridable via `BC_SECRETS_FILE`, default `~/.buddy-council-secrets.json`)
+- `.mcp.json` — gitignored launch config holding **no credentials**: only non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE`. Env vars still take precedence if set, so legacy files with literal credentials keep working. Exception: the external GitHub MCP server reads `GITHUB_TOKEN` from env, so under the `mcp` enrichment strategy its token stays here
+- `.mcp.example.json` — committed template
+- `/bc:setup` writes the config and secrets files and generates `.mcp.json`
 
 ## Contradiction Detection
 
@@ -202,4 +202,4 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 | `testrail-server` | Active | `testrail_get_projects`, `testrail_get_suites`, `testrail_get_sections`, `testrail_get_cases`, `testrail_get_case` |
 | `jama-server` | Placeholder | None yet (auth blocked) |
 
-MCP servers are configured in `.mcp.json` (gitignored) with credentials in the `env` block. See `.mcp.example.json` for the template.
+MCP servers are configured in `.mcp.json` (gitignored). The TestRail/Jira servers read credentials from `~/.buddy-council-secrets.json` (via `BC_SECRETS_FILE`), not the `env` block — see Credential Management above. See `.mcp.example.json` for the template.

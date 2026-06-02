@@ -259,4 +259,4 @@ Plus the side effect of having written `features[i].code_mapping` to the progres
 - **Don't speculate flow.** If imports don't show a connection between two files, don't invent one. Use `notes` to flag uncertainty.
 - **Cite back to requirements always.** Every implementation file should be tied to at least one `requirement_id`, ideally via line numbers.
 - **Quiet for skips, terse for output.** Render in one screen by default. Inline commands deepen on demand.
-- **Cache lives in the user's project, gitignored.** The `code_mapping` field sits inside `.buddy-council/onboarding-progress.json` — never committed to the team's repo.
+- **Cache lives in the user's project, ignored locally.** The `code_mapping` field sits inside `.buddy-council/onboarding-progress.json`; `.buddy-council/` is kept out of git via the repo-local `.git/info/exclude`, so it's never committed to the team's repo.

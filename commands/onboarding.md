@@ -35,7 +35,7 @@ Walk a new team member through the product feature-by-feature, pairing requireme
 
 ## What the Agent Does
 
-- **First run**: builds an ordered onboarding plan grouping requirements + test cases by feature, writes initial progress log, ensures `.buddy-council/` is in `.gitignore`, and starts feature 1.
+- **First run**: builds an ordered onboarding plan grouping requirements + test cases by feature, writes initial progress log, ensures `.buddy-council/` is ignored via the repo-local `.git/info/exclude` (zero git footprint — no `.gitignore` change), and starts feature 1.
 - **Each feature**: explains the purpose, walks through small steps with do/don't pairs from test cases, waits for the user's `next` / `back` / `explain more` between steps, then runs an assessment with citations (e.g., *"per CWA-REQ-85, step 3"*).
 - **Adaptive remediation**: if the user gets multiple questions wrong, pauses and re-explains weak concepts before continuing. Caps re-demos to avoid infinite loops.
 - **Context discipline**: at feature boundaries, suggests `/clear && /bc:onboarding resume`. Mid-feature, if the conversation grows long (many user questions), implicitly invokes `/strategic-compact` to keep working memory tight while preserving the log as source-of-truth.
@@ -63,7 +63,7 @@ Two files are written to `<user-project>/.buddy-council/`:
 - `onboarding-progress.json` — structured state (features completed, current position, assessment scores, missed questions). Source of truth for resume.
 - `onboarding-notes.md` — append-only human-readable transcript of what was covered.
 
-Both are gitignored.
+Both are kept out of git via the repo-local `.git/info/exclude` (no change to the tracked `.gitignore`).
 
 ## Important
 
