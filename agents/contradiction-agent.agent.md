@@ -23,56 +23,46 @@ Based on the arguments you received:
 - **Feature name** (e.g., "Patient Monitoring"): Analyze all requirements and test cases in that feature
 - **"all"** or no argument: Analyze everything, processed feature by feature
 
-### Step 3: Fetch Requirements
+### Step 3: Fetch Requirements + build the cross-feature index — MANDATORY
 
-Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md`:
-- It will read the config and delegate to the correct provider (Excel or Jama)
-- Pass the scope from Step 2
-- Collect the returned requirements in canonical schema format
+This step is **required**. Follow `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md`:
+- It reads the config and delegates to the correct provider (Excel or Jama).
+- Pass the scope from Step 2.
+- Collect the returned requirements in canonical schema format.
 
-### Step 4: Fetch Test Cases — MANDATORY
+Then build a **cross-feature index** — for every fetched requirement keep a compact projection `{ id, feature, title, key_constraint }` (a one-line paraphrase of its core constraint). This index is small, stays in context for the whole run, and powers the cross-feature pass. Derive `feature_order` (the distinct features in scope, in order) from it.
 
-This step is **required**. Do not skip it, defer it, or substitute it. Contradiction analysis compares requirements against test cases, so it is invalid without them. Do **not** infer or fabricate test cases from requirements' `linked_ids` — those are reference IDs, not test cases. You must actually fetch test cases via the provider's MCP tools.
+### Step 4: Choose processing mode by scope size
 
-Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`:
-- It will read the config and delegate to the correct provider
-- The provider skill will specify which MCP tools to use — follow those instructions exactly
-- **Pass context from Step 3 to narrow the fetch**:
-  - If scope is a **feature name**: pass it as the feature context so the provider fetches only that section's test cases
-  - If scope is a **requirement ID**: pass the requirement's feature name (from the fetched requirements) AND the requirement IDs, so the provider can fetch by section or by reference instead of fetching everything
-  - If scope is **"all"**: still try to fetch section-by-section rather than all at once for better performance
-- Collect the returned test cases in canonical schema format
+- **Small scope** — a single requirement, or a single feature → use the **Linear path (Step 5)**; everything fits in one pass.
+- **Large scope** — `"all"`, multiple features, or more than ~50 total artifacts → use the **Per-feature loop (Step 6)**. You must **not** load every feature's test cases at once — that is the context-overload failure this guards against.
 
-### Step 4.5: Data-Readiness Gate — MANDATORY, do not skip
+### Step 5: Linear path (small scope)
 
-Before any analysis, verify both fetches actually ran and print exactly one line:
+1. **Fetch test cases (MANDATORY)** via `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`, narrowed by the feature name / requirement IDs from Step 3. Do **not** infer test cases from `linked_ids` — fetch them via the provider's MCP tools.
+2. **Data-Readiness Gate:** print one line — `Readiness: <N> requirements, <M> test cases for scope "<scope>"`. If **M == 0**, STOP and report the likely cause (empty result — recheck the feature/section name or broaden scope; or a provider/MCP error — surface it plus the `.mcp.json` / `/mcp` remedy). If **N == 0**, likewise stop.
+3. **Normalize + link** via `${CLAUDE_PLUGIN_ROOT}/skills/normalize-artifacts/SKILL.md`.
+4. **Detect contradictions** via `${CLAUDE_PLUGIN_ROOT}/skills/detect-contradictions/SKILL.md` — all seven types apply directly. Then go to Step 7.
 
-`Readiness: <N> requirements, <M> test cases fetched for scope "<scope>".`
+### Step 6: Per-feature loop (large scope) — keeps working context bounded
 
-Then:
-- If Step 3 or Step 4 did not actually execute, STOP and execute it now — analysis on un-fetched data is invalid.
-- If **M (test cases) == 0**: do NOT proceed to analysis and do NOT report contradictions. Tell the user no test cases were retrieved for this scope and state the likely cause — either an empty result (the feature/section genuinely has none, or the narrowing name didn't match: suggest rechecking the feature/section name or broadening scope) or a provider/MCP error (surface it, plus the `.mcp.json` / `/mcp` remedy). Never substitute requirements' `linked_ids` for real test cases.
-- If **N (requirements) == 0**: likewise stop and report.
+Process **one feature at a time**, in `feature_order`. Do not hold more than one feature's test cases in context at once. For each feature:
 
-Proceed to Step 5 only when N > 0 and M > 0.
+1. **Fetch only this feature's test cases (MANDATORY)** — call `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md` narrowed to this feature's section/name. Never fetch all features' test cases together; never infer from `linked_ids`.
+2. **Per-feature readiness:** note `<feature>: <R> requirements, <T> test cases`. If one feature returns 0 test cases, record it as a missing-alignment gap for that feature and continue. If **every** feature returns 0, STOP — that is a fetch/MCP error, not a real result; report it (with the `.mcp.json` / `/mcp` remedy).
+3. **Normalize + link** this feature's requirements and test cases (`normalize-artifacts`).
+4. **Detect intra-feature contradictions** for this feature via `detect-contradictions` — types 1–4, 6, 7. Emit this feature's findings into the running report, classified by severity.
+5. Append this feature's key constraints to the cross-feature index, then **release this feature's full test-case bodies** from working context before the next feature.
 
-### Step 5: Normalize and Link
+After the loop completes:
 
-Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/normalize-artifacts/SKILL.md`:
-- Clean all text fields
-- Normalize IDs
-- Cross-link requirements and test cases bidirectionally via their `linked_ids`
+6. **Cross-feature pass (type 5 — Cross-Feature Tensions):** using only the compact cross-feature index + accumulated constraints (not full bodies), scan for tensions between requirements in *different* features. For each flagged candidate pair, deep-dive — re-fetch just those requirements/features if needed — to confirm before reporting. This preserves full contradiction fidelity without ever holding all features at once.
 
-### Step 6: Detect Contradictions
-
-Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/detect-contradictions/SKILL.md`:
-- Analyze the normalized, linked artifacts
-- Detect all seven contradiction types
-- Classify by severity
+Then go to Step 7.
 
 ### Step 7: Report
 
-Present the findings as a human-readable report following the format specified in `${CLAUDE_PLUGIN_ROOT}/skills/detect-contradictions/SKILL.md`. The report should:
+Present the findings as a human-readable report following the format specified in `${CLAUDE_PLUGIN_ROOT}/skills/detect-contradictions/SKILL.md`. For a large-scope (per-feature) run, assemble it from the findings emitted per feature plus the cross-feature pass — one coherent report, not per-feature fragments. The report should:
 - Start with a summary
 - Group findings by severity (CRITICAL → HIGH → MEDIUM → LOW)
 - Quote specific text from requirements and test cases

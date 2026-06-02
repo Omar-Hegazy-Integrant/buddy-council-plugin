@@ -23,52 +23,42 @@ Based on the arguments you received:
 - **Feature name** (e.g., "Patient Monitoring"): Analyze coverage for all requirements and test cases in that feature
 - **"all"** or no argument: Analyze everything, processed feature by feature
 
-### Step 3: Fetch Requirements
+### Step 3: Fetch Requirements + build the feature index — MANDATORY
 
-Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md`:
-- It will read the config and delegate to the correct provider (Excel or Jama)
-- Pass the scope from Step 2
-- Collect the returned requirements in canonical schema format
+This step is **required**. Follow `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md`:
+- It reads the config and delegates to the correct provider (Excel or Jama).
+- Pass the scope from Step 2.
+- Collect the returned requirements in canonical schema format.
 
-### Step 4: Fetch Test Cases — MANDATORY
+Then derive `feature_order` (the distinct features in scope, in order) and keep a compact per-feature requirement index for the final roll-up.
 
-This step is **required** and must not be skipped. Coverage analysis is *defined* by comparing requirements against test cases, so running it without fetched test cases is meaningless. Do **not** infer test cases from requirements' `linked_ids` — fetch them via the provider's MCP tools.
+### Step 4: Choose processing mode by scope size
 
-Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`:
-- It will read the config and delegate to the correct provider
-- The provider skill will specify which MCP tools to use — follow those instructions exactly
-- Collect the returned test cases in canonical schema format
+- **Small scope** — a single requirement, or a single feature → use the **Linear path (Step 5)**.
+- **Large scope** — `"all"`, multiple features, or more than ~50 total artifacts → use the **Per-feature loop (Step 6)**. You must **not** load every feature's test cases at once.
 
-### Step 4.5: Data-Readiness Gate — MANDATORY, do not skip
+### Step 5: Linear path (small scope)
 
-Before any analysis, verify both fetches actually ran and print exactly one line:
+1. **Fetch test cases (MANDATORY)** via `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`, narrowed by the feature name / requirement IDs from Step 3. Do **not** infer test cases from `linked_ids`.
+2. **Data-Readiness Gate:** print `Readiness: <N> requirements, <M> test cases for scope "<scope>"`. If **M == 0**, do NOT report "0% coverage" — stop and report the likely cause (empty result — recheck the feature/section name or broaden scope; or a provider/MCP error — surface it plus the `.mcp.json` / `/mcp` remedy). Only treat 0 as real coverage after confirming the scope genuinely has no test cases. If **N == 0**, stop.
+3. **Normalize + link** via `${CLAUDE_PLUGIN_ROOT}/skills/normalize-artifacts/SKILL.md`.
+4. **Analyze coverage** via `${CLAUDE_PLUGIN_ROOT}/skills/analyze-coverage/SKILL.md`. Then go to Step 7.
 
-`Readiness: <N> requirements, <M> test cases fetched for scope "<scope>".`
+### Step 6: Per-feature loop (large scope) — keeps working context bounded
 
-Then:
-- If Step 3 or Step 4 did not actually execute, STOP and execute it now.
-- If **M (test cases) == 0**: do NOT silently report "0% coverage" — a zero-test-case result almost always means the fetch was skipped or failed, not that coverage is genuinely zero. Stop and tell the user no test cases were retrieved, distinguishing an empty result (recheck the feature/section name or broaden scope) from a provider/MCP error (surface it + the `.mcp.json` / `/mcp` remedy). Only report true 0% coverage after confirming the scope genuinely has no test cases.
-- If **N (requirements) == 0**: stop and report.
+Process **one feature at a time**, in `feature_order`. For each feature:
 
-Proceed to Step 5 only when the data is confirmed.
+1. **Fetch only this feature's test cases (MANDATORY)** — `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md` narrowed to this feature's section/name. Never fetch all features' test cases together; never infer from `linked_ids`.
+2. **Per-feature readiness:** note `<feature>: <R> requirements, <T> test cases`. If one feature returns 0 test cases, that is a legitimate coverage finding for that feature (0% — every requirement untested); record it and continue. If **every** feature returns 0, STOP — that is almost certainly a fetch/MCP error, not real coverage; report it.
+3. **Normalize + link** this feature's requirements and test cases (`normalize-artifacts`).
+4. **Analyze coverage** for this feature via `analyze-coverage` — untested requirements, orphan test cases, weak coverage, and per-feature metrics. Accumulate this feature's metrics into the running totals.
+5. **Release this feature's full test-case bodies** from working context before the next feature.
 
-### Step 5: Normalize and Link
-
-Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/normalize-artifacts/SKILL.md`:
-- Clean all text fields
-- Normalize IDs
-- Cross-link requirements and test cases bidirectionally via their `linked_ids`
-
-### Step 6: Analyze Coverage
-
-Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/analyze-coverage/SKILL.md`:
-- Identify untested requirements, orphan test cases, and weak coverage
-- Compute coverage metrics
-- Classify findings by severity
+When the loop finishes, aggregate the per-feature metrics into overall totals and the coverage breakdown table. Then go to Step 7.
 
 ### Step 7: Report
 
-Present the findings as a human-readable report following the format specified in `${CLAUDE_PLUGIN_ROOT}/skills/analyze-coverage/SKILL.md`. The report should:
+Present the findings as a human-readable report following the format specified in `${CLAUDE_PLUGIN_ROOT}/skills/analyze-coverage/SKILL.md`. For a large-scope (per-feature) run, assemble it from the per-feature metrics accumulated in Step 6 into one coherent report with the feature-by-feature breakdown. The report should:
 - Start with a summary including coverage percentage
 - Include a feature-by-feature coverage breakdown table
 - List untested requirements grouped by feature

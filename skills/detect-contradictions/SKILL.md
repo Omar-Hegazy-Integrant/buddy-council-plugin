@@ -62,7 +62,7 @@ Conflicting expectations about system state or timing.
 
 ### For Full Analysis (all requirements)
 
-Process feature by feature to manage context:
+For large scopes the **contradiction agent drives this as a per-feature loop** — it invokes this skill once per feature (intra-feature types 1–4, 6, 7) and once more for the cross-feature pass (type 5), so all artifacts never sit in context at once. Whether called per-feature or all at once, apply the same logic:
 1. Group requirements and test cases by feature
 2. Analyze within each feature (types 1-4, 6-7)
 3. Then analyze across features for cross-feature tensions (type 5)

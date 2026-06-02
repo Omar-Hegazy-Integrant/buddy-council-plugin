@@ -39,7 +39,7 @@ Requirements that have linked test cases, but the test cases do not meaningfully
 
 ### For Full Analysis (all requirements)
 
-Process feature by feature to manage context:
+For large scopes the **coverage agent drives this as a per-feature loop**, invoking this skill once per feature so all artifacts never sit in context at once. Whether called per-feature or all at once, apply the same logic:
 1. Group requirements and test cases by feature
 2. Analyze each feature independently
 3. Aggregate into a summary with per-feature breakdown
