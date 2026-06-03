@@ -19,10 +19,10 @@ The command expects:
 
 ## Execution
 
-1. First, verify that `config/sources.json` exists in the plugin directory. If not, tell the user:
+1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
-2. Check if Jira is configured in `config/sources.json`:
+2. Check if Jira is configured in `.buddy-council/sources.json`:
    - If the `jira` section is missing AND `--dry-run` flag is NOT present, warn:
      > Jira is not configured. Run `/bc:setup` to configure Jira, or use `--dry-run` to test without creating a real ticket.
    - If `--dry-run` flag is present, proceed (dry-run works without Jira config)

@@ -8,7 +8,7 @@ After requirements have been fetched from their provider (Excel, Jama) but befor
 
 ## When to Use
 
-Invoked by `skills/fetch-requirements/SKILL.md` after the provider returns, when `requirements.enrichment.enabled === true` in `config/sources.json`. If enrichment is disabled, this skill is NOT called — the transient `_enrichment_urls` field passes through and is dropped by `normalize-artifacts`.
+Invoked by `skills/fetch-requirements/SKILL.md` after the provider returns, when `requirements.enrichment.enabled === true` in `.buddy-council/sources.json`. If enrichment is disabled, this skill is NOT called — the transient `_enrichment_urls` field passes through and is dropped by `normalize-artifacts`.
 
 ## Input
 
@@ -16,7 +16,7 @@ Invoked by `skills/fetch-requirements/SKILL.md` after the provider returns, when
 
 ## Configuration
 
-Read `config/sources.json` `requirements.enrichment`:
+Read `.buddy-council/sources.json` `requirements.enrichment`:
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|

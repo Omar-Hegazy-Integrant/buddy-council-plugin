@@ -13,7 +13,7 @@ If the MCP tools are NOT available:
 
 ## Input
 
-- `project_key`: Jira project key (from `config/sources.json`)
+- `project_key`: Jira project key (from `.buddy-council/sources.json`)
 - `scope`: Optional — a specific issue key (e.g., "PROJ-123"), JQL query, or "all"
 
 ## Fetching Strategy

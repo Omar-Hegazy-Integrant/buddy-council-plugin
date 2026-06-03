@@ -52,7 +52,7 @@ Do not guess — ask.
 
 When the intent is a general question about requirements or test cases:
 
-1. **Load configuration**: Read `${CLAUDE_PLUGIN_ROOT}/config/sources.json`. If missing, direct the user to `/bc:setup`.
+1. **Load configuration**: Read `.buddy-council/sources.json`. If missing, direct the user to `/bc:setup`.
 
 2. **Determine what data is needed** from the question:
    - Asking about a specific requirement → fetch that requirement and its linked test cases

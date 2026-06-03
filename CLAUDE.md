@@ -26,8 +26,8 @@ Requirements and test cases are fetched live from configured sources, normalized
 ## Key Conventions
 
 - All commands use the `bc:` prefix
-- No hardcoded secrets — credentials live only in `~/.buddy-council-secrets.json` (gitignored, `chmod 600`), the single source of truth. `.mcp.json` is gitignored and holds no secrets — only non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE` (the path the MCP servers read). The external GitHub MCP server is the lone exception (its token stays in `.mcp.json` env).
-- Source configuration lives in `config/sources.json`
+- No hardcoded secrets — credentials live only in `~/.buddy-council/secrets.json` (gitignored, `chmod 600`), the single source of truth. `.mcp.json` is gitignored and holds no secrets — only non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE` (the path the MCP servers read). The external GitHub MCP server is the lone exception (its token stays in `.mcp.json` env).
+- Source configuration lives in `.buddy-council/sources.json`
 - Provider skills are swappable — adding a new platform means adding a `providers/<name>/` folder
 - Agents never call providers directly — they go through router skills (`fetch-requirements`, `fetch-test-cases`)
 
@@ -71,14 +71,14 @@ All providers normalize data to this shape before analysis:
 
 The `extended_context` field is **optional** — populated only when:
 - The provider extracted a `_enrichment_urls` transient field from the source (e.g., the Excel sheet has a `github_url` column mapped), AND
-- `requirements.enrichment.enabled === true` in `config/sources.json`, AND
+- `requirements.enrichment.enabled === true` in `.buddy-council/sources.json`, AND
 - The fetch succeeded.
 
 Every downstream skill treats it as optional and reads `description` non-exclusively, so legacy data and disabled-enrichment paths work unchanged.
 
 ## Configuration Schema Additions
 
-`config/sources.json` supports these additional blocks for richer onboarding and analysis:
+`.buddy-council/sources.json` supports these additional blocks for richer onboarding and analysis:
 
 - **`requirements.column_mapping`** — maps canonical fields (`id`, `title`, `description`, `status`, `item_type`, `github_url`, `feature`) to actual Excel column names. Set by the `/bc:setup` wizard. When absent, the Excel parser falls back to its legacy positional mode.
 - **`requirements.feature_inference`** — `{strategy: "hierarchical_folder" | "column" | "none", folder_item_type: "Folder"}`. Controls how requirements are grouped into features.

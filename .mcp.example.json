@@ -1,12 +1,12 @@
 {
   "mcpServers": {
     "testrail": {
-      "_comment": "Credentials (username, api_key) are read from the secrets file at BC_SECRETS_FILE (default ~/.buddy-council-secrets.json), NOT from here. Put only the non-secret base URL in env. Setting an env var here still takes precedence if you prefer the legacy inline style.",
+      "_comment": "Credentials (username, api_key) are read from the secrets file at BC_SECRETS_FILE (default ~/.buddy-council/secrets.json), NOT from here. Put only the non-secret base URL in env. Setting an env var here still takes precedence if you prefer the legacy inline style.",
       "command": "uv",
       "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/testrail-server", "mcp", "run", "server.py"],
       "env": {
         "TESTRAIL_BASE_URL": "",
-        "BC_SECRETS_FILE": "~/.buddy-council-secrets.json"
+        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
       }
     },
     "github": {

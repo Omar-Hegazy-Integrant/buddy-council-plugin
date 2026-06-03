@@ -1,5 +1,5 @@
 ---
-description: Fetch test cases from the configured source. Reads config/sources.json and delegates to the correct provider, which uses MCP tools for data access. Supports narrowing by feature name or requirement IDs.
+description: Fetch test cases from the configured source. Reads .buddy-council/sources.json and delegates to the correct provider, which uses MCP tools for data access. Supports narrowing by feature name or requirement IDs.
 ---
 
 # Fetch Test Cases — Router Skill
@@ -8,7 +8,7 @@ Fetch test cases from the configured source. This skill reads the user's configu
 
 ## How It Works
 
-1. Read `config/sources.json` from the plugin root (`${CLAUDE_PLUGIN_ROOT}/config/sources.json`)
+1. Read `.buddy-council/sources.json` from the project root (the current working directory)
 2. Check the `test_cases.provider` field
 3. Delegate to the matching provider:
 
@@ -31,6 +31,6 @@ Fetch test cases from the configured source. This skill reads the user's configu
 
 ## Error Handling
 
-- If `config/sources.json` does not exist → tell the user to run `/bc:setup` first
+- If `.buddy-council/sources.json` does not exist → tell the user to run `/bc:setup` first
 - If the configured provider file does not exist → report which provider was expected and that it's not yet implemented
 - If MCP tools specified by the provider are not available → tell the user to check `.mcp.json` and restart Claude Code

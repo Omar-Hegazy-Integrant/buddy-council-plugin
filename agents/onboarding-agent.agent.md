@@ -12,7 +12,7 @@ You will write small files (the progress log and notes) inside the user's **proj
 
 ### Step 1: Load Configuration
 
-Read `${CLAUDE_PLUGIN_ROOT}/config/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
+Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
 
 ### Step 2: Determine Mode and Subcommand
 
@@ -56,7 +56,7 @@ After fetching, normalize via `${CLAUDE_PLUGIN_ROOT}/skills/normalize-artifacts/
 Follow `${CLAUDE_PLUGIN_ROOT}/skills/build-onboarding-plan/SKILL.md`:
 
 - Pass the normalized requirements and test cases.
-- Pass `feature_order` from `config/sources.json` if present.
+- Pass `feature_order` from `.buddy-council/sources.json` if present.
 - Receive `{ feature_order, features[], warnings[] }`.
 
 If this is a fresh start, write the initial progress log (using fields from the plan) before Step 6. If resuming, validate that the plan's `feature_order` matches the log's stored `feature_order`. If they differ, trust the log (deterministic) and surface a warning.
@@ -85,7 +85,7 @@ If `current_phase == "demo"`:
 #### 6b.5. Code Mapping phase (optional)
 
 After the demo phase completes and before the assessment, if:
-- `requirements.project.enabled !== false` in `config/sources.json` (default true), AND
+- `requirements.project.enabled !== false` in `.buddy-council/sources.json` (default true), AND
 - The current working directory contains a code repo marker (per `${CLAUDE_PLUGIN_ROOT}/skills/map-feature-to-code/SKILL.md` Step 1)
 
 Then invoke `${CLAUDE_PLUGIN_ROOT}/skills/map-feature-to-code/SKILL.md` in `mode: "in_onboarding"` with the feature plan, the normalized requirements + test cases, and the progress log path.

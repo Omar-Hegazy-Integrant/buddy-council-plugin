@@ -18,7 +18,7 @@ When invoked, follow these steps in order:
 
 ### Step 1: Load Configuration
 
-Read `${CLAUDE_PLUGIN_ROOT}/config/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
+Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
 
 Check if the `jira` section exists in the config:
 
@@ -180,7 +180,7 @@ Create a markdown file with the draft ticket:
 
 **Filename**: `ticket-draft-[timestamp].md` (e.g., `ticket-draft-2026-04-27-143052.md`)
 
-**Location**: Save to the plugin root directory (`${CLAUDE_PLUGIN_ROOT}/`)
+**Location**: Save to the user's **current working directory** (where they invoked the command), not the plugin directory — the plugin path isn't reliably resolvable across runtimes, and the draft belongs alongside the user's own work.
 
 **Content**:
 
@@ -211,7 +211,7 @@ After creating the file, tell the user:
 
 ### Step 9: Create Jira Ticket
 
-Retrieve Jira config from `${CLAUDE_PLUGIN_ROOT}/config/sources.json`:
+Retrieve Jira config from `.buddy-council/sources.json`:
 
 - `project_key`: Which project to create the ticket in
 - `default_issue_type`: Issue type (Story, Task, Bug, etc.)

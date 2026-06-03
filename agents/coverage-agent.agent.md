@@ -14,7 +14,7 @@ When invoked, follow these steps in order:
 
 ### Step 1: Load Configuration
 
-Read `${CLAUDE_PLUGIN_ROOT}/config/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
+Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
 
 ### Step 2: Determine Scope
 

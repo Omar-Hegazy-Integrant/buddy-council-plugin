@@ -14,7 +14,7 @@ Find untested requirements, orphan test cases, and weak coverage between require
 
 ## Execution
 
-1. First, verify that `config/sources.json` exists in the plugin directory. If not, tell the user:
+1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
 2. Invoke the coverage agent by following the instructions in `agents/coverage-agent.agent.md`, passing any arguments as the analysis scope.

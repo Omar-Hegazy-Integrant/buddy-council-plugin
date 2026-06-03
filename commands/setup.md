@@ -52,7 +52,7 @@ Feature grouping:
   Choose [1]: _
 ```
 
-If the user picks strategy 2, ask for the feature column name. Persist the mapping in `column_mapping` and the strategy under `feature_inference` in `config/sources.json`.
+If the user picks strategy 2, ask for the feature column name. Persist the mapping in `column_mapping` and the strategy under `feature_inference` in `.buddy-council/sources.json`.
 
 Also offer to set `item_type_filter` — show a brief one-liner: *"Only include rows whose Item Type matches one of these (comma-separated, blank for no filter):"*. Common picks: `Functional Requirement, Requirement`.
 
@@ -82,7 +82,7 @@ Strategy [cli]: _
 **If CLI is chosen**: nothing more to configure — `gh auth login` already handles auth. Write `enrichment.strategy: "cli"`.
 
 **If MCP is chosen**: ask the user for a GitHub Personal Access Token with `repo` scope (read access). Write the token to:
-- `~/.buddy-council-secrets.json` under `"github": { "token": "<PAT>" }` (chmod 600)
+- `~/.buddy-council/secrets.json` under `"github": { "token": "<PAT>" }` (chmod 600)
 - `.mcp.json` `mcpServers.github.env.GITHUB_TOKEN` (see Step 4c)
 
 Tell the user they'll need to restart Claude Code or toggle `/mcp` to activate the new server.
@@ -119,7 +119,7 @@ If they choose **Jama**:
 
 - Inform them that Jama integration is in progress and suggest using the Excel export as a temporary fallback
 - If they still want Jama, collect: base URL, username, API key
-- Store credentials in `~/.buddy-council-secrets.json` under the `jama` key
+- Store credentials in `~/.buddy-council/secrets.json` under the `jama` key
 
 ## Step 2: Test Cases Source
 
@@ -209,7 +209,7 @@ Extra directories to ignore (comma-separated, in addition to defaults
   []: _
 ```
 
-Persist as `project: { enabled, ignore_dirs, id_patterns }` in `config/sources.json` (see Step 4a).
+Persist as `project: { enabled, ignore_dirs, id_patterns }` in `.buddy-council/sources.json` (see Step 4a).
 
 ## Step 3: Jira (Optional — for Ticket Creation)
 
@@ -243,7 +243,17 @@ If they choose **No**:
 
 ### 4a: Write source config
 
-Write `config/sources.json` with the selected providers and non-secret settings. Include the new column-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and 2.5:
+Config lives at `.buddy-council/sources.json` **in the user's project root** (the current working directory) — not the plugin folder, and not home. Both Claude Code and Copilot CLI find it relative to the project, with no plugin-path token. Config is therefore **per-project**: each project the user runs the plugin in gets its own.
+
+Ensure the directory exists, then make sure `.buddy-council/` is git-excluded via the repo-local `.git/info/exclude` exactly as the onboarding log does (follow `manage-progress-log` Operation 1 step 3 — no `.gitignore` edit):
+
+```bash
+mkdir -p .buddy-council
+```
+
+**Migration:** if an older `config/sources.json` exists inside the plugin directory (from before this move), copy its contents into `.buddy-council/sources.json` and tell the user it was migrated.
+
+Write `.buddy-council/sources.json` with the selected providers and non-secret settings. Include the new column-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and 2.5:
 
 ```json
 {
@@ -293,7 +303,9 @@ If Jira was not configured, omit the `"jira"` section. If `github_url` column wa
 
 ### 4b: Write credentials
 
-Write `~/.buddy-council-secrets.json` with credentials — this file is the **single source of truth** for all credentials (`chmod 600`):
+Credentials live in `~/.buddy-council/secrets.json` (home — **not** the project folder; API keys should never sit in a repo). Ensure the directory exists: `mkdir -p ~/.buddy-council`. **Migration:** if a legacy `~/.buddy-council-secrets.json` flat file exists, move it to `~/.buddy-council/secrets.json` and tell the user.
+
+Write `~/.buddy-council/secrets.json` with credentials — this file is the **single source of truth** for all credentials (`chmod 600`):
 
 ```json
 {
@@ -316,7 +328,7 @@ If Jira was not configured, omit the `"jira"` section. If the GitHub enrichment 
 Set restrictive permissions on the secrets file:
 
 ```bash
-chmod 600 ~/.buddy-council-secrets.json
+chmod 600 ~/.buddy-council/secrets.json
 ```
 
 ### 4c: Configure MCP servers
@@ -333,7 +345,7 @@ If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.jso
       "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/testrail-server", "mcp", "run", "server.py"],
       "env": {
         "TESTRAIL_BASE_URL": "https://company.testrail.io",
-        "BC_SECRETS_FILE": "~/.buddy-council-secrets.json"
+        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
       }
     },
     "jira": {
@@ -341,14 +353,14 @@ If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.jso
       "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/jira-server", "mcp", "run", "server.py"],
       "env": {
         "JIRA_BASE_URL": "https://yourorg.atlassian.net",
-        "BC_SECRETS_FILE": "~/.buddy-council-secrets.json"
+        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
       }
     }
   }
 }
 ```
 
-The TestRail and Jira servers read their credentials (`username`/`api_key` and `email`/`api_token`) from `~/.buddy-council-secrets.json`. `BC_SECRETS_FILE` is optional — the servers default to `~/.buddy-council-secrets.json` — but write it explicitly for clarity. Env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working.
+The TestRail and Jira servers read their credentials (`username`/`api_key` and `email`/`api_token`) from `~/.buddy-council/secrets.json`. `BC_SECRETS_FILE` is optional — the servers default to `~/.buddy-council/secrets.json` — but write it explicitly for clarity. Env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working.
 
 If Jira was not configured, omit the `"jira"` section from `.mcp.json`.
 
@@ -361,7 +373,7 @@ If Jira was not configured, omit the `"jira"` section from `.mcp.json`.
       "command": "github-mcp-server",
       "args": ["stdio"],
       "env": {
-        "GITHUB_TOKEN": "<the PAT you also stored in ~/.buddy-council-secrets.json>"
+        "GITHUB_TOKEN": "<the PAT you also stored in ~/.buddy-council/secrets.json>"
       }
     }
   }
@@ -374,8 +386,8 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
 
 ## Step 5: Validate
 
-- Confirm `config/sources.json` was written
-- Confirm `~/.buddy-council-secrets.json` was written
+- Confirm `.buddy-council/sources.json` was written
+- Confirm `~/.buddy-council/secrets.json` was written
 - Confirm `.mcp.json` was written (base URLs + `BC_SECRETS_FILE`, no secrets)
 - If Excel was configured, confirm the file is readable
 - Tell the user:
@@ -401,9 +413,9 @@ Also tell the user: the Excel parser and the TestRail connection test run once p
 
 ## Important
 
-- NEVER write credentials into `config/sources.json` — that file is user-specific and contains no secrets
-- ALWAYS write credentials ONLY to `~/.buddy-council-secrets.json` — it is the single source of truth. `.mcp.json` gets non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE`, never tokens (the external GitHub MCP server is the sole exception)
+- NEVER write credentials into `.buddy-council/sources.json` — that file is user-specific and contains no secrets
+- ALWAYS write credentials ONLY to `~/.buddy-council/secrets.json` — it is the single source of truth. `.mcp.json` gets non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE`, never tokens (the external GitHub MCP server is the sole exception)
 - `.mcp.json` is gitignored; under this design it carries no secrets (except the GitHub MCP token)
-- If `~/.buddy-council-secrets.json` already exists, merge new entries without overwriting existing ones
+- If `~/.buddy-council/secrets.json` already exists, merge new entries without overwriting existing ones
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
 - Jira configuration is **optional** — users can run `/bc:validate --dry-run` without configuring Jira

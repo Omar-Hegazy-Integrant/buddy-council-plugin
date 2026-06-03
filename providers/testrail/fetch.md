@@ -13,8 +13,8 @@ If the MCP tools are NOT available:
 
 ## Input
 
-- `project_id`: TestRail project ID (from `config/sources.json`)
-- `suite_id`: Optional suite ID filter (from `config/sources.json`)
+- `project_id`: TestRail project ID (from `.buddy-council/sources.json`)
+- `suite_id`: Optional suite ID filter (from `.buddy-council/sources.json`)
 - `scope`: Optional — a specific test case ID, feature/section name, requirement IDs, or "all"
 - `feature_name`: Optional — the feature name from the requirements (used to narrow the fetch)
 - `requirement_ids`: Optional — list of requirement IDs to find linked test cases for

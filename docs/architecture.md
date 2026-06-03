@@ -54,7 +54,7 @@ User runs /bc:contradiction [scope]
   ├─ Agent (agents/contradiction-agent.agent.md)
   │    └─ Orchestrates the full pipeline:
   │
-  │    Step 1: Load config/sources.json
+  │    Step 1: Load .buddy-council/sources.json
   │    Step 2: Determine scope (requirement ID, feature, or "all")
   │
   │    Step 3: Fetch requirements
@@ -106,7 +106,7 @@ Agents never call providers directly. The flow is:
 Agent → Router Skill → Provider Skill
 ```
 
-- **Router skills** (`fetch-requirements`, `fetch-test-cases`) read `config/sources.json` and delegate to the correct provider
+- **Router skills** (`fetch-requirements`, `fetch-test-cases`) read `.buddy-council/sources.json` and delegate to the correct provider
 - **Provider skills** (`providers/<name>/fetch.md`) handle platform-specific API calls and field mapping
 - Adding a new platform requires only: new `providers/<name>/` folder + update router skill + update `/bc:setup`
 
@@ -129,8 +129,8 @@ Agent → Router Skill → Provider Skill
 
 Secrets live in exactly one place; configuration is separate:
 
-- `config/sources.json` — user-specific (gitignored), provider selection and non-secret settings (base URLs, project IDs)
-- `~/.buddy-council-secrets.json` — user-local, `chmod 600`, the **single source of truth** for API keys/tokens. The MCP servers read it directly (path overridable via `BC_SECRETS_FILE`, default `~/.buddy-council-secrets.json`)
+- `.buddy-council/sources.json` — user-specific (gitignored), provider selection and non-secret settings (base URLs, project IDs)
+- `~/.buddy-council/secrets.json` — user-local, `chmod 600`, the **single source of truth** for API keys/tokens. The MCP servers read it directly (path overridable via `BC_SECRETS_FILE`, default `~/.buddy-council/secrets.json`)
 - `.mcp.json` — gitignored launch config holding **no credentials**: only non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE`. Env vars still take precedence if set, so legacy files with literal credentials keep working. Exception: the external GitHub MCP server reads `GITHUB_TOKEN` from env, so under the `mcp` enrichment strategy its token stays here
 - `.mcp.example.json` — committed template
 - `/bc:setup` writes the config and secrets files and generates `.mcp.json`
@@ -202,4 +202,4 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 | `testrail-server` | Active | `testrail_get_projects`, `testrail_get_suites`, `testrail_get_sections`, `testrail_get_cases`, `testrail_get_case` |
 | `jama-server` | Placeholder | None yet (auth blocked) |
 
-MCP servers are configured in `.mcp.json` (gitignored). The TestRail/Jira servers read credentials from `~/.buddy-council-secrets.json` (via `BC_SECRETS_FILE`), not the `env` block — see Credential Management above. See `.mcp.example.json` for the template.
+MCP servers are configured in `.mcp.json` (gitignored). The TestRail/Jira servers read credentials from `~/.buddy-council/secrets.json` (via `BC_SECRETS_FILE`), not the `env` block — see Credential Management above. See `.mcp.example.json` for the template.

@@ -4,12 +4,12 @@ Fetch requirements from a Jama-exported Excel file. This is the temporary fallba
 
 ## Input
 
-- `excel_path`: Absolute path to the Excel file (from `config/sources.json`)
+- `excel_path`: Absolute path to the Excel file (from `.buddy-council/sources.json`)
 - `scope`: Optional — a specific requirement ID (e.g., "CWA-REQ-85"), feature name, or "all"
 
 ## Configuration
 
-Read `config/sources.json` to get the following from the `requirements` block:
+Read `.buddy-council/sources.json` to get the following from the `requirements` block:
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
@@ -44,11 +44,11 @@ When `column_mapping` is **absent entirely**, fall back to the legacy positional
 
 ## How to Fetch
 
-Run the committed parser script, passing the config and Excel paths via environment variables. The script reads the same `config/sources.json` the agent already loaded (`skip_rows`, `column_mapping`, `feature_inference`, `item_type_filter`), so behavior is identical across phases — and the parsing logic stays out of the prompt context.
+Run the committed parser script, passing the config and Excel paths via environment variables. The script reads the same `.buddy-council/sources.json` the agent already loaded (`skip_rows`, `column_mapping`, `feature_inference`, `item_type_filter`), so behavior is identical across phases — and the parsing logic stays out of the prompt context.
 
 ```bash
-BC_CONFIG_PATH="${CLAUDE_PLUGIN_ROOT}/config/sources.json" \
-BC_EXCEL_PATH="$(jq -r '.requirements.excel_path' "${CLAUDE_PLUGIN_ROOT}/config/sources.json")" \
+BC_CONFIG_PATH="$PWD/.buddy-council/sources.json" \
+BC_EXCEL_PATH="$(jq -r '.requirements.excel_path' "$PWD/.buddy-council/sources.json")" \
 python3 "${CLAUDE_PLUGIN_ROOT}/providers/excel/parse.py"
 ```
 

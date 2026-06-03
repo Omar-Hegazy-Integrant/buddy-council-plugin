@@ -21,7 +21,7 @@ If the cwd is NOT a code repo (no markers detected), this skill returns immediat
 
 ## Configuration
 
-Read `${CLAUDE_PLUGIN_ROOT}/config/sources.json` `project`:
+Read `.buddy-council/sources.json` `project`:
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|

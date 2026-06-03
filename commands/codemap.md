@@ -14,7 +14,7 @@ Show where a specific feature lives in the current codebase: which files impleme
 
 ## Execution
 
-1. Verify that `${CLAUDE_PLUGIN_ROOT}/config/sources.json` exists. If not, tell the user:
+1. Verify that `.buddy-council/sources.json` exists. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
 2. Verify that the current working directory contains code repo markers (per `skills/map-feature-to-code/SKILL.md` Step 1). If not, tell the user:

@@ -24,7 +24,7 @@ Same canonical schema as the Excel provider — the router skill (`skills/fetch-
 ## Migration Path
 
 1. Implement Jama API client in this file
-2. Add `jama` credentials to `~/.buddy-council-secrets.json`
+2. Add `jama` credentials to `~/.buddy-council/secrets.json`
 3. User runs `/bc:setup` and selects "Jama" instead of "Excel"
-4. `config/sources.json` changes `provider` from `"excel"` to `"jama"`
+4. `.buddy-council/sources.json` changes `provider` from `"excel"` to `"jama"`
 5. No changes needed in agents, skills, or contradiction logic

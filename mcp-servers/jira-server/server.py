@@ -14,28 +14,40 @@ from mcp.server.fastmcp import FastMCP
 # ---------------------------------------------------------------------------
 
 
-def _load_secrets(section: str) -> dict[str, Any]:
-    """Load one section from the buddy-council secrets file.
+def _secrets_candidates() -> list[str]:
+    """Secrets-file paths to try, in priority order."""
+    candidates = []
+    env_path = os.environ.get("BC_SECRETS_FILE")
+    if env_path:
+        candidates.append(os.path.expanduser(env_path))
+    candidates.append(os.path.expanduser("~/.buddy-council/secrets.json"))  # unified location
+    candidates.append(os.path.expanduser("~/.buddy-council-secrets.json"))  # legacy flat file
+    return candidates
 
-    Path comes from BC_SECRETS_FILE, defaulting to ~/.buddy-council-secrets.json.
-    Returns {} if the file is missing or unreadable, so the env-var path and the
-    missing-values check below still apply (fail safe, never raise on startup).
+
+def _load_secrets(section: str) -> dict[str, Any]:
+    """Load one section from the first readable buddy-council secrets file.
+
+    Checks BC_SECRETS_FILE, then ~/.buddy-council/secrets.json, then the legacy
+    ~/.buddy-council-secrets.json. Returns {} if none is readable, so the env-var
+    path and the missing-values check below still apply (fail safe).
     """
-    path = os.path.expanduser(
-        os.environ.get("BC_SECRETS_FILE", "~/.buddy-council-secrets.json")
-    )
-    try:
-        if (os.stat(path).st_mode & 0o077) != 0:
-            print(
-                f"WARNING: {path} is group/world-accessible; run `chmod 600` on it.",
-                file=sys.stderr,
-            )
-        with open(path) as f:
-            data = json.load(f)
+    for path in _secrets_candidates():
+        if not os.path.exists(path):
+            continue
+        try:
+            if (os.stat(path).st_mode & 0o077) != 0:
+                print(
+                    f"WARNING: {path} is group/world-accessible; run `chmod 600` on it.",
+                    file=sys.stderr,
+                )
+            with open(path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, PermissionError, OSError):
+            continue
         section_data = data.get(section, {}) if isinstance(data, dict) else {}
         return section_data if isinstance(section_data, dict) else {}
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError, OSError):
-        return {}
+    return {}
 
 
 _secrets = _load_secrets("jira")
@@ -56,7 +68,7 @@ if not all([BASE_URL, EMAIL, API_TOKEN]):
     ]
     print(
         f"ERROR: Missing required Jira config: {', '.join(missing)}. "
-        "Provide credentials in ~/.buddy-council-secrets.json (or BC_SECRETS_FILE) "
+        "Provide credentials in ~/.buddy-council/secrets.json (or BC_SECRETS_FILE) "
         "and non-secret values like JIRA_BASE_URL in the .mcp.json env block. "
         "Run /bc:setup to configure.",
         file=sys.stderr,

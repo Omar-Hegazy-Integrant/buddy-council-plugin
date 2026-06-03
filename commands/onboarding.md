@@ -18,7 +18,7 @@ Walk a new team member through the product feature-by-feature, pairing requireme
 
 ## Execution
 
-1. First, verify that `${CLAUDE_PLUGIN_ROOT}/config/sources.json` exists. If not, tell the user:
+1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
 2. Determine the user's project root. This is the **current working directory** where the user invoked Claude Code, not the plugin directory. The progress log lives there at `.buddy-council/onboarding-progress.json`.
@@ -68,5 +68,5 @@ Both are kept out of git via the repo-local `.git/info/exclude` (no change to th
 ## Important
 
 - The progress log lives in the **user's project root**, not in the plugin directory. This keeps the log close to the codebase the user is learning, and supports future commands that want to relate code changes to learning history.
-- The `feature_order` array in `config/sources.json` (optional) controls feature ordering. If absent, features appear in the order their requirements appear in the source. The chosen order is persisted in the log on first run.
+- The `feature_order` array in `.buddy-council/sources.json` (optional) controls feature ordering. If absent, features appear in the order their requirements appear in the source. The chosen order is persisted in the log on first run.
 - `feature "<name>"` mode is for re-learning one feature later; it does NOT mutate the main progress log.

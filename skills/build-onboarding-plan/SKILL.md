@@ -1,5 +1,5 @@
 ---
-description: Group normalized requirements and test cases by feature and order them into a logical onboarding sequence. Reads optional feature_order from config/sources.json. Produces the structure consumed by demo-feature and assess-feature.
+description: Group normalized requirements and test cases by feature and order them into a logical onboarding sequence. Reads optional feature_order from .buddy-council/sources.json. Produces the structure consumed by demo-feature and assess-feature.
 ---
 
 # Build Onboarding Plan — Skill
@@ -14,7 +14,7 @@ Invoked once at the start of an onboarding journey, after `fetch-requirements`, 
 
 - `requirements`: array of normalized requirement objects (canonical schema)
 - `test_cases`: array of normalized test case objects (canonical schema)
-- Optional: `feature_order` from `${CLAUDE_PLUGIN_ROOT}/config/sources.json`
+- Optional: `feature_order` from `.buddy-council/sources.json`
 
 ## Steps
 
@@ -38,7 +38,7 @@ Skip features that should not appear in onboarding:
 
 In priority order:
 
-1. **Explicit override**: if `config/sources.json` contains a top-level `feature_order: ["Feature A", "Feature B", ...]`, use that order. Features in the array but not in the data → drop with a warning. Features in the data but not in the array → append at the end in source order with a note.
+1. **Explicit override**: if `.buddy-council/sources.json` contains a top-level `feature_order: ["Feature A", "Feature B", ...]`, use that order. Features in the array but not in the data → drop with a warning. Features in the data but not in the array → append at the end in source order with a note.
 2. **Source order fallback**: if no override, use the order in which features first appear in the input requirements list. Jama and Excel exports usually have intentional ordering.
 3. **Persist the chosen order** to the progress log's `feature_order` field on first run. Subsequent resumes use the persisted order, not a recomputation, to keep the journey deterministic.
 
