@@ -301,6 +301,16 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 
 If Jira was not configured, omit the `"jira"` section. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. If the cwd is not a code project, set `project.enabled: false`.
 
+### 4a-bis: Record the plugin install path (`plugin_root`)
+
+The MCP servers and the Excel parser live **inside the plugin's install directory**, which must be referenced by an absolute path that works on the current machine — `${CLAUDE_PLUGIN_ROOT}` only resolves under Claude Code, not Copilot CLI. Determine the absolute install path once and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
+
+1. If `${CLAUDE_PLUGIN_ROOT}` resolves to an existing directory that contains `mcp-servers/` → use it (Claude Code).
+2. Otherwise auto-detect: search likely install locations for a directory containing `mcp-servers/testrail-server/server.py` (e.g. `~/.copilot/plugins/*/`, `~/.config/github-copilot/**/`). If exactly one matches → use it.
+3. Otherwise, ask the user for the absolute path to the installed plugin.
+
+Write the resolved absolute path, e.g. `"plugin_root": "/Users/<you>/.copilot/plugins/buddy-council"`. **This value is per-machine** and lives only in the git-excluded `.buddy-council/sources.json` — never hardcode a path into a committed file (`.mcp.example.json` and all tracked files keep placeholders; only the generated, gitignored files get the real path).
+
 ### 4b: Write credentials
 
 Credentials live in `~/.buddy-council/secrets.json` (home — **not** the project folder; API keys should never sit in a repo). Ensure the directory exists: `mkdir -p ~/.buddy-council`. **Migration:** if a legacy `~/.buddy-council-secrets.json` flat file exists, move it to `~/.buddy-council/secrets.json` and tell the user.
@@ -335,14 +345,14 @@ chmod 600 ~/.buddy-council/secrets.json
 
 If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.json`.
 
-`.mcp.json` must contain **no credentials** — only non-secret config (`*_BASE_URL`) and `BC_SECRETS_FILE`, the path to the secrets file the servers read. Update the `env` blocks like this:
+`.mcp.json` must contain **no credentials** — only non-secret config (`*_BASE_URL`) and `BC_SECRETS_FILE`. For each server's `--directory`, write the **absolute** `plugin_root` path recorded in 4a-bis (e.g. `<plugin_root>/mcp-servers/testrail-server`) — **not** the `${CLAUDE_PLUGIN_ROOT}` token, which stays literal under Copilot CLI. An absolute path works on both runtimes. Update the blocks like this (substitute the real `<plugin_root>`):
 
 ```json
 {
   "mcpServers": {
     "testrail": {
       "command": "uv",
-      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/testrail-server", "mcp", "run", "server.py"],
+      "args": ["run", "--directory", "<plugin_root>/mcp-servers/testrail-server", "mcp", "run", "server.py"],
       "env": {
         "TESTRAIL_BASE_URL": "https://company.testrail.io",
         "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
@@ -350,7 +360,7 @@ If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.jso
     },
     "jira": {
       "command": "uv",
-      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/jira-server", "mcp", "run", "server.py"],
+      "args": ["run", "--directory", "<plugin_root>/mcp-servers/jira-server", "mcp", "run", "server.py"],
       "env": {
         "JIRA_BASE_URL": "https://yourorg.atlassian.net",
         "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
@@ -359,6 +369,8 @@ If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.jso
   }
 }
 ```
+
+`<plugin_root>` is the absolute path from 4a-bis — it differs per machine and stays only in the local, gitignored `.mcp.json`, never in a committed file.
 
 The TestRail and Jira servers read their credentials (`username`/`api_key` and `email`/`api_token`) from `~/.buddy-council/secrets.json`. `BC_SECRETS_FILE` is optional — the servers default to `~/.buddy-council/secrets.json` — but write it explicitly for clarity. Env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working.
 

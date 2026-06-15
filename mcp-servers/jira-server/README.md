@@ -129,6 +129,8 @@ Add this to your `.mcp.json` in the plugin root:
 }
 ```
 
+> **Note:** `${CLAUDE_PLUGIN_ROOT}` resolves only under Claude Code. Under Copilot CLI the token isn't expanded, so use the **absolute** path to `mcp-servers/jira-server` — which is what `/bc:setup` writes into `.mcp.json` automatically.
+
 **Note:** Credentials (`jira.email`, `jira.api_token`) live in `~/.buddy-council/secrets.json`, not here — `.mcp.json` carries no secrets. It should still be in your `.gitignore`.
 
 ## Permissions

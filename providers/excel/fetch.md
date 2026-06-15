@@ -47,12 +47,15 @@ When `column_mapping` is **absent entirely**, fall back to the legacy positional
 Run the committed parser script, passing the config and Excel paths via environment variables. The script reads the same `.buddy-council/sources.json` the agent already loaded (`skip_rows`, `column_mapping`, `feature_inference`, `item_type_filter`), so behavior is identical across phases — and the parsing logic stays out of the prompt context.
 
 ```bash
-BC_CONFIG_PATH="$PWD/.buddy-council/sources.json" \
-BC_EXCEL_PATH="$(jq -r '.requirements.excel_path' "$PWD/.buddy-council/sources.json")" \
-python3 "${CLAUDE_PLUGIN_ROOT}/providers/excel/parse.py"
+CFG="$PWD/.buddy-council/sources.json"
+# plugin_root is recorded by /bc:setup; fall back to ${CLAUDE_PLUGIN_ROOT} (Claude Code)
+ROOT="$(jq -r '.plugin_root // empty' "$CFG")"; [ -z "$ROOT" ] && ROOT="${CLAUDE_PLUGIN_ROOT}"
+BC_CONFIG_PATH="$CFG" \
+BC_EXCEL_PATH="$(jq -r '.requirements.excel_path' "$CFG")" \
+python3 "$ROOT/providers/excel/parse.py"
 ```
 
-The script writes a JSON array of requirement objects to stdout. It applies `column_mapping` (or the legacy positional fallback when `column_mapping` is absent), groups rows into features per `feature_inference`, honors `item_type_filter`, and emits the transient `_enrichment_urls` field for any GitHub links found in the mapped `github_url` column. If pandas is missing, run `pip install pandas openpyxl`. The full source is `${CLAUDE_PLUGIN_ROOT}/providers/excel/parse.py`.
+The script writes a JSON array of requirement objects to stdout. It applies `column_mapping` (or the legacy positional fallback when `column_mapping` is absent), groups rows into features per `feature_inference`, honors `item_type_filter`, and emits the transient `_enrichment_urls` field for any GitHub links found in the mapped `github_url` column. If pandas is missing, run `pip install pandas openpyxl`. The full source is `providers/excel/parse.py` inside the plugin install (the `plugin_root` recorded in config).
 
 ### Scoping
 
