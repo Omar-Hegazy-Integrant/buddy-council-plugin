@@ -1,6 +1,6 @@
 # Buddy-Council Plugin
 
-A Claude Code plugin for multi-agent requirements/test-case analysis.
+A Codex plugin for multi-agent requirements/test-case analysis.
 
 ## What This Plugin Does
 
@@ -21,7 +21,7 @@ Buddy-Council helps teams detect contradictions, inconsistencies, and alignment 
 Command → Agent → Skills (fetch → normalize → analyze) → Human-readable report
 ```
 
-Requirements and test cases are fetched live from configured sources, normalized to a canonical schema, linked by ID references, then analyzed by Claude.
+Requirements and test cases are fetched live from configured sources, normalized to a canonical schema, linked by ID references, then analyzed by Codex.
 
 ## Key Conventions
 
@@ -86,7 +86,6 @@ Every downstream skill treats it as optional and reads `description` non-exclusi
 - **`requirements.item_type_exclude`** — array of `Item Type` values to skip even when they carry IDs (e.g. `["Text"]` narrative rows). Written automatically by `/bc:setup` when the sheet's Item Type sample contains `Text`; hand-editable for other types.
 - **`requirements.enrichment`** — `{enabled: bool, strategy: "cli" | "mcp", max_doc_chars: int}`. Drives GitHub-doc enrichment when a `github_url` column is mapped.
 - **`project`** — `{enabled: bool, ignore_dirs: [string], id_patterns: [regex]}`. Controls code mapping for `/bc:onboarding` and `/bc:codemap`. When `enabled` is true and cwd contains code markers, the onboarding agent runs a code-mapping phase between demo and assessment for each feature.
-- **`plugin_root`** — absolute path to the plugin's install directory, recorded by `/bc:setup`. Bundled files (MCP servers, the Excel parser) are referenced through it because `${CLAUDE_PLUGIN_ROOT}` only resolves under Claude Code, not Copilot CLI. Per-machine; lives only in the git-excluded config, never committed.
 
 ## Progress Log Schema Additions
 

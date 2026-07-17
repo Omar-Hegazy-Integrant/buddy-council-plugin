@@ -2,105 +2,117 @@
 
 You are the Buddy-Council setup assistant. Walk the user through configuring their data sources and credentials.
 
-## Step 1: Requirements Source
+The wizard has **four user-facing steps**. Prefix the first message of each step with a progress marker — `[Step 1/4] Requirements`, `[Step 2/4] Test cases`, `[Step 3/4] Jira (optional)`, `[Step 4/4] Review & save` — so the user always knows how much is left. Keep questions to a minimum: detect and default wherever possible, and batch confirmation into the single save prompt in Step 4.
 
-Ask the user:
+## Step 0: Re-run detection
 
-> Which tool are you using for hosting requirements?
->
-> 1. **Jama** (not yet supported — authentication in progress)
-> 2. **Excel sheet** (Jama export file)
+Before anything else, check whether `.buddy-council/sources.json` exists in the current working directory.
 
-If they choose **Excel**:
+**If it exists**, this is a re-run. Show a compact summary of the current config and ask what to change instead of re-walking every step:
+
+```
+Buddy-Council is already configured in this project:
+  Requirements:  excel — /path/to/requirements.xls (6 columns mapped)
+  Test cases:    testrail — https://company.testrail.io (project 1)
+  Jira:          not configured
+  Enrichment:    cli
+  Code mapping:  enabled
+
+What would you like to change? [requirements / test cases / jira / everything / nothing]: _
+```
+
+Only walk the steps for the sections the user names; carry every other section over unchanged when writing config in Step 4. If they answer "nothing", stop.
+
+**If it does not exist**, run all steps in order.
+
+In both cases, resolve the **plugin install path** now, using the procedure in Step 4a-bis — Step 1 runs the bundled Excel parser from it (`<plugin_root>/providers/excel/parse.py`, invoked with `uv run`; its PEP 723 header lets uv provision Python and dependencies automatically, so nothing needs to be installed). Reuse the resolved value when writing `plugin_root` in Step 4.
+
+## Step 1 of 4: Requirements (Excel)
+
+Requirements are read from an **Excel file (Jama export)** — currently the only supported requirements source, so do **not** present a source menu. (Direct Jama API integration is in progress; when it ships, this step will offer it as an option.)
 
 - Ask for the absolute file path to the Excel file
 - Verify the file exists using the Read tool
 - Confirm it looks like a Jama export (check for columns like ID, Description, Item Type, Folder structure)
-- Run the **column-mapping wizard** (Step 1a) so the parser knows which column means what
-- Then run the **GitHub enrichment wizard** (Step 1b) if the user mapped a GitHub doc URL column
+- Run **column mapping** (Step 1a)
+- Then run **GitHub enrichment detection** (Step 1b) if a GitHub doc URL column was mapped
 
-### Step 1a: Column-mapping wizard (Excel only)
+### Step 1a: Column mapping (one confirmation, not six questions)
 
-Read the Excel file's header row to detect actual column names. Use a Python one-liner via Bash:
+Read the Excel file's header row to detect actual column names, using the bundled parser:
 
 ```bash
-python3 - <<'PYEOF'
-import pandas as pd, json, sys, os
-df = pd.read_excel(os.environ['BC_EXCEL_PATH'], skiprows=int(os.environ.get('BC_SKIP_ROWS', '3')))
-print(json.dumps([str(c) for c in df.columns]))
-PYEOF
+BC_EXCEL_PATH="<excel_path>" uv run "<plugin_root>/providers/excel/parse.py" headers
 ```
 
-Show the user the detected column headers and prompt them to map each canonical field. Use smart defaults from header names (case-insensitive substring match — e.g., a header named "ID" defaults to `id`, "Linked to Github" defaults to `github_url`):
+`BC_SKIP_ROWS` defaults to 3 (the Jama metadata header height); set it only if the detected headers look wrong.
+
+Guess the mapping for every canonical field using smart defaults from header names (case-insensitive substring match — e.g., a header named "ID" maps to `id`, "Linked to Github" maps to `github_url`). Then show the whole guessed mapping as a table and ask **one** question:
 
 ```
-Reading <excel_path>...
-Found these columns: [ID, Name, Description, Rationale, Item Type, Status, Jira ID, Linked to Github, Tags, Configuration]
+Reading <excel_path>... found 10 columns.
 
-Map each canonical field to a column (Enter to accept the guess, leave blank to skip):
-  Requirement ID column [ID]: _
-  Title column [Name]: _
-  Description column [Description]: _
-  Status column [Status]: _
-  Item Type column [Item Type]: _
-  GitHub doc URL column [Linked to Github]: _
+Proposed mapping:
+  Requirement ID   ← ID
+  Title            ← Name
+  Description      ← Description
+  Status           ← Status
+  Item Type        ← Item Type
+  GitHub doc URL   ← Linked to Github
 
-Feature grouping:
-  1. Hierarchical — rows under a "Folder" row belong to that folder (current)
-  2. By column — one column literally names each requirement's feature
-  3. None
-  Choose [1]: _
+Look right? [Enter to accept, or tell me what to change —
+  e.g. "title is the Summary column", "there's no GitHub column"]: _
 ```
 
-If the user picks strategy 2, ask for the feature column name. Persist the mapping in `column_mapping` and the strategy under `feature_inference` in `.buddy-council/sources.json`.
+If the user corrects something, apply the correction and re-show the table for one more confirmation. Do **not** walk field-by-field prompts unless the guesses are mostly wrong or the user asks for that.
 
-Also offer to set `item_type_filter` — show a brief one-liner: *"Only include rows whose Item Type matches one of these (comma-separated, blank for no filter):"*. Common picks: `Functional Requirement, Requirement`.
+Persist the mapping in `column_mapping` in `.buddy-council/sources.json`.
 
-### Step 1b: GitHub enrichment wizard
+Feature grouping is **not a question** — always write `feature_inference: { "strategy": "hierarchical_folder", "folder_item_type": "Folder" }` (rows under a "Folder" row belong to that folder). The Item Type column mapping above is what lets the parser detect those folder rows.
 
-**Only run this step if the user mapped a `github_url` column in Step 1a.** Otherwise skip silently and proceed to Step 2.
+#### Item types — sampled, decided automatically, never asked
+
+After the mapping is confirmed, sample the distinct values of the mapped Item Type column:
+
+```bash
+BC_EXCEL_PATH="<excel_path>" uv run "<plugin_root>/providers/excel/parse.py" distinct "<Item Type column>"
+```
+
+Decide inclusion automatically — do **not** ask:
+
+- `Folder` rows are feature boundaries (handled by `feature_inference` above), never emitted as requirements.
+- **`Text` rows are narrative content, not requirements** — they usually carry IDs, so the parser's ID guard alone won't drop them. When the sample contains `Text`, write `item_type_exclude: ["Text"]`.
+- Every other item type is included.
+
+Surface the decision in the Step 4 recap (the `Item types:` line) so the user can veto it at the single save prompt — e.g. "keep Text" or "also exclude X". `item_type_filter` (an include list) also remains supported for hand-edited configs, but the wizard never prompts for either field.
+
+### Step 1b: GitHub enrichment (auto-detected — no strategy question)
+
+**Only run this step if a `github_url` column was mapped in Step 1a.** Otherwise skip silently and proceed to Step 2.
 
 Detect available GitHub access strategies in parallel:
 
 - **CLI**: run `gh --version` and `gh auth status` (capture exit codes). If both succeed, CLI is available; capture the authenticated user from `gh auth status`.
 - **MCP**: check whether `mcp__github__get_file_contents` is a callable tool in this session.
 
-Tell the user what was detected and offer a choice, defaulting to CLI when both are available:
+Pick the strategy automatically — do **not** ask the user to choose:
 
-```
-A GitHub doc URL column was configured. Setting up GitHub access...
-  Detected: gh CLI v2.x (authenticated as <user>) [ok]
-  Detected: github-mcp-server <available | not installed>
+- **CLI available** (regardless of whether MCP also is) → use `cli`. Nothing more to configure — `gh auth login` already handles auth. Report in one line: `GitHub docs will be fetched via gh CLI (authenticated as <user>).` Write `enrichment.strategy: "cli"`.
+- **Only MCP available** → use `mcp`. This is the one case that still needs input: ask the user for a GitHub Personal Access Token with `repo` scope (read access). Write the token to:
+  - `~/.buddy-council/secrets.json` under `"github": { "token": "<PAT>" }` (chmod 600)
+  - `.mcp.json` `mcpServers.github.env.GITHUB_TOKEN` (see Step 4c)
 
-Strategy [cli]: _
-```
-
-**If neither is available**: warn-and-continue. Write `enrichment.enabled: false` to config, tell the user enrichment is disabled (links will be detected but not fetched at runtime), and offer install hints:
-- For CLI: `brew install gh && gh auth login` (macOS) or visit https://cli.github.com/
-- For MCP: visit https://github.com/github/github-mcp-server for installation
-
-**If CLI is chosen**: nothing more to configure — `gh auth login` already handles auth. Write `enrichment.strategy: "cli"`.
-
-**If MCP is chosen**: ask the user for a GitHub Personal Access Token with `repo` scope (read access). Write the token to:
-- `~/.buddy-council/secrets.json` under `"github": { "token": "<PAT>" }` (chmod 600)
-- `.mcp.json` `mcpServers.github.env.GITHUB_TOKEN` (see Step 4c)
-
-Tell the user they'll need to restart Claude Code or toggle `/mcp` to activate the new server.
+  Tell the user they'll need to restart Claude Code or toggle `/mcp` to activate the new server.
+- **Neither available** → warn-and-continue. Write `enrichment.enabled: false`, tell the user enrichment is disabled (links will be detected but not fetched at runtime), and offer install hints:
+  - For CLI: `brew install gh && gh auth login` (macOS) or visit https://cli.github.com/
+  - For MCP: visit https://github.com/github/github-mcp-server for installation
 
 #### Smoke test
 
-After the strategy is configured, pull one example URL from the sheet and try fetching it end-to-end. Use the column you just mapped:
+After the strategy is chosen, pull one example URL from the sheet and try fetching it end-to-end. Use the column you just mapped:
 
 ```bash
-python3 - <<'PYEOF'
-import pandas as pd, os, re
-df = pd.read_excel(os.environ['BC_EXCEL_PATH'], skiprows=int(os.environ.get('BC_SKIP_ROWS', '3')))
-col = os.environ['BC_GITHUB_URL_COL']
-for v in df[col].dropna().astype(str):
-    for u in re.split(r'[\s,;]+', v):
-        if u.startswith('https://github.com/'):
-            print(u); raise SystemExit
-PYEOF
+BC_EXCEL_PATH="<excel_path>" uv run "<plugin_root>/providers/excel/parse.py" first-github-url "<GitHub URL column>"
 ```
 
 If a URL is found, fetch it via the chosen strategy (CLI: `gh api repos/.../contents/...` and base64-decode; MCP: call `mcp__github__get_file_contents`). Show the user the first 200 chars of the decoded content as a preview:
@@ -109,27 +121,13 @@ If a URL is found, fetch it via the chosen strategy (CLI: `gh api repos/.../cont
 Smoke test: fetching <first URL from sheet>...
   Fetched 4,231 chars from <url>
   Preview: "# Patient Monitoring Architecture\n\nThe patient monitoring..."
-
-Save config? [y]: _
 ```
 
-If the smoke test fails (auth, repo not accessible, network), offer to retry, switch strategies, or save the config with enrichment disabled.
+Do **not** ask to save here — config is saved once, in Step 4. If the smoke test fails (auth, repo not accessible, network), offer to retry, switch strategy, or continue with enrichment disabled.
 
-If they choose **Jama**:
+## Step 2 of 4: Test Cases (TestRail)
 
-- Inform them that Jama integration is in progress and suggest using the Excel export as a temporary fallback
-- If they still want Jama, collect: base URL, username, API key
-- Store credentials in `~/.buddy-council/secrets.json` under the `jama` key
-
-## Step 2: Test Cases Source
-
-Ask the user:
-
-> Which tool are you using for hosting test cases?
->
-> 1. **TestRail** (supported)
-
-For **TestRail**:
+Test cases come from **TestRail** — currently the only supported test-case source, so no menu here either. Tell the user you're configuring TestRail, then:
 
 - Ask for: base URL (e.g., `https://company.testrail.io`)
 - Ask for: username (email) and API key
@@ -142,9 +140,9 @@ For **TestRail**:
 - If successful, ask which project to use (list the projects returned)
 - Ask if they want to filter by suite (optional)
 
-## Step 2.5: Code Mapping (auto-detected project)
+## Code mapping — automatic, no questions
 
-The `/bc:onboarding` command can optionally map each feature to the code that implements it, between the demo and assessment phases. This only fires when `/bc:onboarding` is run from inside a codebase. Setup auto-detects whether the current working directory looks like a code project and configures accordingly.
+The `/bc:onboarding` command can optionally map each feature to the code that implements it, between the demo and assessment phases. This only fires when `/bc:onboarding` is run from inside a codebase. This section runs **silently** between Steps 2 and 3 — it should produce at most one question (the multi-prefix ID case below); everything else is detected, defaulted, and surfaced in the Step 4 review summary.
 
 Probe the cwd for these markers:
 
@@ -160,58 +158,31 @@ Probe the cwd for these markers:
 | `composer.json` | PHP |
 | `.git/` | any git repo (fallback signal) |
 
-If at least one marker is present, report it and confirm:
+If at least one marker is present, enable code mapping **without asking** — `project.enabled: true` — and note the detection in the Step 4 summary (e.g. `Code mapping: enabled (detected Node project)`). If none are present, set `project.enabled: false`, also silently (the user is running setup from a docs-only directory; code mapping wouldn't have anything to map).
 
-```
-Detected: this looks like a <language> project (saw <marker>).
-Code mapping will run during /bc:onboarding to show where each feature
-lives in the codebase.
+#### Requirement ID pattern — infer from the sheet
 
-Enable code mapping during onboarding? [y]: _
-```
-
-If none of the markers are present, set `project.enabled: false` without prompting (the user is running setup from a docs-only directory; code mapping wouldn't have anything to map).
-
-Configure two more knobs:
-
-#### Requirement ID pattern — infer from the sheet, then confirm
-
-Do **not** ask the user to type the ID pattern blind. Infer it from the actual values in the column they mapped to `id` in Step 1a. Sample that column (set `BC_ID_COLUMN` to the mapped column name and `BC_SKIP_ROWS` to the value used in Step 1a):
+Do **not** ask the user to type the ID pattern blind. Infer it from the actual values in the column they mapped to `id` in Step 1a. Sample that column (set `BC_SKIP_ROWS` only if a non-default value was used in Step 1a):
 
 ```bash
-python3 - <<'PYEOF'
-import pandas as pd, os, json
-df = pd.read_excel(os.environ['BC_EXCEL_PATH'], skiprows=int(os.environ.get('BC_SKIP_ROWS', '3')))
-col = os.environ['BC_ID_COLUMN']
-vals = [s for s in (str(v).strip() for v in df[col].dropna()) if s and s.lower() not in ('nan', 'none')][:20]
-print(json.dumps(vals))
-PYEOF
+BC_EXCEL_PATH="<excel_path>" uv run "<plugin_root>/providers/excel/parse.py" sample "<ID column>"
 ```
 
-From the sample values, derive a grep regex: escape the literal prefix and generalize the numeric part to `\d+` (e.g. samples `CWA-REQ-85, CWA-REQ-86, CWA-REQ-92` → `CWA-REQ-\d+`). If the samples contain more than one distinct prefix, produce one pattern per prefix. Present it for confirmation, defaulting to accept:
+From the sample values, derive a grep regex: escape the literal prefix and generalize the numeric part to `\d+` (e.g. samples `CWA-REQ-85, CWA-REQ-86, CWA-REQ-92` → `CWA-REQ-\d+`). Then:
 
-```
-Detected requirement ID pattern from your sheet: CWA-REQ-\d+
-  (from samples: CWA-REQ-85, CWA-REQ-86, CWA-REQ-92)
-Use this, or enter your own?
-  [Enter to accept · or type one or more regexes, comma-separated]: _
-```
+- **Exactly one prefix detected** (the normal case) → accept it automatically, no prompt. Show it in the Step 4 review summary (`ID patterns: CWA-REQ-\d+, TC-\d+`).
+- **Multiple distinct prefixes** → produce one pattern per prefix and confirm them with the user in a single question.
+- **Sampling fails** (no `id` column mapped, unreadable sheet) → ask, with the default `CWA-REQ-\d+, TC-\d+`.
 
-Accept → use the inferred pattern(s); otherwise use what the user types. Always also append a test-case ID pattern for code references (default `TC-\d+`; adjust if the team uses a different convention). If sampling fails (no `id` column mapped, unreadable sheet), fall back to asking with the default `CWA-REQ-\d+, TC-\d+`.
+Always also append a test-case ID pattern for code references (default `TC-\d+`; adjust if the team uses a different convention).
 
-#### Ignore directories
+#### Ignore directories — defaults, silently
 
-Then offer the ignore-dirs knob (Enter to accept defaults):
-
-```
-Extra directories to ignore (comma-separated, in addition to defaults
-  node_modules, dist, .next, build, vendor, __pycache__, .venv, target)
-  []: _
-```
+Do **not** prompt. Use the defaults (`node_modules, dist, .next, build, vendor, __pycache__, .venv, target`) and note in the Step 4 summary that extra directories can be added by editing `project.ignore_dirs` in `.buddy-council/sources.json`.
 
 Persist as `project: { enabled, ignore_dirs, id_patterns }` in `.buddy-council/sources.json` (see Step 4a).
 
-## Step 3: Jira (Optional — for Ticket Creation)
+## Step 3 of 4: Jira (Optional — for Ticket Creation)
 
 Ask the user:
 
@@ -239,7 +210,25 @@ If they choose **No**:
 - Skip Jira configuration
 - The `/bc:validate` command will still work with `--dry-run` mode but won't create real tickets
 
-## Step 4: Write Configuration
+## Step 4 of 4: Review & Save
+
+Before writing anything, show one compact recap of everything collected and ask a **single** save question — this replaces all per-section save prompts:
+
+```
+Ready to save:
+  Requirements:  excel — /path/to/requirements.xls (skip_rows 3, 6 columns mapped)
+  Features:      hierarchical folders (Item Type = "Folder")
+  Item types:    Requirement, MAS Software Requirement Specification (Text excluded — narrative)
+  Enrichment:    cli (gh CLI, smoke test OK)
+  Test cases:    testrail — https://company.testrail.io, project 1
+  Jira:          not configured (/bc:validate still works with --dry-run)
+  Code mapping:  enabled — detected Node project; ID patterns CWA-REQ-\d+, TC-\d+
+                 (extra ignore dirs: edit project.ignore_dirs in .buddy-council/sources.json)
+
+Save? [y]: _
+```
+
+On yes, write all files (4a–4c below). On no, ask what to change, fix it, and re-show the recap.
 
 ### 4a: Write source config
 
@@ -253,7 +242,7 @@ mkdir -p .buddy-council
 
 **Migration:** if an older `config/sources.json` exists inside the plugin directory (from before this move), copy its contents into `.buddy-council/sources.json` and tell the user it was migrated.
 
-Write `.buddy-council/sources.json` with the selected providers and non-secret settings. Include the new column-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and 2.5:
+Write `.buddy-council/sources.json` with the selected providers and non-secret settings. Include the column-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and the code-mapping section:
 
 ```json
 {
@@ -273,7 +262,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
       "strategy": "hierarchical_folder",
       "folder_item_type": "Folder"
     },
-    "item_type_filter": ["Functional Requirement", "Requirement"],
+    "item_type_exclude": ["Text"],
     "enrichment": {
       "enabled": true,
       "strategy": "cli",
@@ -299,7 +288,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 }
 ```
 
-If Jira was not configured, omit the `"jira"` section. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. If the cwd is not a code project, set `project.enabled: false`.
+If Jira was not configured, omit the `"jira"` section. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
@@ -396,7 +385,7 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
 
 **Important**: Tell the user that after setup completes, they need to restart Claude Code (or run `/mcp` to toggle the servers) for the MCP servers to become available.
 
-## Step 5: Validate
+## After saving: validate
 
 - Confirm `.buddy-council/sources.json` was written
 - Confirm `~/.buddy-council/secrets.json` was written
@@ -406,7 +395,7 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
   1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate
   2. Then run `/bc:contradiction` to detect contradictions or `/bc:validate` to create tickets
 
-## Step 6: Reduce permission prompts (Copilot CLI)
+## After saving: reduce permission prompts (Copilot CLI)
 
 Claude Code auto-approves the plugin's read-only operations via the bundled hook — no action needed there. **Copilot CLI** has no shippable hook, so print a ready-to-paste `--allow-tool` launch recipe tailored to what was just configured, and tell the user to launch Copilot with it (writes like Jira creation still prompt):
 
@@ -431,3 +420,4 @@ Also tell the user: the Excel parser and the TestRail connection test run once p
 - If `~/.buddy-council/secrets.json` already exists, merge new entries without overwriting existing ones
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
 - Jira configuration is **optional** — users can run `/bc:validate --dry-run` without configuring Jira
+- If the user explicitly asks about Jama: explain the API integration is in progress and that the Excel export path is the supported route for now
