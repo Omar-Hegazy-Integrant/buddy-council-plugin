@@ -7,11 +7,8 @@
   "plugins": [
     {
       "name": "bc",
-      "source": {
-        "source": "github",
-        "repo": "Omar-Hegazy-Integrant/buddy-council-plugin"
-      },
-      "description": "Multi-agent requirements/test-case analysis — contradiction detection, alignment validation, and cross-artifact reasoning",
+      "source": "./",
+      "description": "Multi-agent requirements/test-case analysis — contradiction detection, alignment validation, and cross-artifact reasoning 🚀",
       "version": "0.14.0"
     }
   ]

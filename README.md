@@ -82,24 +82,39 @@ Append the read-only tools for any other sources you configured:
 - **Jira** (ticket validation): `jira(jira_get_projects),jira(jira_get_issue_types),jira(jira_get_issue)`
 - **GitHub MCP** (doc enrichment): `github(get_file_contents)`
 
-The Excel parser (`python3 … parse.py`) and the TestRail connection test run once per analysis — when Copilot first prompts for them, choose **"always allow"** for the directory and it won't ask again. `/bc:setup` prints this recipe tailored to your configuration.
+The Excel parser (`uv run … parse.py`) and the TestRail connection test run once per analysis — when Copilot first prompts for them, choose **"always allow"** for the directory and it won't ask again. `/bc:setup` prints this recipe tailored to your configuration.
 
-### Local Development (either platform)
+### Development & release flow (maintainers)
+
+There are always **two copies** of the plugin on a machine:
+
+- **Installed copy** (production) — what `/bc:` commands normally run. Claude Code keeps it under `~/.claude/plugins/…`, Copilot CLI under `~/.copilot/installed-plugins/…`. Both are snapshots of GitHub `main`, refreshed only when someone explicitly updates.
+- **Working clone** (development) — this repository. Edits here are invisible to installed copies until released.
+
+**Branches:** day-to-day work happens on `dev` (or feature branches). `main` is release-only — whatever lands on `main` is what the team installs.
+
+**Run the development version.** Both CLIs can load the working clone for a single session with the same flag:
 
 ```bash
-# Clone the repository
 git clone https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin.git
 
-# Install the TestRail MCP server dependencies
-cd buddy-council-plugin/mcp-servers/testrail-server
-uv venv && uv pip install -e .
-
-# Run with Claude Code
+# Claude Code
 claude --plugin-dir /path/to/buddy-council-plugin
 
-# Or with Copilot CLI
-copilot plugin install /path/to/buddy-council-plugin
+# Copilot CLI
+copilot --plugin-dir /path/to/buddy-council-plugin
 ```
+
+Edit → start a new session with the flag → test `/bc:…` commands. No commit, push, or version bump is needed while iterating; the MCP servers and the Excel parser resolve their own dependencies via `uv` on first launch. If the plugin is *also* installed on your machine, disable or uninstall the installed `bc` first (`/plugin` in Claude Code; `copilot plugin uninstall bc`) so the dev and installed copies don't both answer `/bc:` commands. A normal session without the flag runs the installed copy — that's your production reference.
+
+**Release to the team:**
+
+1. Merge `dev` → `main`.
+2. Bump `version` in all four manifests, keeping them identical: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.plugin/plugin.json`, `.plugin/marketplace.json`.
+3. Push `main`.
+4. Everyone refreshes their installed copy:
+   - Claude Code: `/plugin marketplace update buddy-council`
+   - Copilot CLI: `copilot plugin update bc`
 
 ## Setup
 
