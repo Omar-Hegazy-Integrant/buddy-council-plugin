@@ -1,5 +1,6 @@
 ---
-description: Find requirements related to a ticket description using feature extraction and keyword matching strategies.
+description: Internal (used by /bc:validate) — Find requirements related to a ticket description using feature extraction and keyword matching strategies.
+user-invocable: false
 ---
 
 # Find Related Requirements — Skill

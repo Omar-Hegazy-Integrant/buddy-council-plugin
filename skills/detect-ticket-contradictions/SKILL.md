@@ -1,5 +1,6 @@
 ---
-description: Detect contradictions between a ticket description and existing requirements to prevent introducing inconsistent behavior into the system.
+description: Internal (used by /bc:validate) — Detect contradictions between a ticket description and existing requirements to prevent introducing inconsistent behavior into the system.
+user-invocable: false
 ---
 
 # Detect Ticket Contradictions — Skill

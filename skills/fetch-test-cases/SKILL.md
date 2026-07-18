@@ -1,5 +1,6 @@
 ---
-description: Fetch test cases from the configured source. Reads .buddy-council/sources.json and delegates to the correct provider, which uses MCP tools for data access. Supports narrowing by feature name or requirement IDs.
+description: Internal (used by all analysis commands) — Fetch test cases from the configured source. Reads .buddy-council/sources.json and delegates to the correct provider, which uses MCP tools for data access. Supports narrowing by feature name or requirement IDs.
+user-invocable: false
 ---
 
 # Fetch Test Cases — Router Skill

@@ -1,5 +1,6 @@
 ---
-description: Read, write, initialize, and resume the onboarding progress log stored in the user's project at .buddy-council/onboarding-progress.json. Source of truth for cross-session onboarding journeys.
+description: Internal (used by /bc:onboarding) — Read, write, initialize, and resume the onboarding progress log stored in the user's project at .buddy-council/onboarding-progress.json. Source of truth for cross-session onboarding journeys.
+user-invocable: false
 ---
 
 # Manage Progress Log — Skill

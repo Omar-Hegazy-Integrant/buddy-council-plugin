@@ -1,5 +1,6 @@
 ---
-description: Analyze normalized requirements and test cases to identify coverage gaps, untested requirements, orphan test cases, and weak coverage.
+description: Internal (used by /bc:coverage) — Analyze normalized requirements and test cases to identify coverage gaps, untested requirements, orphan test cases, and weak coverage.
+user-invocable: false
 ---
 
 # Analyze Coverage — Skill

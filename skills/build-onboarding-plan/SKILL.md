@@ -1,5 +1,6 @@
 ---
-description: Group normalized requirements and test cases by feature and order them into a logical onboarding sequence. Reads optional feature_order from .buddy-council/sources.json. Produces the structure consumed by demo-feature and assess-feature.
+description: Internal (used by /bc:onboarding) — Group normalized requirements and test cases by feature and order them into a logical onboarding sequence. Reads optional feature_order from .buddy-council/sources.json. Produces the structure consumed by demo-feature and assess-feature.
+user-invocable: false
 ---
 
 # Build Onboarding Plan — Skill

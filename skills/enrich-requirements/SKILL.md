@@ -1,5 +1,6 @@
 ---
-description: Provider-agnostic enrichment orchestrator. For each requirement with _enrichment_urls, fetches the referenced GitHub markdown via the configured strategy (gh CLI or github-mcp-server), resolves image refs, attaches extended_context, and removes the transient field. Handles failures with a once-per-run user prompt.
+description: Internal (used by the fetch pipeline of all analysis commands) — Provider-agnostic enrichment orchestrator. For each requirement with _enrichment_urls, fetches the referenced GitHub markdown via the configured strategy (gh CLI or github-mcp-server), resolves image refs, attaches extended_context, and removes the transient field. Handles failures with a once-per-run user prompt.
+user-invocable: false
 ---
 
 # Enrich Requirements — Skill

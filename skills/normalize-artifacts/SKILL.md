@@ -1,5 +1,6 @@
 ---
-description: Normalize fetched requirements and test cases into canonical schema, clean text, normalize IDs, and cross-link artifacts bidirectionally.
+description: Internal (used by all analysis commands) — Normalize fetched requirements and test cases into canonical schema, clean text, normalize IDs, and cross-link artifacts bidirectionally.
+user-invocable: false
 ---
 
 # Normalize Artifacts — Skill
@@ -20,6 +21,7 @@ Every artifact must conform to this shape:
   "id": "string",
   "title": "string",
   "description": "string",
+  "rationale": "string",
   "feature": "string",
   "status": "string",
   "linked_ids": ["string"],
@@ -27,11 +29,13 @@ Every artifact must conform to this shape:
 }
 ```
 
+`rationale` is requirement-only and optional — it is populated when the source maps a rationale column (empty string otherwise); test cases omit it.
+
 ## Normalization Steps
 
 ### 1. Clean Text Fields
 
-For `title`, `description`, and any text in `raw_fields`:
+For `title`, `description`, `rationale`, and any text in `raw_fields`:
 - Strip HTML tags (replace `<br>`, `<p>`, `<li>` with newlines first, then remove remaining tags)
 - Normalize whitespace (collapse multiple spaces/newlines)
 - Trim leading/trailing whitespace

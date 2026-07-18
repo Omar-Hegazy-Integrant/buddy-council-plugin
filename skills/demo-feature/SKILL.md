@@ -1,5 +1,6 @@
 ---
-description: Walk the user through one feature step by step with do/don't pairs from test cases, waiting for confirmation between steps. Honors interactive controls (next, back, skip, explain more, note, pause). Updates the progress log after every advance.
+description: Internal (used by /bc:onboarding) — Walk the user through one feature step by step with do/don't pairs from test cases, waiting for confirmation between steps. Honors interactive controls (next, back, skip, explain more, note, pause). Updates the progress log after every advance.
+user-invocable: false
 ---
 
 # Demo Feature — Skill

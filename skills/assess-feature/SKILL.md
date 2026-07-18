@@ -1,5 +1,6 @@
 ---
-description: Generate and grade a short assessment for one feature using its requirements and test cases. Cites requirement IDs in every answer. Adaptive remediation kicks in when the user gets multiple questions wrong. Records results to the progress log.
+description: Internal (used by /bc:onboarding) — Generate and grade a short assessment for one feature using its requirements and test cases. Cites requirement IDs in every answer. Adaptive remediation kicks in when the user gets multiple questions wrong. Records results to the progress log.
+user-invocable: false
 ---
 
 # Assess Feature — Skill

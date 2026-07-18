@@ -1,5 +1,6 @@
 ---
-description: Map a feature's requirements to where they actually live in the user's codebase. Detects cwd as a code repo, runs ID grep + keyword search + AI synthesis to produce a files+flow narrative, caches the result per feature with surgical git-SHA invalidation, and honors inline deepening commands (show snippet, show diagram, show callers, read).
+description: Internal (used by /bc:onboarding and /bc:codemap) — Map a feature's requirements to where they actually live in the user's codebase. Detects cwd as a code repo, runs ID grep + keyword search + AI synthesis to produce a files+flow narrative, caches the result per feature with surgical git-SHA invalidation, and honors inline deepening commands (show snippet, show diagram, show callers, read).
+user-invocable: false
 ---
 
 # Map Feature to Code — Skill

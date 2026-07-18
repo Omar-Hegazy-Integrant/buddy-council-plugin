@@ -1,5 +1,6 @@
 ---
-description: Fetch requirements from the configured source (Excel or Jama). Reads .buddy-council/sources.json and delegates to the correct provider.
+description: Internal (used by all analysis commands) — Fetch requirements from the configured source (Excel or Jama). Reads .buddy-council/sources.json and delegates to the correct provider.
+user-invocable: false
 ---
 
 # Fetch Requirements — Router Skill

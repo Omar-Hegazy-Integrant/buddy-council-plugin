@@ -1,5 +1,6 @@
 ---
-description: Identify gaps and missing information in a ticket description to ensure it is complete and actionable before creating the ticket.
+description: Internal (used by /bc:validate) — Identify gaps and missing information in a ticket description to ensure it is complete and actionable before creating the ticket.
+user-invocable: false
 ---
 
 # Detect Ticket Gaps — Skill

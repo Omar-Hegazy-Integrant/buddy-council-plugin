@@ -1,5 +1,6 @@
 ---
-description: Generate a structured Jira ticket draft with summary, description, and acceptance criteria from a validated ticket description and user answers.
+description: Internal (used by /bc:validate) — Generate a structured Jira ticket draft with summary, description, and acceptance criteria from a validated ticket description and user answers.
+user-invocable: false
 ---
 
 # Draft Jira Ticket — Skill

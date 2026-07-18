@@ -1,5 +1,6 @@
 ---
-description: Analyze normalized requirements and test cases to find contradictions, inconsistencies, and missing alignment. Core analysis engine for the contradiction agent.
+description: Internal (used by /bc:contradiction) — Analyze normalized requirements and test cases to find contradictions, inconsistencies, and missing alignment. Core analysis engine for the contradiction agent.
+user-invocable: false
 ---
 
 # Detect Contradictions — Skill
