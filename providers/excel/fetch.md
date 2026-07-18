@@ -27,6 +27,7 @@ Read `.buddy-council/sources.json` to get the following from the `requirements` 
   "id": "ID",
   "title": "Name",
   "description": "Description",
+  "rationale": "Rationale",
   "status": "Status",
   "item_type": "Item Type",
   "github_url": "Linked to Github"
@@ -79,6 +80,7 @@ Return a JSON array of requirement objects in the canonical schema, with an opti
     "id": "CWA-REQ-85",
     "title": "System shall display patient vitals",
     "description": "The system shall display patient vital signs in real-time...",
+    "rationale": "Clinicians need continuous visibility of vitals to react to deterioration...",
     "feature": "Patient Monitoring",
     "status": "Active",
     "linked_ids": [],

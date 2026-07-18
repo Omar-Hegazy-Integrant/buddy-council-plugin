@@ -146,6 +146,7 @@ def legacy_positional_mapping(df: pd.DataFrame) -> dict:
         "id": "ID",
         "title": df.columns[0],
         "description": "Description",
+        "rationale": "Rationale",
         "status": "Status",
         "item_type": "Item Type",
     }
@@ -261,6 +262,7 @@ def run_parse() -> None:
             "id": req_id,
             "title": cell(row, "title"),
             "description": cell(row, "description"),
+            "rationale": cell(row, "rationale"),
             "feature": feature,
             "status": cell(row, "status"),
             "linked_ids": [],
