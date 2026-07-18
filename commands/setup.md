@@ -12,7 +12,7 @@ Before anything else, check whether `.buddy-council/sources.json` exists in the 
 
 ```
 Buddy-Council is already configured in this project:
-  Requirements:  excel — /path/to/requirements.xls (6 columns mapped)
+  Requirements:  excel — /path/to/requirements.xls (7 columns mapped)
   Test cases:    testrail — https://company.testrail.io (project 1)
   Jira:          not configured
   Enrichment:    cli
@@ -56,6 +56,7 @@ Proposed mapping:
   Requirement ID   ← ID
   Title            ← Name
   Description      ← Description
+  Rationale        ← Rationale
   Status           ← Status
   Item Type        ← Item Type
   GitHub doc URL   ← Linked to Github
@@ -216,7 +217,7 @@ Before writing anything, show one compact recap of everything collected and ask 
 
 ```
 Ready to save:
-  Requirements:  excel — /path/to/requirements.xls (skip_rows 3, 6 columns mapped)
+  Requirements:  excel — /path/to/requirements.xls (skip_rows 3, 7 columns mapped)
   Features:      hierarchical folders (Item Type = "Folder")
   Item types:    Requirement, MAS Software Requirement Specification (Text excluded — narrative)
   Enrichment:    cli (gh CLI, smoke test OK)
@@ -254,6 +255,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
       "id": "ID",
       "title": "Name",
       "description": "Description",
+      "rationale": "Rationale",
       "status": "Status",
       "item_type": "Item Type",
       "github_url": "Linked to Github"
@@ -397,10 +399,12 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
 
 ## After saving: reduce permission prompts (Copilot CLI)
 
-Claude Code auto-approves the plugin's read-only operations via the bundled hook — no action needed there. **Copilot CLI** has no shippable hook, so print a ready-to-paste `--allow-tool` launch recipe tailored to what was just configured, and tell the user to launch Copilot with it (writes like Jira creation still prompt):
+Claude Code auto-approves the plugin's read-only operations **and writes to its own generated files** (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's `.mcp.json`) via the bundled hooks — no action needed there. **Copilot CLI** has no shippable hook, so print a ready-to-paste `--allow-tool` launch recipe tailored to what was just configured, and tell the user to launch Copilot with it (writes like Jira creation still prompt):
 
 - Always include the TestRail read tools and safe shell:
   `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),shell(jq:*),shell(gh api:*)`
+- Always include the plugin's own generated files (path-scoped writes; substitute the real `<plugin_root>` recorded in config):
+  `write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json),write(<plugin_root>/.mcp.json)`
 - If Jira was configured, also add: `jira(jira_get_projects),jira(jira_get_issue_types),jira(jira_get_issue)`
 - If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
 

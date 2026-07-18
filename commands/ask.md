@@ -54,13 +54,16 @@ When the intent is a general question about requirements or test cases:
 
 1. **Load configuration**: Read `.buddy-council/sources.json`. If missing, direct the user to `/bc:setup`.
 
-2. **Determine what data is needed** from the question:
-   - Asking about a specific requirement → fetch that requirement and its linked test cases
-   - Asking about test cases for a feature → fetch test cases filtered to that feature
-   - Asking a counting/listing question → fetch all relevant artifacts
-   - Asking about a specific test case → fetch that test case and its linked requirements
+2. **Determine the scope** from the question — a requirement ID, a feature name, or "all". Scope narrows each fetch; it never skips one.
 
-3. **Fetch data** by following `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md` and/or `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md` as needed. Only fetch what the question requires — do not fetch everything for a narrow question.
+3. **Fetch every configured source — always (Data Contract, MANDATORY).** Every answer must be grounded in freshly fetched data. Follow `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md` **and** `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`, both narrowed to the scope. When the config maps a `github_url` column and `requirements.enrichment.enabled` is true, GitHub doc enrichment is a mandatory third source — the fetch-requirements router runs it; include its `Enrichment: fetched K of N` line in the trace. Never answer from memory, general knowledge, or previously seen data instead of fetching. Make every attempt visible by printing:
+
+   ```
+   Fetch: requirements → <N> fetched
+   Fetch: test cases  → <M> fetched
+   ```
+
+   If any configured source fails (provider error, MCP unavailable, enrichment failure) — or you could not attempt it — STOP before answering. Name exactly which source could not be fetched and why, then ask the user whether to continue with partial data or abort. Continue only after explicit confirmation, and mark the answer **PARTIAL**, stating which data was missing.
 
 4. **Normalize** by following `${CLAUDE_PLUGIN_ROOT}/skills/normalize-artifacts/SKILL.md`.
 

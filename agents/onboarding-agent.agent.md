@@ -41,7 +41,9 @@ Follow `${CLAUDE_PLUGIN_ROOT}/skills/manage-progress-log/SKILL.md`:
 - For `status`: read the log and produce the summary defined in the skill, then stop.
 - For `reset`: archive existing files, then proceed as a fresh start.
 
-### Step 4: Fetch Requirements and Test Cases
+### Step 4: Fetch Requirements and Test Cases — MANDATORY (Data Contract)
+
+The mandatory data set is every source the config provides. Both fetch skills run on every path below — scope narrows a fetch, it never skips one. When the config maps a `github_url` column and `requirements.enrichment.enabled` is true, GitHub doc enrichment is a mandatory third source (the fetch-requirements router runs it and reports `Enrichment: fetched K of N`). After fetching, print `Readiness: <N> requirements, <M> test cases`. If any configured source fails or returns 0 where data is expected, STOP, name the missing source and why, and ask the user whether to continue with partial data (outputs marked **PARTIAL**) or abort.
 
 Only fetch what is needed:
 

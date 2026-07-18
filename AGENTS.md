@@ -26,10 +26,12 @@ Requirements and test cases are fetched live from configured sources, normalized
 ## Key Conventions
 
 - All commands use the `bc:` prefix
+- **Commands are the only user-facing surface.** Skills are internal implementation details: every SKILL.md carries `user-invocable: false` (hides it from Claude Code's `/` menu) and a description starting with `Internal (used by /bc:…) —` so runtimes that still list skills (Copilot CLI) make the distinction obvious. Keep both markers when adding a skill.
 - No hardcoded secrets — credentials live only in `~/.buddy-council/secrets.json` (gitignored, `chmod 600`), the single source of truth. `.mcp.json` is gitignored and holds no secrets — only non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE` (the path the MCP servers read). The external GitHub MCP server is the lone exception (its token stays in `.mcp.json` env).
 - Source configuration lives in `.buddy-council/sources.json`
 - Provider skills are swappable — adding a new platform means adding a `providers/<name>/` folder
 - Agents never call providers directly — they go through router skills (`fetch-requirements`, `fetch-test-cases`)
+- **Data Contract**: every analysis command fetches **every configured source** — requirements and test cases always, plus GitHub doc enrichment whenever a `github_url` column is mapped and `requirements.enrichment.enabled` is true (scope narrows a fetch, never skips one). Each attempt is surfaced as a visible `Fetch:`/`Readiness:`/`Enrichment:` line, and if any configured source fails the agent stops and asks the user whether to continue with partial data — continuing marks the output **PARTIAL**. Tool calls are logged to `.buddy-council/logs/` by a bundled PostToolUse hook (Claude Code only; on Copilot use `copilot --log-level debug`).
 
 ## Available Commands
 
@@ -51,6 +53,7 @@ All providers normalize data to this shape before analysis:
   "id": "CWA-REQ-85",
   "title": "...",
   "description": "...",
+  "rationale": "...",
   "feature": "Feature Name",
   "status": "Active",
   "linked_ids": ["TC-1234"],
@@ -80,7 +83,7 @@ Every downstream skill treats it as optional and reads `description` non-exclusi
 
 `.buddy-council/sources.json` supports these additional blocks for richer onboarding and analysis:
 
-- **`requirements.column_mapping`** — maps canonical fields (`id`, `title`, `description`, `status`, `item_type`, `github_url`, `feature`) to actual Excel column names. Set by the `/bc:setup` wizard. When absent, the Excel parser falls back to its legacy positional mode.
+- **`requirements.column_mapping`** — maps canonical fields (`id`, `title`, `description`, `rationale`, `status`, `item_type`, `github_url`, `feature`) to actual Excel column names. Set by the `/bc:setup` wizard. When absent, the Excel parser falls back to its legacy positional mode.
 - **`requirements.feature_inference`** — `{strategy: "hierarchical_folder" | "column" | "none", folder_item_type: "Folder"}`. Controls how requirements are grouped into features. `/bc:setup` always writes `hierarchical_folder` without asking; the other strategies stay parser-supported for hand-edited configs.
 - **`requirements.item_type_filter`** — array of `Item Type` values to include (everything else is ignored). Optional; never written by `/bc:setup` — hand-edit only.
 - **`requirements.item_type_exclude`** — array of `Item Type` values to skip even when they carry IDs (e.g. `["Text"]` narrative rows). Written automatically by `/bc:setup` when the sheet's Item Type sample contains `Text`; hand-editable for other types.

@@ -71,10 +71,10 @@ copilot plugin install bc
 
 ### Copilot CLI — fewer permission prompts
 
-Claude Code auto-approves the plugin's read-only operations via a bundled hook. Copilot CLI has no equivalent shippable hook, so pre-approve the plugin's read-only tools at launch with `--allow-tool` (curated — write operations like Jira ticket creation still prompt):
+Claude Code auto-approves the plugin's read-only operations and writes to its own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`) via bundled hooks. Copilot CLI has no equivalent shippable hook, so pre-approve the plugin's read-only tools and its own generated files at launch with `--allow-tool` (curated — write operations like Jira ticket creation still prompt):
 
 ```bash
-copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),shell(jq:*),shell(gh api:*)'
+copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)'
 ```
 
 Append the read-only tools for any other sources you configured:
@@ -106,6 +106,14 @@ copilot --plugin-dir /path/to/buddy-council-plugin
 ```
 
 Edit → start a new session with the flag → test `/bc:…` commands. No commit, push, or version bump is needed while iterating; the MCP servers and the Excel parser resolve their own dependencies via `uv` on first launch. If the plugin is *also* installed on your machine, disable or uninstall the installed `bc` first (`/plugin` in Claude Code; `copilot plugin uninstall bc`) so the dev and installed copies don't both answer `/bc:` commands. A normal session without the flag runs the installed copy — that's your production reference.
+
+### Debugging a bc run
+
+Three layers of visibility, in order of reach:
+
+1. **In-transcript trace (both platforms).** Every analysis command follows a mandatory Data Contract: it prints `Fetch: requirements → N` / `Fetch: test cases → M` (plus `Enrichment: fetched K of N` when GitHub enrichment is configured) before analyzing, and stops to ask before continuing if any configured source failed. If you don't see these lines in a run, the run violated the contract — that itself is the bug to report. The Excel parser additionally prints a one-line `Summary:` to stderr on every invocation.
+2. **Tool log (Claude Code).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran.
+3. **Native session logs (Copilot CLI).** Copilot doesn't run plugin hooks, so use its own logging: launch with `copilot --log-level debug` (logs land in `~/.copilot/logs/`, or set `--log-dir`).
 
 **Release to the team:**
 
