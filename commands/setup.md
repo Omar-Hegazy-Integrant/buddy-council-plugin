@@ -423,6 +423,42 @@ copilot --allow-tool='<comma-separated list from above>'
 
 Also tell the user: the Excel parser and the TestRail connection test run once per analysis — when Copilot first prompts for them, choose **"always allow"** for the directory. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
 
+## Step 7: Optional Observability (AgentsView + Auto Export)
+
+Ask the user whether they want automatic DeepEval export snapshots after every assistant response:
+
+> Enable AgentsView-based auto export? [Y/n]
+
+If **Yes**:
+
+1. Detect whether `agentsview` is installed:
+  - Run: `agentsview version --json`
+2. If not installed, provide platform-specific install guidance and ask whether to proceed:
+  - macOS: `brew install --cask agentsview`
+  - fallback: `curl -fsSL https://agentsview.io/install.sh | bash`
+3. Verify the plugin auto-export hook is executable:
+  - `chmod +x <plugin_root>/hooks/auto-export-agentsview.sh`
+4. Ensure the default output directory exists:
+  - `mkdir -p ~/.buddy-council/logs/deepeval`
+5. Run a smoke test export by invoking the hook once:
+  - `<plugin_root>/hooks/auto-export-agentsview.sh`
+6. Confirm output exists and show count:
+  - `wc -l ~/.buddy-council/logs/deepeval/agentsview.jsonl`
+
+If **No**:
+
+- Skip this step silently. Core Buddy-Council functionality is unaffected.
+
+Notes for this step:
+
+- Auto-export is non-blocking. If AgentsView is missing or temporarily unavailable, the hook exits safely without breaking `/bc:*` commands.
+- Defaults can be overridden via environment variables:
+  - `BC_AGENTSVIEW_EXPORT_PATH`
+  - `BC_AGENTSVIEW_AGENT`
+  - `BC_AGENTSVIEW_AGENT_SYSTEM`
+  - `BC_AGENTSVIEW_SYNC_BEFORE_EXPORT`
+  - `BC_AGENTSVIEW_EXPORT_LOCK_DIR`
+
 ## Important
 
 - NEVER write credentials into `.buddy-council/sources.json` — that file is user-specific and contains no secrets
@@ -431,3 +467,4 @@ Also tell the user: the Excel parser and the TestRail connection test run once p
 - If `~/.buddy-council/secrets.json` already exists, merge new entries without overwriting existing ones
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
 - Jira configuration is **optional** — users can run `/bc:validate --dry-run` without configuring Jira
+- AgentsView configuration is **optional** — auto export is an observability enhancement, not a runtime dependency
