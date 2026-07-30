@@ -121,7 +121,33 @@ def load_session_usage(session_id: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         return {}
 
-    return payload if isinstance(payload, dict) else {}
+    if isinstance(payload, dict):
+        # Summarize token categories from breakdown events when available.
+        total_input_tokens = 0
+        total_cache_creation_input_tokens = 0
+        total_cache_read_input_tokens = 0
+        for event in payload.get("breakdown", []):
+            if not isinstance(event, dict):
+                continue
+
+            it = event.get("input_tokens")
+            if isinstance(it, int):
+                total_input_tokens += it
+
+            cache_creation = event.get("cache_creation_input_tokens")
+            if isinstance(cache_creation, int):
+                total_cache_creation_input_tokens += cache_creation
+
+            cache_read = event.get("cache_read_input_tokens")
+            if isinstance(cache_read, int):
+                total_cache_read_input_tokens += cache_read
+
+        payload["total_input_tokens"] = total_input_tokens
+        payload["total_cache_creation_input_tokens"] = total_cache_creation_input_tokens
+        payload["total_cache_read_input_tokens"] = total_cache_read_input_tokens
+        return payload
+
+    return {}
 
 
 def first_str(dct: Dict[str, Any], *keys: str) -> Optional[str]:
@@ -230,10 +256,49 @@ def build_records(parsed: argparse.Namespace) -> List[Dict[str, Any]]:
         tool_calls = load_tool_calls(session_id)
         usage = load_session_usage(session_id)
         session_cost_usd = usage.get("cost_usd")
+        session_total_input_tokens = usage.get("total_input_tokens")
         session_total_output_tokens = usage.get("total_output_tokens")
-        cost_per_output_token: Optional[float] = None
-        if isinstance(session_cost_usd, (int, float)) and isinstance(session_total_output_tokens, int) and session_total_output_tokens > 0:
-            cost_per_output_token = float(session_cost_usd) / float(session_total_output_tokens)
+        session_total_cache_creation_input_tokens = usage.get("total_cache_creation_input_tokens")
+        session_total_cache_read_input_tokens = usage.get("total_cache_read_input_tokens")
+        # Cost is for both input and output tokens; use total for more accurate per-token rate.
+        session_total_tokens = 0
+        if isinstance(session_total_input_tokens, int):
+            session_total_tokens += session_total_input_tokens
+        if isinstance(session_total_output_tokens, int):
+            session_total_tokens += session_total_output_tokens
+
+        # Emit one session summary record instead of duplicating these fields per turn.
+        records.append(
+            {
+                "record_id": f"{session_id}:session-usage",
+                "record_type": "session_usage",
+                "session_id": session_id,
+                "channel": "agentsview",
+                "input": "",
+                "actual_output": "",
+                "tool_calls": [],
+                "metadata": {
+                    "agent_system": parsed.agent_system,
+                    "source": "agentsview",
+                    "agent": first_str(session, "agent") or parsed.agent,
+                    "project": (session.get("project") or {}).get("display_label") if isinstance(session.get("project"), dict) else first_str(session, "project"),
+                    "started_at": first_str(session, "started_at"),
+                    "ended_at": first_str(session, "ended_at"),
+                    "message_count": session.get("message_count"),
+                    "turn_count": session.get("turn_count"),
+                    "session_total_input_tokens": session_total_input_tokens,
+                    "session_total_output_tokens": session_total_output_tokens,
+                    "session_total_cache_creation_input_tokens": session_total_cache_creation_input_tokens,
+                    "session_total_cache_read_input_tokens": session_total_cache_read_input_tokens,
+                    "session_peak_context_tokens": usage.get("peak_context_tokens"),
+                    "session_cost_usd": session_cost_usd,
+                    "session_cost_note": "Cost covers input, output, and cache-related token activity reported by AgentsView; treat as estimate.",
+                    "session_has_cost": usage.get("has_cost"),
+                    "session_has_token_data": usage.get("has_token_data"),
+                    "session_models": usage.get("models"),
+                },
+            }
+        )
 
         turn_index = 0
         active_user_input: Optional[str] = None
@@ -268,12 +333,20 @@ def build_records(parsed: argparse.Namespace) -> List[Dict[str, Any]]:
                     turn_peak_context_tokens = context_tokens
 
             estimated_turn_cost_usd: Optional[float] = None
-            if cost_per_output_token is not None and turn_output_tokens > 0:
-                estimated_turn_cost_usd = cost_per_output_token * float(turn_output_tokens)
+            if (
+                isinstance(session_cost_usd, (int, float))
+                and isinstance(session_total_output_tokens, int)
+                and session_total_output_tokens > 0
+                and turn_output_tokens > 0
+            ):
+                # Allocate session cost by output-token share so turn estimates sum to session cost.
+                output_share = float(turn_output_tokens) / float(session_total_output_tokens)
+                estimated_turn_cost_usd = float(session_cost_usd) * output_share
 
             records.append(
                 {
                     "record_id": f"{session_id}:turn-{turn_index}",
+                    "record_type": "turn",
                     "session_id": session_id,
                     "channel": "agentsview",
                     "input": active_user_input,
@@ -293,12 +366,8 @@ def build_records(parsed: argparse.Namespace) -> List[Dict[str, Any]]:
                         "turn_output_tokens": turn_output_tokens,
                         "turn_peak_context_tokens": turn_peak_context_tokens,
                         "turn_estimated_cost_usd": estimated_turn_cost_usd,
-                        "session_total_output_tokens": session_total_output_tokens,
-                        "session_peak_context_tokens": usage.get("peak_context_tokens"),
-                        "session_cost_usd": session_cost_usd,
-                        "session_has_cost": usage.get("has_cost"),
-                        "session_has_token_data": usage.get("has_token_data"),
-                        "session_models": usage.get("models"),
+                        "session_usage_record_id": f"{session_id}:session-usage",
+                        "turn_cost_note": "Estimated from session_cost_usd by output-token share; per-turn input-token cost is not available.",
                     },
                 }
             )
