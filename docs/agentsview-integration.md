@@ -12,13 +12,13 @@ Buddy Council can call the exporter from the shared private logger repository:
 
 - Repo: `https://github.com/dexcom-inc/Plugins-logger`
 - Local checkout (example): `~/Desktop/work-ai/Plugins-logger`
-- Script: `Plugins-logger/scripts/export-agentsview-deepeval-dataset.py`
+- Script: `Plugins-logger/scripts/export-session-logs.py`
 
 Use:
 
 ```bash
-python3 ~/Desktop/work-ai/Plugins-logger/scripts/export-agentsview-deepeval-dataset.py \
-  --output /tmp/bc-agentsview-deepeval.jsonl \
+python3 ~/Desktop/work-ai/Plugins-logger/scripts/export-session-logs.py \
+  --output /tmp/bc-session-logs.jsonl \
   --agent copilot \
   --agent-system buddy-council
 ```
@@ -26,8 +26,8 @@ python3 ~/Desktop/work-ai/Plugins-logger/scripts/export-agentsview-deepeval-data
 Optional filters:
 
 ```bash
-python3 ~/Desktop/work-ai/Plugins-logger/scripts/export-agentsview-deepeval-dataset.py \
-  --output /tmp/bc-agentsview-deepeval.jsonl \
+python3 ~/Desktop/work-ai/Plugins-logger/scripts/export-session-logs.py \
+  --output /tmp/bc-session-logs.jsonl \
   --agent copilot \
   --project CW \
   --command-prefix /bc-local: \
@@ -111,27 +111,27 @@ Important: session-wide usage fields are intentionally not duplicated in each `t
 
 ## Automatic export after each command
 
-AgentsView export can run automatically after each assistant response via hook:
+Session logs export can run automatically after each assistant response via hook:
 
-- Hook script: `${CLAUDE_PLUGIN_ROOT}/hooks/auto-export-agentsview.sh`
+- Hook script: `${CLAUDE_PLUGIN_ROOT}/hooks/auto-export-session-logs.sh`
 - Hook event: `agentStop`
 
 Default output path:
 
-- `~/.buddy-council/logs/deepeval/agentsview.jsonl`
+- `~/.buddy-council/logs/deepeval/session-logs.jsonl`
 
 Optional environment overrides:
 
-- `BC_AGENTSVIEW_EXPORT_PATH`: output file path
-- `BC_AGENTSVIEW_AGENT`: agent filter (default `copilot`)
-- `BC_AGENTSVIEW_AGENT_SYSTEM`: metadata label (default `buddy-council`)
-- `BC_AGENTSVIEW_SYNC_BEFORE_EXPORT`: `1` to run `agentsview sync` before export (default `1`)
-- `BC_AGENTSVIEW_EXPORT_LOCK_DIR`: lock directory path for overlap protection
+- `BC_LOGGER_OUTPUT_PATH`: output file path
+- `BC_LOGGER_AGENT`: agent filter (default `copilot`)
+- `BC_LOGGER_AGENT_SYSTEM`: metadata label (default `buddy-council`)
+- `BC_LOGGER_SYNC_BEFORE_EXPORT`: `1` to run `agentsview sync` before export (default `1`)
+- `BC_LOGGER_EXPORT_LOCK_DIR`: lock directory path for overlap protection
 - `PLUGINS_LOGGER_ROOT`: shared logger checkout root (default `~/Desktop/work-ai/Plugins-logger`)
 - `PLUGINS_LOGGER_EXPORT_SCRIPT`: absolute path to exporter script (overrides `PLUGINS_LOGGER_ROOT`)
-- `BC_AGENTSVIEW_COMMAND_PREFIXES`: comma-separated prefixes (default `/bc:,/bc-local:`)
-- `BC_AGENTSVIEW_INCLUDE_AUTOMATED`: set `1` to include automated sessions
-- `BC_AGENTSVIEW_INCLUDE_ONE_SHOT`: set `1` to include one-shot sessions
+- `BC_LOGGER_COMMAND_PREFIXES`: comma-separated prefixes (default `/bc:,/bc-local:`)
+- `BC_LOGGER_INCLUDE_AUTOMATED`: set `1` to include automated sessions
+- `BC_LOGGER_INCLUDE_ONE_SHOT`: set `1` to include one-shot sessions
 
 ## Notes
 
@@ -158,7 +158,7 @@ Python example:
 import json
 
 rows = []
-with open("/tmp/bc-agentsview-deepeval.jsonl", "r", encoding="utf-8") as f:
+with open("/tmp/bc-session-logs.jsonl", "r", encoding="utf-8") as f:
   for line in f:
     line = line.strip()
     if line:
@@ -213,5 +213,5 @@ jq -s '
       session_cost_usd: $u.metadata.session_cost_usd
     }
   )
-' /tmp/bc-agentsview-deepeval.jsonl
+' /tmp/bc-session-logs.jsonl
 ```

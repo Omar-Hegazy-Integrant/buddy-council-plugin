@@ -1,19 +1,19 @@
 #!/bin/bash
-# Auto-export AgentsView DeepEval dataset after each assistant completion.
+# Auto-export session logs dataset after each assistant completion.
 
 set -euo pipefail
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 LOGGER_ROOT="${PLUGINS_LOGGER_ROOT:-$HOME/Desktop/work-ai/Plugins-logger}"
-EXPORT_SCRIPT="${PLUGINS_LOGGER_EXPORT_SCRIPT:-$LOGGER_ROOT/scripts/export-agentsview-deepeval-dataset.py}"
-LOCK_DIR="${BC_AGENTSVIEW_EXPORT_LOCK_DIR:-/tmp/buddy-council-agentsview-export.lock}"
-OUTPUT_PATH="${BC_AGENTSVIEW_EXPORT_PATH:-$HOME/.buddy-council/logs/deepeval/agentsview.jsonl}"
-AGENT_NAME="${BC_AGENTSVIEW_AGENT:-copilot}"
-AGENT_SYSTEM="${BC_AGENTSVIEW_AGENT_SYSTEM:-buddy-council}"
-RUN_SYNC="${BC_AGENTSVIEW_SYNC_BEFORE_EXPORT:-1}"
-COMMAND_PREFIXES="${BC_AGENTSVIEW_COMMAND_PREFIXES:-/bc:,/bc-local:}"
-INCLUDE_AUTOMATED="${BC_AGENTSVIEW_INCLUDE_AUTOMATED:-0}"
-INCLUDE_ONE_SHOT="${BC_AGENTSVIEW_INCLUDE_ONE_SHOT:-0}"
+EXPORT_SCRIPT="${PLUGINS_LOGGER_EXPORT_SCRIPT:-$LOGGER_ROOT/scripts/export-session-logs.py}"
+LOCK_DIR="${BC_LOGGER_EXPORT_LOCK_DIR:-/tmp/buddy-council-session-logs-export.lock}"
+OUTPUT_PATH="${BC_LOGGER_OUTPUT_PATH:-$HOME/.buddy-council/logs/deepeval/session-logs.jsonl}"
+AGENT_NAME="${BC_LOGGER_AGENT:-copilot}"
+AGENT_SYSTEM="${BC_LOGGER_AGENT_SYSTEM:-buddy-council}"
+RUN_SYNC="${BC_LOGGER_SYNC_BEFORE_EXPORT:-1}"
+COMMAND_PREFIXES="${BC_LOGGER_COMMAND_PREFIXES:-/bc:,/bc-local:}"
+INCLUDE_AUTOMATED="${BC_LOGGER_INCLUDE_AUTOMATED:-0}"
+INCLUDE_ONE_SHOT="${BC_LOGGER_INCLUDE_ONE_SHOT:-0}"
 
 if [[ ! -f "$EXPORT_SCRIPT" ]]; then
   exit 0

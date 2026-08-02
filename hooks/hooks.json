@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-export-agentsview.sh",
-            "description": "Auto-export AgentsView DeepEval dataset after each assistant response",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-export-session-logs.sh",
+            "description": "Auto-export session logs dataset after each assistant response",
             "timeout": 20
           }
         ]

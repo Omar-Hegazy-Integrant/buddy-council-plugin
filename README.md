@@ -115,7 +115,7 @@ This walks you through:
 2. **Test cases source** — configure TestRail connection
 3. **Credentials** — stored securely in `~/.buddy-council/secrets.json` (never committed)
 4. **MCP server** — writes `.mcp.json` with TestRail credentials for the MCP server
-5. **Optional observability** — enable AgentsView auto-export to `~/.buddy-council/logs/deepeval/agentsview.jsonl`
+5. **Optional observability** — enable automatic session logs export to `~/.buddy-council/logs/deepeval/session-logs.jsonl`
 
 After setup, restart your CLI tool or toggle the MCP server for it to take effect.
 
