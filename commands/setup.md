@@ -25,11 +25,29 @@ Buddy-Council is already configured in this project:
 What would you like to change? [requirements / test cases / jira / everything / nothing]: _
 ```
 
-Only walk the steps for the sections the user names; carry every other section over unchanged when writing config in Step 4. If they answer "nothing", stop.
+Only walk the steps for the sections the user names; carry every other section over unchanged when writing config in Step 4.
 
 **If it does not exist**, run all steps in order.
 
 In both cases, resolve the **plugin install path** now, using the procedure in Step 4a-bis — Step 1 runs the bundled Excel parser from it (`<plugin_root>/providers/excel/parse.py`, invoked with `uv run`; its PEP 723 header lets uv provision Python and dependencies automatically, so nothing needs to be installed). Reuse the resolved value when writing `plugin_root` in Step 4.
+
+### Step 0a: Path health check (runs on every re-run, including "nothing")
+
+Claude Code's install path embeds the plugin version, so **every plugin update invalidates the paths recorded by the previous setup**. Before asking the user anything, compare the freshly resolved install path against what is stored:
+
+- `plugin_root` in `.buddy-council/sources.json`
+- each `--directory` argument in the project's `.mcp.json`
+
+If either differs from the resolved path — or points at a directory that no longer exists — **repair both files automatically**, without a confirmation prompt (this is a path correction, not a configuration change; nothing else in either file is touched). Then report it in one line:
+
+```
+Updated plugin path after version change:
+  /Users/you/.claude/plugins/cache/buddy-council/bc/0.14.0
+  → /Users/you/.claude/plugins/cache/buddy-council/bc/0.15.0
+  Repaired: .buddy-council/sources.json, .mcp.json — restart or toggle /mcp to reconnect the servers.
+```
+
+This repair happens **even when the user answers "nothing"** to the question above — answer the question after the check, and if they say "nothing", stop *after* the paths are fixed. If the paths already match, say nothing and continue silently.
 
 ## Step 1 of 4: Requirements (Excel)
 
@@ -298,11 +316,13 @@ If Jira was not configured, omit the `"jira"` section. If `github_url` column wa
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
-The MCP servers and the Excel parser live **inside the plugin's install directory**, which must be referenced by an absolute path that works on the current machine — `${CLAUDE_PLUGIN_ROOT}` only resolves under Claude Code, not Copilot CLI. Determine the absolute install path once and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
+The MCP servers and the Excel parser live **inside the plugin's install directory**, which must be referenced by an absolute path that works on the current machine — `${CLAUDE_PLUGIN_ROOT}` only resolves under Claude Code, not Copilot CLI. Determine the absolute install path and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
 
 1. If `${CLAUDE_PLUGIN_ROOT}` resolves to an existing directory that contains `mcp-servers/` → use it (Claude Code).
 2. Otherwise auto-detect: search likely install locations for a directory containing `mcp-servers/testrail-server/server.py` (e.g. `~/.copilot/plugins/*/`, `~/.config/github-copilot/**/`). If exactly one matches → use it.
 3. Otherwise, ask the user for the absolute path to the installed plugin.
+
+**Always re-resolve — never trust a stored value.** Claude Code's install path embeds the plugin version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so a `plugin_root` written by an earlier setup points at the *previous* version's directory after any update. A stale path either fails outright or, if the old directory still exists, silently runs old MCP-server and parser code against new commands. Copilot's install path is version-less and unaffected.
 
 Write the resolved absolute path, e.g. `"plugin_root": "/Users/<you>/.copilot/plugins/buddy-council"`. **This value is per-machine** and lives only in the git-excluded `.buddy-council/sources.json` — never hardcode a path into a committed file (`.mcp.example.json` and all tracked files keep placeholders; only the generated, gitignored files get the real path).
 

@@ -33,3 +33,7 @@ venv/
 # Temporary files
 *.tmp
 *.bak
+
+# Local-only working artifacts (never the team's business)
+outputs/
+.codex/

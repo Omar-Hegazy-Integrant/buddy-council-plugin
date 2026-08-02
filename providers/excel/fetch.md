@@ -50,8 +50,19 @@ Run the committed parser script, passing the config and Excel paths via environm
 
 ```bash
 CFG="$PWD/.buddy-council/sources.json"
-# plugin_root is recorded by /bc:setup; fall back to ${CLAUDE_PLUGIN_ROOT} (Claude Code)
-ROOT="$(jq -r '.plugin_root // empty' "$CFG")"; [ -z "$ROOT" ] && ROOT="${CLAUDE_PLUGIN_ROOT}"
+# Resolve the plugin install path, runtime value FIRST. Claude Code's install
+# path contains the version (…/bc/0.15.0/), so a plugin_root recorded by an
+# earlier /bc:setup goes stale on every version bump; the runtime's own value is
+# always current. Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} in this file;
+# Copilot CLI leaves the token literal, and its install path is version-less, so
+# the recorded plugin_root covers that runtime.
+ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+case "$ROOT" in ''|'${CLAUDE_PLUGIN_ROOT}') ROOT="${COPILOT_PLUGIN_ROOT:-}" ;; esac
+[ -f "$ROOT/providers/excel/parse.py" ] || ROOT="$(jq -r '.plugin_root // empty' "$CFG")"
+[ -f "$ROOT/providers/excel/parse.py" ] || {
+  echo "ERROR: plugin install path not found (tried the runtime env and plugin_root in $CFG). Re-run /bc:setup." >&2
+  exit 1
+}
 BC_CONFIG_PATH="$CFG" \
 BC_EXCEL_PATH="$(jq -r '.requirements.excel_path' "$CFG")" \
 BC_SCOPE="<the scope input, or empty for everything>" \

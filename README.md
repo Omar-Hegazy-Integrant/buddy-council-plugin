@@ -20,13 +20,15 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 
 | Command | Description |
 |---------|-------------|
-| `/bc:setup` | Configure data sources and credentials — four steps, one review-and-save confirmation |
-| `/bc:contradiction` | Detect contradictions between requirements and test cases |
-| `/bc:coverage` | Find untested requirements, orphan tests, and coverage gaps |
-| `/bc:validate` | Validate ticket description and create Jira ticket (with dry-run support) |
-| `/bc:ask` | Natural language query — routes to the right agent |
-| `/bc:onboarding` | Feature-by-feature product walkthrough with demos, assessments, and optional code mapping; progress resumes across sessions |
-| `/bc:codemap "<feature>"` | Map one feature to where it lives in the current codebase |
+| `/bc:setup` | Configure Buddy-Council data sources and credentials in four steps with a single review-and-save |
+| `/bc:contradiction` | Detect contradictions, inconsistencies, and alignment gaps between requirements and test cases |
+| `/bc:coverage` | Find untested requirements, orphan test cases, and coverage gaps |
+| `/bc:validate` | Validate a ticket description against requirements and test cases, then draft and create a Jira ticket |
+| `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis or answers directly |
+| `/bc:onboarding` | Walk a new team member through the product feature-by-feature with paced demos, optional code mapping, and an assessment. Resumes across sessions |
+| `/bc:codemap "<feature>"` | Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations |
+
+These descriptions are the `description:` frontmatter in `commands/*.md` — the same text both CLIs show in their `/` menus. Keep the table and the frontmatter in sync when either changes.
 
 ## Prerequisites
 
@@ -122,12 +124,14 @@ Three layers of visibility, in order of reach:
 
 **Release to the team:**
 
-1. Merge `dev` → `main`.
-2. Bump `version` in all four manifests, keeping them identical: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.plugin/plugin.json`, `.plugin/marketplace.json`.
+1. Bump `version` in all four manifests, keeping them identical: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.plugin/plugin.json`, `.plugin/marketplace.json`.
+2. Merge `dev` → `main` (bumping first keeps the two branches identical afterwards).
 3. Push `main`.
-4. Everyone refreshes their installed copy:
+4. Everyone refreshes their installed copy — no other action needed:
    - Claude Code: `/plugin marketplace update buddy-council`
    - Copilot CLI: `copilot plugin update bc`
+
+Claude Code's install path contains the version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so every update moves the plugin. Nobody needs to re-run `/bc:setup` for that: commands resolve the install path from the runtime first, and `/bc:setup` repairs a drifted `plugin_root` and `.mcp.json` automatically if it is ever run again. Restarting the session (or toggling `/mcp`) is still needed for the MCP servers to reconnect.
 
 ## Setup
 
@@ -289,7 +293,8 @@ Command → Agent → Skills (fetch → normalize → analyze) → Report
 - **Agents** — orchestrate the analysis workflow end-to-end
 - **Skills** — reusable capabilities (fetching, normalization, analysis)
 - **Providers** — platform-specific data fetching (TestRail, Excel, Jama, GitHub)
-- **MCP Servers** — wrap external APIs with structured tool interfaces
+- **MCP Servers** — wrap external APIs with structured tool interfaces. Each is a `uv` project with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock
+- **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and the plugin-root `hooks.json` (Copilot CLI) register the same four runtime-agnostic scripts
 
 Agents never call providers directly — they go through router skills, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
 
