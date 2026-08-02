@@ -10,6 +10,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 |--------|------|--------|
 | **TestRail** | Test cases | Supported (via MCP server) |
 | **Excel** (Jama export) | Requirements | Supported (temporary Jama fallback) |
+| **GitHub** | Requirement doc enrichment | Supported (`gh` CLI or external GitHub MCP server) |
 | **Jama** | Requirements | Planned (auth in progress) |
 | **Jira** | Requirements | Planned |
 | **Jira** | Ticket creation | Supported (via MCP server) |
@@ -19,19 +20,21 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 
 | Command | Description |
 |---------|-------------|
-| `/bc:setup` | Configure data sources and credentials |
+| `/bc:setup` | Configure data sources and credentials — four steps, one review-and-save confirmation |
 | `/bc:contradiction` | Detect contradictions between requirements and test cases |
 | `/bc:coverage` | Find untested requirements, orphan tests, and coverage gaps |
 | `/bc:validate` | Validate ticket description and create Jira ticket (with dry-run support) |
 | `/bc:ask` | Natural language query — routes to the right agent |
+| `/bc:onboarding` | Feature-by-feature product walkthrough with demos, assessments, and optional code mapping; progress resumes across sessions |
+| `/bc:codemap "<feature>"` | Map one feature to where it lives in the current codebase |
 
 ## Prerequisites
 
 - [Claude Code](https://claude.ai/code) **or** [Copilot CLI](https://docs.github.com/en/copilot)
-- [uv](https://docs.astral.sh/uv/) (Python package manager, for the TestRail MCP server)
-- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) — runs the MCP servers **and** the Excel parser; it provisions a compatible Python and all dependencies automatically, so no host Python installation or `pip install` is needed
 - A TestRail account with API access (for test cases)
 - An Excel export from Jama (for requirements), or direct Jama API access (when available)
+- Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your sheet links GitHub docs
 
 ## Installation
 
@@ -71,10 +74,12 @@ copilot plugin install bc
 
 ### Copilot CLI — fewer permission prompts
 
-Claude Code auto-approves the plugin's read-only operations and writes to its own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`) via bundled hooks. Copilot CLI has no equivalent shippable hook, so pre-approve the plugin's read-only tools and its own generated files at launch with `--allow-tool` (curated — write operations like Jira ticket creation still prompt):
+The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/hooks.json`, Copilot CLI (1.0.7x and later) loads the plugin-root `hooks.json` — same scripts, same behavior. On either CLI they auto-approve the plugin's curated read-only operations (the Excel parser, `jq`, `gh api` reads, the TestRail connection test, read-only MCP fetches) and writes to the plugin's own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`). Write operations like Jira ticket creation always prompt.
+
+If your Copilot version still prompts for MCP reads (MCP tool naming in hooks varies by version), pre-approve them at launch with `--allow-tool`:
 
 ```bash
-copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)'
+copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case)'
 ```
 
 Append the read-only tools for any other sources you configured:
@@ -82,7 +87,7 @@ Append the read-only tools for any other sources you configured:
 - **Jira** (ticket validation): `jira(jira_get_projects),jira(jira_get_issue_types),jira(jira_get_issue)`
 - **GitHub MCP** (doc enrichment): `github(get_file_contents)`
 
-The Excel parser (`uv run … parse.py`) and the TestRail connection test run once per analysis — when Copilot first prompts for them, choose **"always allow"** for the directory and it won't ask again. `/bc:setup` prints this recipe tailored to your configuration.
+On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when the Excel parser or the TestRail connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
 
 ### Development & release flow (maintainers)
 
@@ -112,8 +117,8 @@ Edit → start a new session with the flag → test `/bc:…` commands. No commi
 Three layers of visibility, in order of reach:
 
 1. **In-transcript trace (both platforms).** Every analysis command follows a mandatory Data Contract: it prints `Fetch: requirements → N` / `Fetch: test cases → M` (plus `Enrichment: fetched K of N` when GitHub enrichment is configured) before analyzing, and stops to ask before continuing if any configured source failed. If you don't see these lines in a run, the run violated the contract — that itself is the bug to report. The Excel parser additionally prints a one-line `Summary:` to stderr on every invocation.
-2. **Tool log (Claude Code).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran.
-3. **Native session logs (Copilot CLI).** Copilot doesn't run plugin hooks, so use its own logging: launch with `copilot --log-level debug` (logs land in `~/.copilot/logs/`, or set `--log-dir`).
+2. **Tool log (both platforms).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran. Under Copilot each line additionally carries a `result` status (`success` or a failure kind), and failed calls are logged too.
+3. **Native session logs (Copilot CLI).** For deeper Copilot internals beyond the tool log, launch with `copilot --log-level debug` (logs land in `~/.copilot/logs/`, or set `--log-dir`).
 
 **Release to the team:**
 
@@ -132,14 +137,14 @@ After installation, run the setup command to configure your data sources:
 /bc:setup
 ```
 
-This walks you through:
+The wizard runs in four steps with a single review-and-save confirmation at the end:
 
-1. **Requirements source** — choose Excel (Jama export) or Jama (when available)
-2. **Test cases source** — configure TestRail connection
-3. **Credentials** — stored securely in `~/.buddy-council/secrets.json` (never committed)
-4. **MCP server** — writes `.mcp.json` with TestRail credentials for the MCP server
+1. **Requirements (Excel)** — point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs); GitHub doc enrichment is auto-configured when the sheet has a GitHub URL column (`gh` CLI preferred, MCP fallback).
+2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on.
+3. **Jira (optional)** — only needed for real ticket creation from `/bc:validate` (dry-run works without it).
+4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
 
-After setup, restart your CLI tool or toggle the MCP server for it to take effect.
+Re-running `/bc:setup` shows the current configuration and changes only what you ask. After setup, restart your CLI tool or toggle the MCP server for it to take effect.
 
 ### Manual Configuration
 
@@ -151,16 +156,28 @@ If you prefer to configure manually instead of using `/bc:setup`:
 {
   "requirements": {
     "provider": "excel",
-    "excel_path": "/absolute/path/to/requirements.xls"
+    "excel_path": "/absolute/path/to/requirements.xls",
+    "column_mapping": {
+      "id": "ID",
+      "title": "Name",
+      "description": "Description",
+      "rationale": "Rationale",
+      "item_type": "Item Type",
+      "github_url": "Linked to Github"
+    },
+    "item_type_exclude": ["Text"]
   },
   "test_cases": {
     "provider": "testrail",
     "base_url": "https://your-instance.testrail.io",
     "project_id": 1,
     "suite_id": null
-  }
+  },
+  "plugin_root": "/absolute/path/to/installed/plugin"
 }
 ```
+
+This is the minimal shape — the full schema (feature inference, enrichment, code-mapping settings) is documented in [CLAUDE.md](CLAUDE.md) under "Configuration Schema Additions". Without `column_mapping` the parser falls back to legacy positional mode.
 
 **2. Create `~/.buddy-council/secrets.json`**:
 
@@ -242,6 +259,26 @@ The agent validates the ticket description against existing requirements, detect
 
 Routes automatically to the right agent based on intent.
 
+### Onboard a New Team Member
+
+```
+/bc:onboarding                # start or resume the walkthrough
+/bc:onboarding status         # where am I?
+/bc:onboarding feature "BGM"  # jump to one feature
+```
+
+Walks through the product feature by feature — paced demos with do/don't pairs from real test cases, an assessment per feature, and (when run inside a codebase) a code-mapping phase showing where each feature lives. Progress persists in `.buddy-council/onboarding-progress.json` and resumes across sessions.
+
+### Map a Feature to Code
+
+```
+/bc:codemap "Patient Monitoring"
+```
+
+Same code mapping as the onboarding phase, standalone: the feature's files, communication flow, and per-requirement locations in the current repo.
+
+> **Data Contract:** every analysis command fetches every configured source — requirements and test cases always, plus GitHub doc enrichment when configured — and prints visible `Fetch:`/`Readiness:`/`Enrichment:` lines before analyzing. If any source fails, it stops and asks whether to continue with partial data. See [Debugging a bc run](#debugging-a-bc-run).
+
 ## Architecture
 
 ```
@@ -251,7 +288,7 @@ Command → Agent → Skills (fetch → normalize → analyze) → Report
 - **Commands** — user-facing entry points
 - **Agents** — orchestrate the analysis workflow end-to-end
 - **Skills** — reusable capabilities (fetching, normalization, analysis)
-- **Providers** — platform-specific data fetching (TestRail, Excel, Jama)
+- **Providers** — platform-specific data fetching (TestRail, Excel, Jama, GitHub)
 - **MCP Servers** — wrap external APIs with structured tool interfaces
 
 Agents never call providers directly — they go through router skills, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
@@ -264,9 +301,12 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
 - Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
-- All MCP tools are **read-only** — no write operations to external systems
-- A PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
-- The same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches) so you aren't prompted for harmless commands. Write operations — notably Jira ticket creation (`jira_create_issue`) — still prompt. This hook is **Claude Code**-only; for **Copilot CLI**, use the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts).
+- The bundled MCP servers are **read-only** with one exception: Jira ticket creation (`jira_create_issue`), which always prompts before running
+- Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
+  - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
+  - the same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches)
+  - a second PreToolUse hook auto-approves writes **only** to the plugin's own generated files (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's own `.mcp.json`) — all other writes still prompt
+  - a PostToolUse hook writes the redacted tool log described under [Debugging a bc run](#debugging-a-bc-run) — metadata only, credentials masked, never file contents or responses
 
 ## Adding a New Provider
 

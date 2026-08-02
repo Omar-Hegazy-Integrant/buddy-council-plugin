@@ -1,22 +1,29 @@
 #!/bin/bash
-# PreToolUse hook for Bash. Two jobs:
+# PreToolUse hook for the shell tool (Claude Code "Bash" / Copilot CLI "bash").
+# Two jobs:
 #   1. HARD-BLOCK destructive operations (exit 2 — always wins, checked first).
 #   2. AUTO-APPROVE the plugin's curated, read-only operations by emitting an
 #      "allow" permission decision, so the user isn't prompted for commands they
 #      would always accept anyway.
 # Everything else falls through (exit 0, no JSON) to the normal permission prompt.
 #
-# Hook protocol: exit 2 = block; stdout JSON with permissionDecision = decision;
-# exit 0 with no JSON = defer to the normal permission flow.
-
-set -e
+# Runs under BOTH runtimes: Claude Code sends {tool_name, tool_input: {command}};
+# Copilot CLI sends {toolName, toolArgs: "<json string with command>"}. Exit 2 =
+# block/deny on both. NOTE: no `set -e` here — Copilot treats any non-zero exit
+# from a preToolUse hook as DENY (fail-closed), so incidental failures must not
+# change the exit code.
 
 INPUT=$(cat)
 
 COMMAND=$(echo "$INPUT" | python3 -c "
 import json, sys
 try:
-    print(json.load(sys.stdin).get('tool_input', {}).get('command', '').strip())
+    d = json.load(sys.stdin)
+    ti = d.get('tool_input')
+    if ti is None:
+        ta = d.get('toolArgs')
+        ti = json.loads(ta) if isinstance(ta, str) else (ta or {})
+    print((ti.get('command') or '').strip())
 except Exception:
     print('')
 " 2>/dev/null)
@@ -47,8 +54,10 @@ fi
 # 2. AUTO-APPROVE — curated, read-only plugin operations
 # ---------------------------------------------------------------------------
 
+# Emits BOTH decision shapes: top-level keys for Copilot CLI, the
+# hookSpecificOutput wrapper for Claude Code. Each runtime reads its own.
 allow() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"}}\n' "$1"
+  printf '{"permissionDecision":"allow","permissionDecisionReason":"%s","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"}}\n' "$1" "$1"
   exit 0
 }
 

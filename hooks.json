@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "_comment": "Copilot CLI plugin hooks (Copilot reads this root hooks.json; Claude Code reads hooks/hooks.json — same scripts, same behavior on both runtimes). Hook commands run with cwd = the plugin directory; COPILOT_PLUGIN_ROOT is exported as a fallback.",
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "\"${COPILOT_PLUGIN_ROOT:-.}\"/hooks/validate-bash.sh",
+        "matcher": "bash",
+        "timeoutSec": 10
+      },
+      {
+        "type": "command",
+        "bash": "\"${COPILOT_PLUGIN_ROOT:-.}\"/hooks/auto-approve-plugin-writes.sh",
+        "matcher": "create|edit|write",
+        "timeoutSec": 10
+      },
+      {
+        "type": "command",
+        "bash": "\"${COPILOT_PLUGIN_ROOT:-.}\"/hooks/auto-approve-mcp.sh",
+        "timeoutSec": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "\"${COPILOT_PLUGIN_ROOT:-.}\"/hooks/log-tool-use.sh",
+        "timeoutSec": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "\"${COPILOT_PLUGIN_ROOT:-.}\"/hooks/log-tool-use.sh",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

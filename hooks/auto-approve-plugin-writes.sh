@@ -11,23 +11,31 @@
 # Any other path — including .mcp.json files of OTHER projects — falls through
 # to the normal permission prompt.
 #
-# Hook protocol: stdout JSON with permissionDecision = decision; exit 0 with no
-# JSON = defer to the normal permission flow.
+# Runs under BOTH runtimes: Claude Code (Write/Edit tools, tool_input.file_path)
+# and Copilot CLI (create/edit tools, toolArgs JSON string with a `path` field).
+# Emits both decision shapes; exit 0 with no JSON = defer to the normal prompt.
 
 INPUT=$(cat)
 
 FILE=$(echo "$INPUT" | python3 -c "
 import json, sys
 try:
-    print(json.load(sys.stdin).get('tool_input', {}).get('file_path', ''))
+    d = json.load(sys.stdin)
+    ti = d.get('tool_input')
+    if ti is None:
+        ta = d.get('toolArgs')
+        ti = json.loads(ta) if isinstance(ta, str) else (ta or {})
+    print(ti.get('file_path') or ti.get('path') or '')
 except Exception:
     print('')
 " 2>/dev/null)
 
 [ -z "$FILE" ] && exit 0
 
+# Emits BOTH decision shapes: top-level keys for Copilot CLI, the
+# hookSpecificOutput wrapper for Claude Code.
 allow() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"}}\n' "$1"
+  printf '{"permissionDecision":"allow","permissionDecisionReason":"%s","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"}}\n' "$1" "$1"
   exit 0
 }
 

@@ -399,12 +399,12 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
 
 ## After saving: reduce permission prompts (Copilot CLI)
 
-Claude Code auto-approves the plugin's read-only operations **and writes to its own generated files** (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's `.mcp.json`) via the bundled hooks — no action needed there. **Copilot CLI** has no shippable hook, so print a ready-to-paste `--allow-tool` launch recipe tailored to what was just configured, and tell the user to launch Copilot with it (writes like Jira creation still prompt):
+The bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI 1.0.7x+ loads the plugin-root `hooks.json` — same scripts). They auto-approve the plugin's read-only operations **and writes to its own generated files** (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's `.mcp.json`) — no action needed on Claude Code, and usually none on Copilot either.
 
-- Always include the TestRail read tools and safe shell:
-  `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),shell(jq:*),shell(gh api:*)`
-- Always include the plugin's own generated files (path-scoped writes; substitute the real `<plugin_root>` recorded in config):
-  `write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json),write(<plugin_root>/.mcp.json)`
+Because MCP tool naming in Copilot's hooks varies by version, MCP reads may still prompt there. Print a ready-to-paste `--allow-tool` launch recipe covering the MCP read tools that were just configured, and tell the user it's only needed if prompts appear (writes like Jira creation still prompt by design):
+
+- Always include the TestRail read tools:
+  `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case)`
 - If Jira was configured, also add: `jira(jira_get_projects),jira(jira_get_issue_types),jira(jira_get_issue)`
 - If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
 
@@ -414,7 +414,7 @@ Present it as a single command, e.g.:
 copilot --allow-tool='<comma-separated list from above>'
 ```
 
-Also tell the user: the Excel parser and the TestRail connection test run once per analysis — when Copilot first prompts for them, choose **"always allow"** for the directory. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
+If the user's Copilot version predates plugin hooks, tell them to also append the entries the hooks would otherwise cover — `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json),write(<plugin_root>/.mcp.json)` (substitute the real `<plugin_root>` recorded in config) — and to choose **"always allow"** when the Excel parser or TestRail connection test first prompts. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
 
 ## Important
 
