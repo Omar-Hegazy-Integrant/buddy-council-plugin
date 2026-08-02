@@ -1,3 +1,7 @@
+---
+description: Detect contradictions, inconsistencies, and alignment gaps between requirements and test cases.
+---
+
 # /bc:contradiction — Detect Contradictions Between Requirements and Test Cases
 
 Analyze requirements and test cases to find contradictions, inconsistencies, and alignment gaps.

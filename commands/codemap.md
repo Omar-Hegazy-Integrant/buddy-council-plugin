@@ -1,3 +1,7 @@
+---
+description: Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations.
+---
+
 # /bc:codemap — Map a Feature to the Codebase
 
 Show where a specific feature lives in the current codebase: which files implement it, how they communicate, and where each linked requirement appears in code. This is the same code-mapping output produced by `/bc:onboarding` between demo and assessment, but invokable on its own.

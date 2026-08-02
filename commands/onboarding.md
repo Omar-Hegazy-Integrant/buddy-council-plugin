@@ -1,3 +1,7 @@
+---
+description: Walk a new team member through the product feature-by-feature with paced demos, optional code mapping, and an assessment. Resumes across sessions.
+---
+
 # /bc:onboarding — Interactive Onboarding Journey
 
 Walk a new team member through the product feature-by-feature, pairing requirements with test cases. Each feature includes a guided demo, step-by-step confirmations, and an assessment with citations to requirement IDs. Progress is logged to a project-local file so the journey can be resumed across sessions.

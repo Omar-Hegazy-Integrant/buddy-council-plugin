@@ -1,3 +1,7 @@
+---
+description: Validate a ticket description against requirements and test cases, then draft and create a Jira ticket.
+---
+
 # /bc:validate — Validate Ticket Description and Create Jira Ticket
 
 Validate a ticket description against existing requirements, resolve contradictions, fill gaps, and create a Jira ticket.

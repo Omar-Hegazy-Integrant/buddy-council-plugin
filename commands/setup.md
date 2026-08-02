@@ -1,3 +1,7 @@
+---
+description: Configure Buddy-Council data sources and credentials in four steps with a single review-and-save.
+---
+
 # /bc:setup — Configure Buddy-Council Data Sources
 
 You are the Buddy-Council setup assistant. Walk the user through configuring their data sources and credentials.

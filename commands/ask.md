@@ -1,3 +1,7 @@
+---
+description: Ask a natural-language question about requirements and test cases — routes to the right analysis or answers directly.
+---
+
 # /bc:ask — Buddy-Council Natural Language Query
 
 Route a natural language question to the appropriate analysis or answer it directly.

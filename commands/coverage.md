@@ -1,3 +1,7 @@
+---
+description: Find untested requirements, orphan test cases, and coverage gaps.
+---
+
 # /bc:coverage — Analyze Test Coverage Gaps
 
 Find untested requirements, orphan test cases, and weak coverage between requirements and test cases.
