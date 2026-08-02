@@ -8,10 +8,16 @@ This repository uses the **AgentsView-based export path** as the primary evaluat
 
 ## AgentsView-based Export Script
 
+Buddy Council can call the exporter from the shared private logger repository:
+
+- Repo: `https://github.com/dexcom-inc/Plugins-logger`
+- Local checkout (example): `~/Desktop/work-ai/Plugins-logger`
+- Script: `Plugins-logger/scripts/export-agentsview-deepeval-dataset.py`
+
 Use:
 
 ```bash
-python3 scripts/export-agentsview-deepeval-dataset.py \
+python3 ~/Desktop/work-ai/Plugins-logger/scripts/export-agentsview-deepeval-dataset.py \
   --output /tmp/bc-agentsview-deepeval.jsonl \
   --agent copilot \
   --agent-system buddy-council
@@ -20,7 +26,7 @@ python3 scripts/export-agentsview-deepeval-dataset.py \
 Optional filters:
 
 ```bash
-python3 scripts/export-agentsview-deepeval-dataset.py \
+python3 ~/Desktop/work-ai/Plugins-logger/scripts/export-agentsview-deepeval-dataset.py \
   --output /tmp/bc-agentsview-deepeval.jsonl \
   --agent copilot \
   --project CW \
@@ -121,6 +127,11 @@ Optional environment overrides:
 - `BC_AGENTSVIEW_AGENT_SYSTEM`: metadata label (default `buddy-council`)
 - `BC_AGENTSVIEW_SYNC_BEFORE_EXPORT`: `1` to run `agentsview sync` before export (default `1`)
 - `BC_AGENTSVIEW_EXPORT_LOCK_DIR`: lock directory path for overlap protection
+- `PLUGINS_LOGGER_ROOT`: shared logger checkout root (default `~/Desktop/work-ai/Plugins-logger`)
+- `PLUGINS_LOGGER_EXPORT_SCRIPT`: absolute path to exporter script (overrides `PLUGINS_LOGGER_ROOT`)
+- `BC_AGENTSVIEW_COMMAND_PREFIXES`: comma-separated prefixes (default `/bc:,/bc-local:`)
+- `BC_AGENTSVIEW_INCLUDE_AUTOMATED`: set `1` to include automated sessions
+- `BC_AGENTSVIEW_INCLUDE_ONE_SHOT`: set `1` to include one-shot sessions
 
 ## Notes
 
