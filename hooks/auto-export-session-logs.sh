@@ -3,9 +3,7 @@
 
 set -euo pipefail
 
-ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-LOGGER_ROOT="${PLUGINS_LOGGER_ROOT:-$HOME/Desktop/work-ai/Plugins-logger}"
-EXPORT_SCRIPT="${PLUGINS_LOGGER_EXPORT_SCRIPT:-$LOGGER_ROOT/scripts/export-session-logs.py}"
+LOGGER_CMD="${BC_LOGGER_COMMAND:-plugins-logger-export}"
 LOCK_DIR="${BC_LOGGER_EXPORT_LOCK_DIR:-/tmp/buddy-council-session-logs-export.lock}"
 OUTPUT_PATH="${BC_LOGGER_OUTPUT_PATH:-$HOME/.buddy-council/logs/deepeval/session-logs.jsonl}"
 AGENT_NAME="${BC_LOGGER_AGENT:-copilot}"
@@ -15,15 +13,11 @@ COMMAND_PREFIXES="${BC_LOGGER_COMMAND_PREFIXES:-/bc:,/bc-local:}"
 INCLUDE_AUTOMATED="${BC_LOGGER_INCLUDE_AUTOMATED:-0}"
 INCLUDE_ONE_SHOT="${BC_LOGGER_INCLUDE_ONE_SHOT:-0}"
 
-if [[ ! -f "$EXPORT_SCRIPT" ]]; then
-  exit 0
-fi
-
 if ! command -v agentsview >/dev/null 2>&1; then
   exit 0
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
+if ! command -v "$LOGGER_CMD" >/dev/null 2>&1; then
   exit 0
 fi
 
@@ -63,6 +57,6 @@ if [[ "$INCLUDE_ONE_SHOT" == "1" ]]; then
   EXPORT_ARGS+=(--include-one-shot)
 fi
 
-python3 "$EXPORT_SCRIPT" "${EXPORT_ARGS[@]}" >/dev/null 2>&1 || true
+"$LOGGER_CMD" "${EXPORT_ARGS[@]}" >/dev/null 2>&1 || true
 
 exit 0

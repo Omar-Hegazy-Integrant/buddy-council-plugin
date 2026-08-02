@@ -431,6 +431,8 @@ Ask the user whether they want automatic DeepEval export snapshots after every a
 
 If **Yes**:
 
+0. Ensure Plugins-logger CLI is installed:
+  - `uv tool install --from git+ssh://git@github.com/dexcom-inc/Plugins-logger.git@v0.1.0 plugins-logger-export`
 1. Detect whether `agentsview` is installed:
   - Run: `agentsview version --json`
 2. If not installed, provide platform-specific install guidance and ask whether to proceed:
@@ -456,6 +458,7 @@ Notes for this step:
   - `BC_LOGGER_OUTPUT_PATH`
   - `BC_LOGGER_AGENT`
   - `BC_LOGGER_AGENT_SYSTEM`
+  - `BC_LOGGER_COMMAND`
   - `BC_LOGGER_SYNC_BEFORE_EXPORT`
   - `BC_LOGGER_EXPORT_LOCK_DIR`
 
