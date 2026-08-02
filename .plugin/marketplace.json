@@ -6,13 +6,19 @@
   },
   "plugins": [
     {
+      "name": "bc-local",
+      "source": "./",
+      "description": "Local dev install of Buddy-Council from this repo checkout",
+      "version": "0.20.0"
+    },
+    {
       "name": "bc",
       "source": {
         "source": "github",
         "repo": "Omar-Hegazy-Integrant/buddy-council-plugin"
       },
       "description": "Multi-agent requirements/test-case analysis — contradiction detection, alignment validation, and cross-artifact reasoning",
-      "version": "0.14.0"
+      "version": "0.15.0"
     }
   ]
 }

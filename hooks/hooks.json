@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "agentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-export-agentsview.sh",
+            "description": "Auto-export AgentsView DeepEval dataset after each assistant response",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
