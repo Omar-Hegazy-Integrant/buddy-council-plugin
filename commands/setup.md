@@ -37,6 +37,7 @@ Claude Code's install path embeds the plugin version, so **every plugin update i
 
 - `plugin_root` in `.buddy-council/sources.json`
 - each `--directory` argument in the project's `.mcp.json`
+- each `--directory` argument in `~/.copilot/mcp-config.json`, **and whether that file exists at all** — a config written before this check was added will be missing it entirely, which is the single most common reason TestRail tools don't load under Copilot. If it is absent, create it per Step 4c instead of only repairing paths.
 
 If either differs from the resolved path — or points at a directory that no longer exists — **repair both files automatically**, without a confirmation prompt (this is a path correction, not a configuration change; nothing else in either file is touched). Then report it in one line:
 
@@ -319,7 +320,11 @@ If Jira was not configured, omit the `"jira"` section. If `github_url` column wa
 The MCP servers and the Excel parser live **inside the plugin's install directory**, which must be referenced by an absolute path that works on the current machine — `${CLAUDE_PLUGIN_ROOT}` only resolves under Claude Code, not Copilot CLI. Determine the absolute install path and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
 
 1. If `${CLAUDE_PLUGIN_ROOT}` resolves to an existing directory that contains `mcp-servers/` → use it (Claude Code).
-2. Otherwise auto-detect: search likely install locations for a directory containing `mcp-servers/testrail-server/server.py` (e.g. `~/.copilot/plugins/*/`, `~/.config/github-copilot/**/`). If exactly one matches → use it.
+2. Otherwise auto-detect: search Copilot's real install locations for a directory containing `mcp-servers/testrail-server/server.py` — in this order:
+   - `~/.copilot/installed-plugins/*/*/` — installed from a marketplace, e.g. `~/.copilot/installed-plugins/buddy-council/bc/`
+   - `~/.copilot/installed-plugins/_direct/*/` — installed straight from the repo URL, or run with `--plugin-dir`. Copilot flattens `owner/repo` into `owner--repo` here, so this looks like `_direct/Omar-Hegazy-Integrant--buddy-council-plugin/`. **That owner segment is normal** — it is the GitHub account the plugin was installed from, not a per-user path.
+
+   If exactly one matches → use it. If several match (both a marketplace and a direct install), prefer the marketplace copy and tell the user which was chosen.
 3. Otherwise, ask the user for the absolute path to the installed plugin.
 
 **Always re-resolve — never trust a stored value.** Claude Code's install path embeds the plugin version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so a `plugin_root` written by an earlier setup points at the *previous* version's directory after any update. A stale path either fails outright or, if the old directory still exists, silently runs old MCP-server and parser code against new commands. Copilot's install path is version-less and unaffected.
@@ -358,6 +363,17 @@ chmod 600 ~/.buddy-council/secrets.json
 
 ### 4c: Configure MCP servers
 
+**The two runtimes read different files, and you must write BOTH — always, regardless of which CLI is running.** A user who sets up in one CLI and later opens the other must not have to re-run setup:
+
+| Runtime | File it reads | Schema |
+|---|---|---|
+| Claude Code | `.mcp.json` (project/plugin root) | `mcpServers.<name>.{command,args,env}` |
+| Copilot CLI | `~/.copilot/mcp-config.json` | same, **plus** `type: "local"` and a `tools` allowlist |
+
+Copilot **ignores `.mcp.json` entirely**. Writing only that file is why TestRail tools silently fail to load under Copilot — the server is fine, the wiring is missing.
+
+**Resolve the absolute path to `uv` first** — run `command -v uv` and use the result (e.g. `/opt/homebrew/bin/uv`, `~/.local/bin/uv`) as `command` in **both** files. A bare `"uv"` works interactively but the spawned MCP server does not inherit your shell's `PATH`, so it fails with a confusing "server not loaded" error.
+
 If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.json`.
 
 `.mcp.json` must contain **no credentials** — only non-secret config (`*_BASE_URL`) and `BC_SECRETS_FILE`. For each server's `--directory`, write the **absolute** `plugin_root` path recorded in 4a-bis (e.g. `<plugin_root>/mcp-servers/testrail-server`) — **not** the `${CLAUDE_PLUGIN_ROOT}` token, which stays literal under Copilot CLI. An absolute path works on both runtimes. Update the blocks like this (substitute the real `<plugin_root>`):
@@ -387,6 +403,35 @@ If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.jso
 
 `<plugin_root>` is the absolute path from 4a-bis — it differs per machine and stays only in the local, gitignored `.mcp.json`, never in a committed file.
 
+#### The Copilot CLI copy — `~/.copilot/mcp-config.json`
+
+Write the same servers again to `~/.copilot/mcp-config.json`, in Copilot's schema. **Merge, never overwrite**: read the file if it exists, add or replace only the `testrail`/`jira`/`github` keys under `mcpServers`, and leave every other server the user has configured untouched. Create the file (and `~/.copilot/`) if absent.
+
+```json
+{
+  "mcpServers": {
+    "testrail": {
+      "type": "local",
+      "command": "<absolute path from `command -v uv`>",
+      "args": ["run", "--directory", "<plugin_root>/mcp-servers/testrail-server", "mcp", "run", "server.py"],
+      "tools": ["*"],
+      "env": {
+        "TESTRAIL_BASE_URL": "https://company.testrail.io",
+        "BC_SECRETS_FILE": "/Users/<you>/.buddy-council/secrets.json"
+      }
+    }
+  }
+}
+```
+
+Three differences from the Claude Code file, all required:
+
+- **`"type": "local"`** — Copilot rejects entries without it.
+- **`"tools": ["*"]`** — the per-server tool allowlist. Without it the server loads but exposes nothing.
+- **Fully expanded `$HOME`** in `BC_SECRETS_FILE` — write `/Users/<you>/.buddy-council/secrets.json`, not `~/...`. The tilde is not expanded here.
+
+Same rules as the Claude Code copy: no credentials (base URLs and `BC_SECRETS_FILE` only), omit `jira` if it was not configured, and add `github` only under `strategy: "mcp"`.
+
 The TestRail and Jira servers read their credentials (`username`/`api_key` and `email`/`api_token`) from `~/.buddy-council/secrets.json`. `BC_SECRETS_FILE` is optional — the servers default to `~/.buddy-council/secrets.json` — but write it explicitly for clarity. Env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working.
 
 If Jira was not configured, omit the `"jira"` section from `.mcp.json`.
@@ -409,13 +454,15 @@ If Jira was not configured, omit the `"jira"` section from `.mcp.json`.
 
 If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github` server entry. The `gh` CLI handles auth via its own keychain.
 
-**Important**: Tell the user that after setup completes, they need to restart Claude Code (or run `/mcp` to toggle the servers) for the MCP servers to become available.
+**Important**: Tell the user that after setup completes, they need to restart their CLI — Claude Code can also just toggle the servers with `/mcp`; Copilot CLI must be fully exited and relaunched — for the MCP servers to become available.
 
 ## After saving: validate
 
 - Confirm `.buddy-council/sources.json` was written
 - Confirm `~/.buddy-council/secrets.json` was written
 - Confirm `.mcp.json` was written (base URLs + `BC_SECRETS_FILE`, no secrets)
+- Confirm `~/.copilot/mcp-config.json` was written, contains the same servers with `type: "local"` and `tools: ["*"]`, and that any pre-existing servers in it survived the merge
+- Confirm the `command` in both files is an absolute `uv` path that exists on disk
 - If Excel was configured, confirm the file is readable
 - Tell the user:
   1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate

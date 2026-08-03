@@ -7,7 +7,8 @@
 #   */.buddy-council/sources.json              (per-project source config)
 #   */.buddy-council/onboarding-progress.json  (onboarding progress log)
 #   $HOME/.buddy-council/secrets.json          (credentials; chmod 600 follows)
-#   <this plugin's install dir>/.mcp.json      (MCP server config)
+#   <this plugin's install dir>/.mcp.json      (MCP server config, Claude Code)
+#   $HOME/.copilot/mcp-config.json             (MCP server config, Copilot CLI)
 # Any other path — including .mcp.json files of OTHER projects — falls through
 # to the normal permission prompt.
 #
@@ -48,11 +49,15 @@ case "$FILE" in
     allow "bc: plugin secrets file" ;;
 esac
 
-# .mcp.json is security-relevant (it defines which MCP servers run), so only
-# the copy inside THIS plugin's own install directory is approved.
+# MCP config is security-relevant (it defines which servers run), so only the
+# two exact files the plugin owns are approved: the .mcp.json inside THIS
+# plugin's install directory (Claude Code) and the user-level Copilot config.
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
 if [ -n "$PLUGIN_ROOT" ] && [ "$FILE" = "$PLUGIN_ROOT/.mcp.json" ]; then
   allow "bc: plugin MCP config"
+fi
+if [ "$FILE" = "$HOME/.copilot/mcp-config.json" ]; then
+  allow "bc: Copilot MCP config"
 fi
 
 exit 0
