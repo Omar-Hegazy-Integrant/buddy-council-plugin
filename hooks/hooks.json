@@ -1,39 +1,33 @@
 {
   "hooks": {
-    "agentStop": [
+    "Stop": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-export-session-logs.sh",
-            "description": "Auto-export session logs dataset after each assistant response",
-            "timeout": 20
-          }
-        ]
+        "type": "command",
+        "command": "BC_LOGGER_EXPORT_RETRIES=3 BC_LOGGER_ALLOW_GLOBAL_FALLBACK=0 bash \"${CLAUDE_PLUGIN_ROOT:-$HOME/.copilot/installed-plugins/buddy-council/bc-local}/hooks/auto-export-session-logs.sh\"",
+        "description": "Auto-export session logs dataset after each assistant response",
+        "timeout": 120
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/validate-bash.sh",
-            "description": "Hard-block destructive Bash; auto-approve the plugin's curated read-only commands",
-            "timeout": 10
-          }
-        ]
+        "type": "command",
+        "command": "bash \"${CLAUDE_PLUGIN_ROOT:-$HOME/.copilot/installed-plugins/buddy-council/bc-local}/hooks/validate-bash.sh\"",
+        "description": "Hard-block destructive Bash; auto-approve the plugin's curated read-only commands",
+        "timeout": 10
       },
       {
-        "matcher": "mcp__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-approve-mcp.sh",
-            "description": "Auto-approve read-only MCP fetches (testrail/github/jira get_*); write tools still prompt",
-            "timeout": 10
-          }
-        ]
+        "type": "command",
+        "command": "bash \"${CLAUDE_PLUGIN_ROOT:-$HOME/.copilot/installed-plugins/buddy-council/bc-local}/hooks/auto-approve-mcp.sh\"",
+        "description": "Auto-approve read-only MCP fetches (testrail/github/jira get_*); write tools still prompt",
+        "timeout": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "BC_LOGGER_SYNC_BEFORE_EXPORT=0 BC_LOGGER_EXPORT_RETRIES=1 BC_LOGGER_ALLOW_GLOBAL_FALLBACK=0 BC_LOGGER_TRACE_ENABLED=0 bash \"${CLAUDE_PLUGIN_ROOT:-$HOME/.copilot/installed-plugins/buddy-council/bc-local}/hooks/auto-export-session-logs.sh\"",
+        "description": "Checkpoint session-log export after each tool call to reduce loss on manual stop",
+        "timeout": 15
       }
     ]
   }
