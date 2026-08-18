@@ -11,6 +11,7 @@
   },
   "jira": {
     "base_url": "https://yourorg.atlassian.net",
+    "cloud_id": "00000000-0000-0000-0000-000000000000",
     "project_key": "PROJ",
     "default_issue_type": "Story"
   }

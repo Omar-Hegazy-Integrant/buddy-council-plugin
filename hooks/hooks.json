@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-approve-mcp.sh",
-            "description": "Auto-approve read-only MCP fetches (testrail/github/jira get_*); write tools still prompt",
+            "description": "Auto-approve read-only MCP fetches (testrail/github reads, Atlassian Jira reads); write tools like createJiraIssue still prompt",
             "timeout": 10
           }
         ]

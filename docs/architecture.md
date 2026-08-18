@@ -202,4 +202,13 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 | `testrail-server` | Active | `testrail_get_projects`, `testrail_get_suites`, `testrail_get_sections`, `testrail_get_cases`, `testrail_get_case` |
 | `jama-server` | Placeholder | None yet (auth blocked) |
 
-MCP servers are configured in `.mcp.json` (gitignored). The TestRail/Jira servers read credentials from `~/.buddy-council/secrets.json` (via `BC_SECRETS_FILE`), not the `env` block — see Credential Management above. See `.mcp.example.json` for the template.
+Jira/Confluence are **not** vendored here. They use Atlassian's official hosted remote server
+(`https://mcp.atlassian.com/v1/mcp/authv2`), which authenticates with browser OAuth and exposes
+`getAccessibleAtlassianResources`, `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
+`getJiraIssue`, `searchJiraIssuesUsingJql`, and `createJiraIssue`. Claude Code registers it from
+`.claude-plugin/plugin.json` at install time; `/bc:setup` writes it into `~/.copilot/mcp-config.json`
+for Copilot CLI.
+
+The vendored MCP servers are configured in `.mcp.json` (gitignored) and read credentials from
+`~/.buddy-council/secrets.json` (via `BC_SECRETS_FILE`), not the `env` block — see Credential Management
+above. See `.mcp.example.json` for the template.

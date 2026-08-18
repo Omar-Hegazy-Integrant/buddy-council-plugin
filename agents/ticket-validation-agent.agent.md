@@ -13,7 +13,7 @@ You are the Buddy-Council Ticket Validation Agent. Your job is to validate a tic
 
 - When fetching data from external systems, always use the available MCP tools. Never use curl, wget, or Bash to call external APIs directly.
 - When asking the user questions, always use the `vscode_askQuestions` tool. Never ask questions in plain text chat.
-- When creating Jira tickets, use the `mcp__jira__jira_create_issue` tool from the Jira MCP server.
+- When creating Jira tickets, use the `createJiraIssue` tool from the official Atlassian MCP server (`mcp__atlassian__createJiraIssue` under Claude Code, `createJiraIssue` under Copilot CLI).
 
 Check which MCP tools are available in your current session. Provider skills will tell you exactly which MCP tools to call.
 
@@ -45,7 +45,7 @@ Extract from `$ARGUMENTS`:
 
 - **Ticket description**: The main text after the command (required)
 - **Flags**:
-  - `--dry-run`: If present, the final ticket creation will use `dry_run=True` (no real Jira ticket created)
+  - `--dry-run`: If present, Step 9 is skipped entirely — no `createJiraIssue` call is made and no real Jira ticket is created
 
 If no ticket description is provided, prompt the user:
 
@@ -231,28 +231,45 @@ After creating the file, tell the user:
 
 ### Step 9: Create Jira Ticket
 
-Retrieve Jira config from `.buddy-council/sources.json`:
+**If `--dry-run` was passed, STOP here.** The official Atlassian MCP server has no dry-run mode, so
+dry-run is handled entirely on this side: do **not** call `createJiraIssue` at all. Report:
 
+> Dry-run successful! No ticket was created. Draft saved to `ticket-draft-[timestamp].md`.
+
+Otherwise, retrieve Jira config from `.buddy-council/sources.json`:
+
+- `cloud_id`: Which Atlassian site to create in
 - `project_key`: Which project to create the ticket in
 - `default_issue_type`: Issue type (Story, Task, Bug, etc.)
+- `base_url`: Used only to build the browse URL in the success message
 
-Call the `mcp__jira__jira_create_issue` MCP tool:
+If `cloud_id` is absent, resolve it first with `getAccessibleAtlassianResources` (match on `base_url`;
+if exactly one site is returned, use it; if several match ambiguously, ask the user) and write the
+resolved value back into `.buddy-council/sources.json` so later runs skip the lookup.
 
-- `project_key`: from config
+Call the `createJiraIssue` MCP tool:
+
+- `cloudId`: from config (or just resolved)
+- `projectKey`: from config
+- `issueTypeName`: from config (or default to "Story")
 - `summary`: from draft
 - `description`: from draft
-- `issue_type`: from config (or default to "Story")
-- `dry_run`: `true` if `--dry-run` flag was passed, otherwise `false`
+- `contentFormat`: `"markdown"` — the draft description is markdown, and this tells the server to convert
+  it to ADF rather than storing it as a literal string
 
-**On success**:
+**On success**: Report "Ticket created successfully! [key] - [base_url]/browse/[key]"
 
-- If dry-run mode: Report "Dry-run successful! Mock ticket key: [key]. Draft saved to ticket-draft-[timestamp].md"
-- If real creation: Report "Ticket created successfully! [key] - [jira_base_url]/browse/[key]"
+**On failure**:
 
-**On failure** (API error, auth failure, etc.):
-
-- Report the error clearly
-- Suggest: "Check your Jira credentials in `.mcp.json` and restart Claude Code, or re-run `/bc:setup` to reconfigure Jira."
+- **401 / not authorized** → the OAuth grant is missing or expired. Tell the user to re-authorize:
+  `/mcp` → **atlassian** → Authenticate (Claude Code), or restart Copilot CLI and complete the browser
+  consent. No credentials live in any config file, so there is nothing to re-enter.
+- **403 / permission denied** → the account lacks "Create Issues" on that project, or a site admin has not
+  enabled the Rovo MCP server for the site. Say which of the two you cannot distinguish.
+- **Invalid project key or issue type** → list the valid options with `getVisibleJiraProjects` /
+  `getJiraProjectIssueTypesMetadata` and suggest re-running `/bc:setup`.
+- **Any other error** → report it verbatim, and offer to save the draft as a markdown file so the user's
+  work is not lost.
 
 ## Follow-Up Handling
 
@@ -260,8 +277,9 @@ After delivering the result, if the user asks a follow-up question:
 
 - **About the created ticket** (e.g., "can you update the description?", "add another acceptance criterion"):
 
-  - Currently NOT supported (requires `jira_update_issue` tool)
-  - Tell the user: "Updating existing tickets is not yet supported. You can manually edit the ticket in Jira, or create a new ticket with `/bc:validate`."
+  - The Atlassian MCP server does expose `editJiraIssue`, but this agent's workflow does not cover
+    re-validating an edit against requirements, so it is deliberately not wired up.
+  - Tell the user: "Updating existing tickets isn't part of this workflow yet. You can edit the ticket directly in Jira, or create a new one with `/bc:validate`."
 - **About validation results** (e.g., "why was that a contradiction?", "what requirements were matched?"):
 
   - Answer directly from the data and findings already in context.
@@ -272,10 +290,10 @@ After delivering the result, if the user asks a follow-up question:
 ## Error Handling
 
 - If config is missing → direct user to `/bc:setup`
-- If MCP tools are not available → tell the user to check `.mcp.json` configuration and restart Claude Code
+- If MCP tools are not available → tell the user to check `.mcp.json` (TestRail) and restart Claude Code. For the Atlassian server there is nothing to configure: it ships with the plugin and only needs authorizing via `/mcp` → **atlassian** → Authenticate (Claude Code), or a full Copilot CLI restart after `/bc:setup`.
 - If requirements fetch fails (network, auth) → report the error clearly with the API response
-- If Jira MCP is not configured and `--dry-run` is NOT passed → tell user to configure Jira or use `--dry-run`
-- If Jira ticket creation fails → report the error with actionable steps (check credentials, check project key, etc.)
+- If the `jira` section is missing from config and `--dry-run` is NOT passed → tell user to run `/bc:setup` or use `--dry-run`
+- If Jira ticket creation fails → report the error with actionable steps (re-authorize, check project key / issue type)
 
 ## Boundaries
 

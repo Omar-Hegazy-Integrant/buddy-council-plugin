@@ -13,7 +13,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | **GitHub** | Requirement doc enrichment | Supported (`gh` CLI or external GitHub MCP server) |
 | **Jama** | Requirements | Planned (auth in progress) |
 | **Jira** | Requirements | Planned |
-| **Jira** | Ticket creation | Supported (via MCP server) |
+| **Jira** | Ticket creation | Supported (via Atlassian's official remote MCP server, bundled) |
 | **Qase** | Test cases | Planned |
 
 ## Available Commands
@@ -37,6 +37,7 @@ These descriptions are the `description:` frontmatter in `commands/*.md` — the
 - A TestRail account with API access (for test cases)
 - An Excel export from Jama (for requirements), or direct Jama API access (when available)
 - Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your sheet links GitHub docs
+- Optional: an Atlassian Cloud account with Jira access, for `/bc:validate` ticket creation. Atlassian's remote MCP server must be enabled for your site under **Atlassian Administration → Rovo → MCP server** — that's a site-admin action, not something you can turn on yourself
 
 ## Installation
 
@@ -60,6 +61,18 @@ These descriptions are the `description:` frontmatter in `commands/*.md` — the
 /reload-plugins
 ```
 
+**Step 4: Authorize Jira (only if you'll use `/bc:validate`)**
+
+Installing the plugin also registers **Atlassian's official remote MCP server** — nothing to install or
+configure, it's declared in the plugin manifest. It just needs a one-time browser authorization:
+
+```
+/mcp
+```
+
+Select **atlassian** → **Authenticate**, and approve in the browser. No email, no API token, nothing
+stored on disk.
+
 ### Copilot CLI
 
 **Step 1: Add the marketplace**
@@ -76,6 +89,8 @@ copilot plugin install bc
 
 **Step 3: Run `/bc:setup`, then fully restart Copilot** — exit the session and relaunch, so it picks up the MCP servers. Toggling is not enough on Copilot.
 
+> **Jira on Copilot.** Copilot CLI does not reliably load MCP servers declared in a plugin manifest — it doesn't merge a plugin's `.mcp.json` into the runtime config ([#2709](https://github.com/github/copilot-cli/issues/2709)), and plugin-sourced HTTP servers never trigger the OAuth prompt ([#1967](https://github.com/github/copilot-cli/issues/1967)). So `/bc:setup` writes the `atlassian` server into `~/.copilot/mcp-config.json` instead, which does authorize correctly. This is why Jira needs `/bc:setup` on Copilot but not on Claude Code — one working registration per runtime, never two.
+
 > **Where Copilot puts the plugin.** A marketplace install lands in `~/.copilot/installed-plugins/<marketplace>/<plugin>/`. Installing straight from the repo URL instead lands in `~/.copilot/installed-plugins/_direct/<owner>--<repo>/` — e.g. `_direct/Omar-Hegazy-Integrant--buddy-council-plugin/`. **The owner segment is expected**: it is the GitHub account the plugin was published from, the same for everyone, not a leftover from another user's machine. `/bc:setup` handles both layouts.
 
 ### Copilot CLI — fewer permission prompts
@@ -90,7 +105,7 @@ copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suit
 
 Append the read-only tools for any other sources you configured:
 
-- **Jira** (ticket validation): `jira(jira_get_projects),jira(jira_get_issue_types),jira(jira_get_issue)`
+- **Jira** (ticket validation): `atlassian(getAccessibleAtlassianResources),atlassian(getVisibleJiraProjects),atlassian(getJiraProjectIssueTypesMetadata),atlassian(getJiraIssue),atlassian(searchJiraIssuesUsingJql)` — leave `atlassian(createJiraIssue)` out on purpose, so ticket creation keeps prompting
 - **GitHub MCP** (doc enrichment): `github(get_file_contents)`
 
 On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when the Excel parser or the TestRail connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
@@ -135,6 +150,8 @@ The two CLIs read **different MCP config files**, and Copilot ignores the projec
 | Claude Code | `.mcp.json` in the project/plugin root | `mcpServers.<name>.{command,args,env}` |
 | Copilot CLI | `~/.copilot/mcp-config.json` | also needs `type: "local"` and `tools: ["*"]` per server |
 
+The `atlassian` server is the exception to that table: Claude Code gets it from the plugin manifest (`.claude-plugin/plugin.json`), never from `.mcp.json`, and Copilot gets it only from `~/.copilot/mcp-config.json`. If Jira tools are missing on Claude Code, the fix is `/mcp` → **atlassian** → Authenticate, not a config edit.
+
 `/bc:setup` writes both. If you set up with an older version and Copilot reports the MCP tools as unavailable, re-run `/bc:setup` — its path health check creates the missing Copilot config and repairs stale paths, then fully restart Copilot. Two details that cause silent failures if hand-editing: `command` must be the **absolute** path to `uv` (`command -v uv`) because the spawned server doesn't inherit your shell `PATH`, and `BC_SECRETS_FILE` must be a fully expanded path (`/Users/you/...`, not `~/...`).
 
 **Release to the team:**
@@ -160,7 +177,7 @@ The wizard runs in four steps with a single review-and-save confirmation at the 
 
 1. **Requirements (Excel)** — point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs); GitHub doc enrichment is auto-configured when the sheet has a GitHub URL column (`gh` CLI preferred, MCP fallback).
 2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on.
-3. **Jira (optional)** — only needed for real ticket creation from `/bc:validate` (dry-run works without it).
+3. **Jira (optional)** — only needed for real ticket creation from `/bc:validate` (dry-run works without it). No credentials are collected: it just records which Atlassian site, project, and issue type to file into. Auth is browser OAuth, handled by Atlassian's own MCP server.
 4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
 
 Re-running `/bc:setup` shows the current configuration and changes only what you ask. After setup, restart your CLI tool or toggle the MCP server for it to take effect.
@@ -225,6 +242,35 @@ chmod 600 ~/.buddy-council/secrets.json
         "TESTRAIL_BASE_URL": "https://your-instance.testrail.io",
         "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
       }
+    }
+  }
+}
+```
+
+Do **not** add an `atlassian` entry here — Claude Code already registers it from the plugin manifest, and a second copy would load the same server twice.
+
+**4. Jira (optional, only for `/bc:validate`).** Add a `jira` block to `.buddy-council/sources.json` — no credentials, just where to file tickets:
+
+```json
+{
+  "jira": {
+    "base_url": "https://yourorg.atlassian.net",
+    "cloud_id": "00000000-0000-0000-0000-000000000000",
+    "project_key": "PROJ",
+    "default_issue_type": "Story"
+  }
+}
+```
+
+`cloud_id` is optional — omit it and `/bc:validate` resolves it once via `getAccessibleAtlassianResources`, then caches it here. On Copilot CLI only, also add the server to `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "atlassian": {
+      "type": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp/authv2",
+      "tools": ["*"]
     }
   }
 }
@@ -308,7 +354,7 @@ Command → Agent → Skills (fetch → normalize → analyze) → Report
 - **Agents** — orchestrate the analysis workflow end-to-end
 - **Skills** — reusable capabilities (fetching, normalization, analysis)
 - **Providers** — platform-specific data fetching (TestRail, Excel, Jama, GitHub)
-- **MCP Servers** — wrap external APIs with structured tool interfaces. Each is a `uv` project with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock
+- **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — they use the vendors' own servers (Atlassian's hosted remote server, and `github-mcp-server`)
 - **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and the plugin-root `hooks.json` (Copilot CLI) register the same four runtime-agnostic scripts
 
 Agents never call providers directly — they go through router skills, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
@@ -321,7 +367,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
 - Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
-- The bundled MCP servers are **read-only** with one exception: Jira ticket creation (`jira_create_issue`), which always prompts before running
+- The vendored MCP servers (TestRail, Jama) are **read-only**. The one write path in the plugin is Jira ticket creation (`createJiraIssue`, on Atlassian's official server), which always prompts before running — it is deliberately excluded from the auto-approve hook and from every `--allow-tool` recipe
+- Jira access holds **no stored credential**: Atlassian's server uses browser OAuth and keeps its own grant, so there is no Jira email or API token anywhere in the plugin's config or secrets file
 - Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
   - the same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches)

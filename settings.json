@@ -10,6 +10,17 @@
     "mcp__testrail__testrail_get_sections",
     "mcp__testrail__testrail_get_cases",
     "mcp__testrail__testrail_get_cases_by_refs",
-    "mcp__testrail__testrail_get_case"
+    "mcp__testrail__testrail_get_case",
+    "mcp__atlassian__atlassianUserInfo",
+    "mcp__atlassian__getAccessibleAtlassianResources",
+    "mcp__atlassian__getVisibleJiraProjects",
+    "mcp__atlassian__getJiraProjectIssueTypesMetadata",
+    "mcp__atlassian__getJiraIssueTypeMetaWithFields",
+    "mcp__atlassian__getJiraIssue",
+    "mcp__atlassian__getJiraIssueRemoteIssueLinks",
+    "mcp__atlassian__getIssueLinkTypes",
+    "mcp__atlassian__getTransitionsForJiraIssue",
+    "mcp__atlassian__lookupJiraAccountId",
+    "mcp__atlassian__searchJiraIssuesUsingJql"
   ]
 }

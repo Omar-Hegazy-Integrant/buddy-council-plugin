@@ -19,14 +19,14 @@ Validate a ticket description against existing requirements, resolve contradicti
 The command expects:
 - **Ticket description** (required): Free-form text describing the ticket to create
 - **Flags** (optional):
-  - `--dry-run`: Test the workflow without creating a real Jira ticket (returns mock ticket key)
+  - `--dry-run`: Test the workflow without creating a real Jira ticket (the ticket-creation call is skipped entirely)
 
 ## Execution
 
 1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
-2. Check if Jira is configured in `.buddy-council/sources.json`:
+2. Check if Jira is configured in `.buddy-council/sources.json` (which site/project to file into — there are no Jira credentials to check; Atlassian's MCP server handles auth via browser OAuth):
    - If the `jira` section is missing AND `--dry-run` flag is NOT present, warn:
      > Jira is not configured. Run `/bc:setup` to configure Jira, or use `--dry-run` to test without creating a real ticket.
    - If `--dry-run` flag is present, proceed (dry-run works without Jira config)
@@ -94,7 +94,7 @@ Use `--dry-run` to test the entire workflow without creating a real Jira ticket:
 - All validation steps execute normally (fetch requirements, detect contradictions, fill gaps)
 - Draft is generated and reviewed
 - Draft is saved to a markdown file: `ticket-draft-[timestamp].md`
-- Instead of creating a real ticket, returns a mock ticket key: `DRY-RUN-XXXXXXXX`
+- No `createJiraIssue` call is made at all — nothing reaches Jira
 
 This is useful for:
 - Testing the validation workflow before creating real tickets
@@ -151,8 +151,8 @@ https://yourorg.atlassian.net/browse/PROJ-1234
 - **No ticket description provided**: Prompt user for description
 - **No related requirements found**: Automatically skip contradiction detection and proceed to gap analysis
 - **Jira not configured**: Suggest `/bc:setup` or `--dry-run` mode
-- **MCP tools unavailable**: Check `.mcp.json` and restart Claude Code
-- **Ticket creation fails**: Check Jira credentials and project key
+- **Atlassian tools unavailable**: Authorize the server — `/mcp` → **atlassian** → Authenticate (Claude Code), or run `/bc:setup` and fully restart Copilot CLI
+- **Ticket creation fails**: Re-authorize if 401; check the project key and issue type if 400; if 403, ask a Jira site admin to enable the Rovo MCP server
 
 ## Tips
 

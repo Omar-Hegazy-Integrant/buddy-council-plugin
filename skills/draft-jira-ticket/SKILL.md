@@ -44,14 +44,15 @@ Generate three fields matching Jira's expected structure:
   2. **Acceptance Criteria**: Bulleted list under `## Acceptance Criteria` heading
   3. **Related Requirements**: Bulleted list under `## Related Requirements` heading (if any requirements were matched)
 
-**Jira Markdown Support:**
+**Formatting — standard Markdown, not Jira wiki markup.** The ticket is created through Atlassian's
+official MCP server with `contentFormat: "markdown"`, which converts CommonMark to ADF server-side:
 - Headings: `## Heading`
-- Bold: `*bold text*`
-- Italic: `_italic text_`
-- Code: `{{monospace}}`
-- Bullets: `- item` or `* item`
+- Bold: `**bold text**`
+- Italic: `*italic text*`
+- Code: `` `monospace` ``
+- Bullets: `- item`
 - Numbered lists: `1. item`
-- Line breaks: Two spaces + newline, or blank line between paragraphs
+- Line breaks: blank line between paragraphs
 
 ### 3. Acceptance Criteria
 - **Format**: Bulleted list embedded in the description under `## Acceptance Criteria` heading
@@ -124,11 +125,11 @@ A bulleted list under the `## Related Requirements` heading. Link to requirement
 Keep the description focused, concise, and actionable.
 
 ### Step 3: Format for Jira
-Convert the structured description to Jira-compatible markdown:
+Emit standard Markdown — the MCP server converts it to ADF on creation:
 - Use `##` for headings
 - Use `- ` for bullets
-- Use `*bold*` for emphasis
-- Avoid HTML tags (Jira uses ADF, not HTML)
+- Use `**bold**` for emphasis
+- Avoid HTML tags and Jira wiki markup (`{{...}}`, `h2.`); neither survives the markdown→ADF conversion
 
 ## Output Format
 

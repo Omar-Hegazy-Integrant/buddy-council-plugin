@@ -208,26 +208,42 @@ Persist as `project: { enabled, ignore_dirs, id_patterns }` in `.buddy-council/s
 
 ## Step 3 of 4: Jira (Optional — for Ticket Creation)
 
+Jira runs on **Atlassian's official remote MCP server** (`https://mcp.atlassian.com/v1/mcp/authv2`), which
+ships with the plugin. **Collect no credentials in this step** — the server uses browser OAuth, so there is
+no email, no API token, and nothing to write into a secrets file. This step only records *which site,
+project, and issue type* to create tickets in.
+
 Ask the user:
 
 > Do you want to configure Jira for creating tickets from the `/bc:validate` command?
 >
-> - **Yes** — Configure Jira Cloud integration
+> - **Yes** — Pick the Atlassian site and project to file tickets in
 > - **No** — Skip this step
 
-If they choose **Yes**:
+If they choose **Yes**, first check whether the Atlassian tools are already live in this session — look for
+`mcp__atlassian__getAccessibleAtlassianResources` (Claude Code) or `getAccessibleAtlassianResources`
+(Copilot CLI).
 
-- Ask for: Jira base URL (e.g., `https://yourorg.atlassian.net`)
-- Ask for: Email address for Jira account
-- Ask for: API token (guide them to https://id.atlassian.com/manage-profile/security/api-tokens)
-- Test the connection:
-  - If the `mcp__jira__jira_get_projects` MCP tool is available, use it to verify the connection
-  - If MCP tools are not yet available (first-time setup), fall back to:
-    ```bash
-    curl -s -u "EMAIL:API_TOKEN" "BASE_URL/rest/api/3/project" | head -c 500
-    ```
-- If successful, ask which project to use for ticket creation (list the projects returned, or ask for project key)
-- Ask for default issue type (Story, Task, Bug, etc.) — default to "Task" if skipped
+**If the tools ARE available** (the usual case on Claude Code once authorized):
+
+1. Call `getAccessibleAtlassianResources` to list the sites the user can reach. If it returns exactly one,
+   take it silently; otherwise show the list and ask which site. Record its `id` as `cloud_id` and its
+   `url` as `base_url`.
+2. Call `getVisibleJiraProjects` with that `cloudId` and ask which project to file tickets in. Record its
+   `key` as `project_key`.
+3. Call `getJiraProjectIssueTypesMetadata` and ask for the default issue type — default to "Task" if the
+   user skips.
+
+**If the tools are NOT available yet** (first run, or Copilot CLI before its restart) — do not block:
+
+- Say so plainly: the Atlassian server needs a one-time authorization, which happens after this wizard.
+- Ask for the Jira site URL (e.g. `https://yourorg.atlassian.net`) → `base_url`, and the project key
+  (e.g. `PROJ`) → `project_key`, and the default issue type (default "Task").
+- Omit `cloud_id` entirely. `/bc:validate` resolves it on first use via `getAccessibleAtlassianResources`
+  and caches it back into the config.
+
+Never fall back to `curl` against the Jira REST API — there are no stored credentials to authenticate with,
+by design.
 
 If they choose **No**:
 
@@ -302,6 +318,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
   },
   "jira": {
     "base_url": "https://yourorg.atlassian.net",
+    "cloud_id": "00000000-0000-0000-0000-000000000000",
     "project_key": "PROJ",
     "default_issue_type": "Story"
   },
@@ -313,7 +330,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 }
 ```
 
-If Jira was not configured, omit the `"jira"` section. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
+If Jira was not configured, omit the `"jira"` section; if it was configured but the Atlassian tools were not live yet, include it without `cloud_id`. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
@@ -343,17 +360,18 @@ Write `~/.buddy-council/secrets.json` with credentials — this file is the **si
     "username": "user@company.com",
     "api_key": "the-api-key"
   },
-  "jira": {
-    "email": "user@company.com",
-    "api_token": "jira-api-token"
-  },
   "github": {
     "token": "<github-personal-access-token>"
   }
 }
 ```
 
-If Jira was not configured, omit the `"jira"` section. If the GitHub enrichment strategy is **not** `mcp` (e.g., CLI was chosen, or enrichment is disabled), omit the `"github"` section — `gh` CLI handles its own credentials.
+**There is no `jira` section here, ever.** The Atlassian MCP server authenticates with browser OAuth and
+stores its own grant — the plugin never sees or persists a Jira credential. If a `jira` block survives in
+this file from a version before 0.17.0, delete it and tell the user that the old Jira API token is now
+unused and should be revoked at https://id.atlassian.com/manage-profile/security/api-tokens.
+
+If the GitHub enrichment strategy is **not** `mcp` (e.g., CLI was chosen, or enrichment is disabled), omit the `"github"` section — `gh` CLI handles its own credentials.
 
 Set restrictive permissions on the secrets file:
 
@@ -388,24 +406,23 @@ If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.jso
         "TESTRAIL_BASE_URL": "https://company.testrail.io",
         "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
       }
-    },
-    "jira": {
-      "command": "uv",
-      "args": ["run", "--directory", "<plugin_root>/mcp-servers/jira-server", "mcp", "run", "server.py"],
-      "env": {
-        "JIRA_BASE_URL": "https://yourorg.atlassian.net",
-        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
-      }
     }
   }
 }
 ```
 
+**Do NOT add an `atlassian` entry to `.mcp.json`.** Claude Code already registers Atlassian's official
+remote server from the plugin manifest (`.claude-plugin/plugin.json` → `mcpServers.atlassian`), so it is
+live the moment the plugin is installed. A second entry here would load the same server twice.
+
 `<plugin_root>` is the absolute path from 4a-bis — it differs per machine and stays only in the local, gitignored `.mcp.json`, never in a committed file.
 
 #### The Copilot CLI copy — `~/.copilot/mcp-config.json`
 
-Write the same servers again to `~/.copilot/mcp-config.json`, in Copilot's schema. **Merge, never overwrite**: read the file if it exists, add or replace only the `testrail`/`jira`/`github` keys under `mcpServers`, and leave every other server the user has configured untouched. Create the file (and `~/.copilot/`) if absent.
+Write the same servers again to `~/.copilot/mcp-config.json`, in Copilot's schema — **plus the `atlassian`
+server, which Copilot can only get from here**. **Merge, never overwrite**: read the file if it exists, add
+or replace only the `testrail`/`atlassian`/`github` keys under `mcpServers`, and leave every other server
+the user has configured untouched. Create the file (and `~/.copilot/`) if absent.
 
 ```json
 {
@@ -419,10 +436,27 @@ Write the same servers again to `~/.copilot/mcp-config.json`, in Copilot's schem
         "TESTRAIL_BASE_URL": "https://company.testrail.io",
         "BC_SECRETS_FILE": "/Users/<you>/.buddy-council/secrets.json"
       }
+    },
+    "atlassian": {
+      "type": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp/authv2",
+      "tools": ["*"]
     }
   }
 }
 ```
+
+**Write the `atlassian` entry unconditionally** — even when the user skipped Step 3. It carries no
+project-specific setting and no secret, and having it present means `/bc:validate` works as soon as the
+user picks a project later.
+
+**Why Copilot gets it here and Claude Code doesn't.** Copilot CLI does not reliably pick up MCP servers
+declared in a plugin manifest: `copilot plugin install` doesn't merge a plugin's `.mcp.json` into the
+runtime config ([copilot-cli#2709](https://github.com/github/copilot-cli/issues/2709)), and plugin-sourced
+HTTP servers never trigger the OAuth prompt, while the *same* server added to `~/.copilot/mcp-config.json`
+authorizes correctly ([copilot-cli#1967](https://github.com/github/copilot-cli/issues/1967)). So the plugin
+deliberately declares `atlassian` **only** in `.claude-plugin/plugin.json` (for Claude Code) and **only**
+in `~/.copilot/mcp-config.json` (for Copilot) — one working registration per runtime, never two.
 
 Three differences from the Claude Code file, all required:
 
@@ -430,11 +464,13 @@ Three differences from the Claude Code file, all required:
 - **`"tools": ["*"]`** — the per-server tool allowlist. Without it the server loads but exposes nothing.
 - **Fully expanded `$HOME`** in `BC_SECRETS_FILE` — write `/Users/<you>/.buddy-council/secrets.json`, not `~/...`. The tilde is not expanded here.
 
-Same rules as the Claude Code copy: no credentials (base URLs and `BC_SECRETS_FILE` only), omit `jira` if it was not configured, and add `github` only under `strategy: "mcp"`.
+Same rules as the Claude Code copy: no credentials (base URLs and `BC_SECRETS_FILE` only), and add `github` only under `strategy: "mcp"`. The `atlassian` entry is the exception to "same servers" — it exists only in this file.
 
-The TestRail and Jira servers read their credentials (`username`/`api_key` and `email`/`api_token`) from `~/.buddy-council/secrets.json`. `BC_SECRETS_FILE` is optional — the servers default to `~/.buddy-council/secrets.json` — but write it explicitly for clarity. Env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working.
+The TestRail server reads its credentials (`username`/`api_key`) from `~/.buddy-council/secrets.json`. `BC_SECRETS_FILE` is optional — the server defaults to `~/.buddy-council/secrets.json` — but write it explicitly for clarity. Env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working.
 
-If Jira was not configured, omit the `"jira"` section from `.mcp.json`.
+**Migration from a pre-0.17.0 setup.** If either MCP config still contains a `"jira"` server pointing at
+`mcp-servers/jira-server`, delete that entry — the vendored server no longer exists and the entry will fail
+to start. Tell the user it was removed and replaced by the official Atlassian server.
 
 **GitHub exception.** If GitHub enrichment was configured with `strategy: "mcp"`, add a `github` server entry. The external `github-mcp-server` (NOT vendored — install it externally per `.mcp.example.json`) reads `GITHUB_TOKEN` from its env and cannot read the secrets file, so this is the one place a token still lives in `.mcp.json`:
 
@@ -456,12 +492,23 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
 
 **Important**: Tell the user that after setup completes, they need to restart their CLI — Claude Code can also just toggle the servers with `/mcp`; Copilot CLI must be fully exited and relaunched — for the MCP servers to become available.
 
+**If Jira was configured, add the one-time authorization step.** The Atlassian server uses browser OAuth,
+so it stays unauthorized until the user approves it once:
+
+- **Claude Code**: run `/mcp`, select **atlassian**, choose **Authenticate**, and approve in the browser.
+- **Copilot CLI**: relaunch `copilot`; it opens the browser consent on first use of an Atlassian tool.
+
+If the browser flow reports that the MCP server is not enabled for the site, a Jira site admin has to turn
+it on under **Atlassian Administration → Rovo → MCP server**. That is an admin action; the user cannot
+self-serve it.
+
 ## After saving: validate
 
 - Confirm `.buddy-council/sources.json` was written
 - Confirm `~/.buddy-council/secrets.json` was written
 - Confirm `.mcp.json` was written (base URLs + `BC_SECRETS_FILE`, no secrets)
-- Confirm `~/.copilot/mcp-config.json` was written, contains the same servers with `type: "local"` and `tools: ["*"]`, and that any pre-existing servers in it survived the merge
+- Confirm `~/.copilot/mcp-config.json` was written, contains the local servers with `type: "local"` and `tools: ["*"]`, contains `atlassian` with `type: "http"` and the `authv2` URL, and that any pre-existing servers in it survived the merge
+- Confirm neither MCP config still carries a `jira` entry pointing at the removed `mcp-servers/jira-server`
 - Confirm the `command` in both files is an absolute `uv` path that exists on disk
 - If Excel was configured, confirm the file is readable
 - Tell the user:
@@ -476,7 +523,7 @@ Because MCP tool naming in Copilot's hooks varies by version, MCP reads may stil
 
 - Always include the TestRail read tools:
   `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case)`
-- If Jira was configured, also add: `jira(jira_get_projects),jira(jira_get_issue_types),jira(jira_get_issue)`
+- If Jira was configured, also add the Atlassian read tools: `atlassian(getAccessibleAtlassianResources),atlassian(getVisibleJiraProjects),atlassian(getJiraProjectIssueTypesMetadata),atlassian(getJiraIssue),atlassian(searchJiraIssuesUsingJql)` — deliberately **not** `atlassian(createJiraIssue)`, which must keep prompting
 - If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
 
 Present it as a single command, e.g.:
@@ -495,4 +542,5 @@ If the user's Copilot version predates plugin hooks, tell them to also append th
 - If `~/.buddy-council/secrets.json` already exists, merge new entries without overwriting existing ones
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
 - Jira configuration is **optional** — users can run `/bc:validate --dry-run` without configuring Jira
+- NEVER ask for a Jira email or API token. Jira auth is browser OAuth handled by Atlassian's official MCP server; the plugin stores no Jira credential anywhere
 - If the user explicitly asks about Jama: explain the API integration is in progress and that the Excel export path is the supported route for now
