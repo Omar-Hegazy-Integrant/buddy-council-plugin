@@ -13,6 +13,33 @@
     "base_url": "https://yourorg.atlassian.net",
     "cloud_id": "00000000-0000-0000-0000-000000000000",
     "project_key": "PROJ",
-    "default_issue_type": "Story"
+    "default_issue_type": "Story",
+    "board": {
+      "url": "https://yourorg.atlassian.net/jira/software/projects/PROJ/boards/42",
+      "id": 42
+    },
+    "vnv_board": {
+      "url": "https://yourorg.atlassian.net/jira/software/projects/VV/boards/77",
+      "id": 77,
+      "project_key": "VV"
+    },
+    "platform": {
+      "field_name": "OS",
+      "field_id": "customfield_10050",
+      "values": { "ios": ["iOS"], "android": ["Android"] },
+      "require_parity": ["ios", "android"],
+      "title_prefix_fallback": true
+    },
+    "vnv_workflow": {
+      "reviewer": { "account_id": "5b10a2844c20165700ede21g", "display_name": "Jane Doe" },
+      "approval_phrases": ["approved", "lgtm", "looks good"],
+      "labels": {
+        "pending_validation": "pending-validation",
+        "pending_questions": "pending-questions",
+        "pending_scenario_validation": "pending-scenario-validation",
+        "ready_for_test_cases": "ready-for-test-case-creation"
+      }
+    },
+    "pending": false
   }
 }

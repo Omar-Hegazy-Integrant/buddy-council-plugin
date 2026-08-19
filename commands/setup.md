@@ -6,7 +6,7 @@ description: Configure Buddy-Council data sources and credentials in four steps 
 
 You are the Buddy-Council setup assistant. Walk the user through configuring their data sources and credentials.
 
-The wizard has **four user-facing steps**. Prefix the first message of each step with a progress marker — `[Step 1/4] Requirements`, `[Step 2/4] Test cases`, `[Step 3/4] Jira (optional)`, `[Step 4/4] Review & save` — so the user always knows how much is left. Keep questions to a minimum: detect and default wherever possible, and batch confirmation into the single save prompt in Step 4.
+The wizard has **four user-facing steps**. Prefix the first message of each step with a progress marker — `[Step 1/4] Requirements`, `[Step 2/4] Test cases`, `[Step 3/4] Jira dev board`, `[Step 4/4] Review & save` — so the user always knows how much is left. Keep questions to a minimum: detect and default wherever possible, and batch confirmation into the single save prompt in Step 4.
 
 ## Step 0: Re-run detection
 
@@ -18,7 +18,7 @@ Before anything else, check whether `.buddy-council/sources.json` exists in the 
 Buddy-Council is already configured in this project:
   Requirements:  excel — /path/to/requirements.xls (7 columns mapped)
   Test cases:    testrail — https://company.testrail.io (project 1)
-  Jira:          not configured
+  Jira board:    PROJ board 42 (or: NEEDS AUTHORIZATION — re-verify this run)
   Enrichment:    cli
   Code mapping:  enabled
 
@@ -26,6 +26,11 @@ What would you like to change? [requirements / test cases / jira / everything / 
 ```
 
 Only walk the steps for the sections the user names; carry every other section over unchanged when writing config in Step 4.
+
+**Two exceptions, because the Jira board is required** — both run even when the user answers "nothing":
+
+- **Missing `jira` block** → the config predates the requirement, or an earlier run was abandoned. Say so and walk Step 3 regardless of what they asked to change.
+- **`jira.pending` is `true`** → re-verify now. If the Atlassian tools are live, run the board check from Step 3b; on success drop `pending` and report `Jira board: PROJ board 42 — verified`. If it still fails, leave `pending` as it is and remind them `/bc:validate` stays blocked until it clears. Never silently keep a stale `pending: true` that would now verify.
 
 **If it does not exist**, run all steps in order.
 
@@ -206,21 +211,20 @@ Do **not** prompt. Use the defaults (`node_modules, dist, .next, build, vendor, 
 
 Persist as `project: { enabled, ignore_dirs, id_patterns }` in `.buddy-council/sources.json` (see Step 4a).
 
-## Step 3 of 4: Jira (Optional — for Ticket Creation)
+## Step 3 of 4: Jira Dev Board (Required)
+
+**This step is not optional — do not offer to skip it.** The dev board is where the team's in-flight work
+lives, and every analysis command reads it: `/bc:contradiction` and `/bc:coverage` compare board issues
+against requirements and test cases, and `/bc:validate` files new tickets onto it.
 
 Jira runs on **Atlassian's official remote MCP server** (`https://mcp.atlassian.com/v1/mcp/authv2`), which
 ships with the plugin. **Collect no credentials in this step** — the server uses browser OAuth, so there is
-no email, no API token, and nothing to write into a secrets file. This step only records *which site,
-project, and issue type* to create tickets in.
+no email, no API token, and nothing to write into a secrets file. This step records *which site, project,
+issue type, and dev board* to work against.
 
-Ask the user:
+### 3a: Site, project, issue type
 
-> Do you want to configure Jira for creating tickets from the `/bc:validate` command?
->
-> - **Yes** — Pick the Atlassian site and project to file tickets in
-> - **No** — Skip this step
-
-If they choose **Yes**, first check whether the Atlassian tools are already live in this session — look for
+First check whether the Atlassian tools are live in this session — look for
 `mcp__atlassian__getAccessibleAtlassianResources` (Claude Code) or `getAccessibleAtlassianResources`
 (Copilot CLI).
 
@@ -229,26 +233,123 @@ If they choose **Yes**, first check whether the Atlassian tools are already live
 1. Call `getAccessibleAtlassianResources` to list the sites the user can reach. If it returns exactly one,
    take it silently; otherwise show the list and ask which site. Record its `id` as `cloud_id` and its
    `url` as `base_url`.
-2. Call `getVisibleJiraProjects` with that `cloudId` and ask which project to file tickets in. Record its
+2. Call `getVisibleJiraProjects` with that `cloudId` and ask which project the board belongs to. Record its
    `key` as `project_key`.
 3. Call `getJiraProjectIssueTypesMetadata` and ask for the default issue type — default to "Task" if the
    user skips.
 
-**If the tools are NOT available yet** (first run, or Copilot CLI before its restart) — do not block:
-
-- Say so plainly: the Atlassian server needs a one-time authorization, which happens after this wizard.
-- Ask for the Jira site URL (e.g. `https://yourorg.atlassian.net`) → `base_url`, and the project key
-  (e.g. `PROJ`) → `project_key`, and the default issue type (default "Task").
-- Omit `cloud_id` entirely. `/bc:validate` resolves it on first use via `getAccessibleAtlassianResources`
-  and caches it back into the config.
+**If the tools are NOT available yet**, don't block — see *Deferral* below.
 
 Never fall back to `curl` against the Jira REST API — there are no stored credentials to authenticate with,
 by design.
 
-If they choose **No**:
+### 3b: The dev board URL
 
-- Skip Jira configuration
-- The `/bc:validate` command will still work with `--dry-run` mode but won't create real tickets
+Ask for the board itself:
+
+> Paste the URL of your team's dev board in Jira — open the board and copy the address bar.
+> It looks like `https://yourorg.atlassian.net/jira/software/projects/PROJ/boards/42`.
+
+Parse it rather than asking for the pieces separately. Accept every layout Jira produces:
+
+| Layout | Example | Extract |
+|---|---|---|
+| Team-managed / company-managed | `.../jira/software/projects/PROJ/boards/42` | id `42`, key `PROJ` |
+| Company-managed with `/c/` | `.../jira/software/c/projects/PROJ/boards/42` | id `42`, key `PROJ` |
+| With a tab suffix | `.../boards/42/backlog`, `.../boards/42/timeline` | id `42`, key `PROJ` |
+| Classic RapidBoard | `.../secure/RapidBoard.jspa?rapidView=42&projectKey=PROJ` | id `42`, key `PROJ` |
+
+Take the board id from `boards/(\d+)` or `rapidView=(\d+)`, and the project key from `projects/([A-Z][A-Z0-9_]+)`
+or `projectKey=([A-Z][A-Z0-9_]+)`.
+
+Then:
+
+- **Project key from the URL wins** over anything chosen in 3a — the board is the thing being configured.
+  If they disagree, say so plainly and use the board's, e.g. "Board 42 belongs to `PROJ`, not `OTHER` —
+  using `PROJ`."
+- If the URL has no recognizable board id, show what you tried to match and ask again. Do **not** invent an
+  id and do **not** proceed with a partial board block.
+- **Verify when possible**: if the Atlassian tools are live, run
+  `project = <key> AND statusCategory != Done` via `searchJiraIssuesUsingJql` with a small `maxResults`
+  and report the count, e.g. `Board check: PROJ has 37 open issues`. A zero count is not a failure —
+  report it and move on.
+
+**Tell the user what the board reference can and cannot do.** Atlassian's MCP server has no board or sprint
+tools, so the board's contents are reached by JQL over its project (see
+`${CLAUDE_PLUGIN_ROOT}/skills/fetch-board-issues/SKILL.md`). For a standard single-project board that is
+exact; for a board whose filter spans projects or excludes issue types, analysis will see the project's
+in-flight work rather than literally the board's rows. Say this once, here — don't let the user discover it
+from a surprising result later.
+
+### 3c: V&V board and workflow settings (for `/bc:vnv-sprint-prep`)
+
+The V&V team's own board, plus the few settings `/bc:vnv-sprint-prep` needs. **Ask, but allow a skip** — unlike the dev
+board, `/bc:vnv-sprint-prep` can collect this itself on first run (`--board`, or it prompts). Do not turn this into a
+second mandatory gate.
+
+> Do you also run the V&V (Validation & Verification) workflow? If so, paste the V&V board URL — `/bc:vnv-sprint-prep`
+> clones sprint stories onto it. Skip if you don't use `/bc:vnv-sprint-prep` yet.
+
+If given, parse it with the same rules as 3b and record `jira.vnv_board = {url, id, project_key}`.
+
+**Refuse a V&V board in the same project as the dev board.** Clones would land straight back on the dev
+board, on a board other people work from. Say exactly that and ask for the V&V team's own project — do not
+record it and do not offer a workaround.
+
+Then collect two more things, both with working defaults so this stays one or two questions:
+
+- **Platform field.** `/bc:vnv-sprint-prep` checks that each iOS story has an Android counterpart. Default to the `OS`
+  field; if the Atlassian tools are live, confirm it exists via `getJiraProjectIssueTypesMetadata` and cache
+  its custom-field id as `jira.platform.field_id`. If it does not exist, say so and record
+  `field_name` anyway — the skill falls back to title prefixes and flags lower confidence.
+- **Scenario reviewer.** Who approves high-level scenarios. Ask for an email or display name, resolve it with
+  `lookupJiraAccountId` when available, and store `{account_id, display_name}`. If it cannot be resolved,
+  store the display name alone; `/bc:vnv-sprint-prep` re-resolves later.
+
+Write the block with defaults filled in:
+
+```json
+"platform": {
+  "field_name": "OS",
+  "field_id": "customfield_10050",
+  "values": { "ios": ["iOS"], "android": ["Android"] },
+  "require_parity": ["ios", "android"],
+  "title_prefix_fallback": true
+},
+"vnv_workflow": {
+  "reviewer": { "account_id": "5b10a2844c20165700ede21g", "display_name": "Jane Doe" },
+  "approval_phrases": ["approved", "lgtm", "looks good"],
+  "labels": {
+    "pending_validation": "pending-validation",
+    "pending_questions": "pending-questions",
+    "pending_scenario_validation": "pending-scenario-validation",
+    "ready_for_test_cases": "ready-for-test-case-creation"
+  }
+}
+```
+
+Never prompt for the label names or approval phrases — write the defaults and mention in the Step 4 recap
+that they can be hand-edited in `.buddy-council/sources.json`. If the user skipped the V&V board, omit
+`vnv_board` and `vnv_workflow` entirely, but still write `platform` if the `OS` field was confirmed — the
+parity data is useful to `/bc:coverage` regardless.
+
+### Deferral (when Atlassian isn't authorized yet)
+
+The requirement is firm, but it must not strand a user whose site admin has not enabled the Rovo MCP
+server. If the Atlassian tools are unavailable, or verification fails with 401/403:
+
+- Say plainly that the board is required and setup will keep asking until it is confirmed.
+- Still collect what they can give: the site URL → `base_url`, the board URL → `board.url` + `board.id` +
+  `project_key`, and the default issue type. Omit `cloud_id`.
+- Write the `jira` block with **`"pending": true`**.
+- Finish the wizard normally. `/bc:contradiction` and `/bc:coverage` keep working — they skip the board
+  source with a visible line rather than failing. Only `/bc:validate` is blocked.
+- On every later `/bc:setup` re-run, re-verify a pending block first (Step 0) and clear `pending` once the
+  board check succeeds.
+
+Never write `"pending": true` when verification actually succeeded, and never leave the `jira` block out
+entirely — an absent block now means "the user has not been through Step 3", which the re-run flow treats
+as unfinished setup.
 
 ## Step 4 of 4: Review & Save
 
@@ -261,7 +362,9 @@ Ready to save:
   Item types:    Requirement, MAS Software Requirement Specification (Text excluded — narrative)
   Enrichment:    cli (gh CLI, smoke test OK)
   Test cases:    testrail — https://company.testrail.io, project 1
-  Jira:          not configured (/bc:validate still works with --dry-run)
+  Jira board:    PROJ board 42 — https://company.atlassian.net (37 open issues)
+  V&V board:     VV board 77 — parity on OS field; reviewer Jane Doe
+                 (labels/approval phrases: edit jira.vnv_workflow in .buddy-council/sources.json)
   Code mapping:  enabled — detected Node project; ID patterns CWA-REQ-\d+, TC-\d+
                  (extra ignore dirs: edit project.ignore_dirs in .buddy-council/sources.json)
 
@@ -320,7 +423,34 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
     "base_url": "https://yourorg.atlassian.net",
     "cloud_id": "00000000-0000-0000-0000-000000000000",
     "project_key": "PROJ",
-    "default_issue_type": "Story"
+    "default_issue_type": "Story",
+    "board": {
+      "url": "https://yourorg.atlassian.net/jira/software/projects/PROJ/boards/42",
+      "id": 42
+    },
+    "vnv_board": {
+      "url": "https://yourorg.atlassian.net/jira/software/projects/VV/boards/77",
+      "id": 77,
+      "project_key": "VV"
+    },
+    "platform": {
+      "field_name": "OS",
+      "field_id": "customfield_10050",
+      "values": { "ios": ["iOS"], "android": ["Android"] },
+      "require_parity": ["ios", "android"],
+      "title_prefix_fallback": true
+    },
+    "vnv_workflow": {
+      "reviewer": { "account_id": "5b10a2844c20165700ede21g", "display_name": "Jane Doe" },
+      "approval_phrases": ["approved", "lgtm", "looks good"],
+      "labels": {
+        "pending_validation": "pending-validation",
+        "pending_questions": "pending-questions",
+        "pending_scenario_validation": "pending-scenario-validation",
+        "ready_for_test_cases": "ready-for-test-case-creation"
+      }
+    },
+    "pending": false
   },
   "project": {
     "enabled": true,
@@ -330,7 +460,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 }
 ```
 
-If Jira was not configured, omit the `"jira"` section; if it was configured but the Atlassian tools were not live yet, include it without `cloud_id`. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
+The `"jira"` section is **always written** — Step 3 is required. If the Atlassian tools were not live, write it with `"pending": true` and without `cloud_id`. `board.id` is an integer, not a string. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
@@ -509,6 +639,7 @@ self-serve it.
 - Confirm `.mcp.json` was written (base URLs + `BC_SECRETS_FILE`, no secrets)
 - Confirm `~/.copilot/mcp-config.json` was written, contains the local servers with `type: "local"` and `tools: ["*"]`, contains `atlassian` with `type: "http"` and the `authv2` URL, and that any pre-existing servers in it survived the merge
 - Confirm neither MCP config still carries a `jira` entry pointing at the removed `mcp-servers/jira-server`
+- Confirm `.buddy-council/sources.json` has a `jira` block with a `board.id` and `board.url`, and that `pending` is `false` whenever the board check actually succeeded
 - Confirm the `command` in both files is an absolute `uv` path that exists on disk
 - If Excel was configured, confirm the file is readable
 - Tell the user:
@@ -541,6 +672,6 @@ If the user's Copilot version predates plugin hooks, tell them to also append th
 - `.mcp.json` is gitignored; under this design it carries no secrets (except the GitHub MCP token)
 - If `~/.buddy-council/secrets.json` already exists, merge new entries without overwriting existing ones
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
-- Jira configuration is **optional** — users can run `/bc:validate --dry-run` without configuring Jira
+- Step 3 (Jira dev board) is **required** — never offer to skip it. When Atlassian is not yet authorized, record the answers with `"pending": true` and finish the wizard; do not abandon the run and do not omit the `jira` block
 - NEVER ask for a Jira email or API token. Jira auth is browser OAuth handled by Atlassian's official MCP server; the plugin stores no Jira credential anywhere
 - If the user explicitly asks about Jama: explain the API integration is in progress and that the Excel export path is the supported route for now

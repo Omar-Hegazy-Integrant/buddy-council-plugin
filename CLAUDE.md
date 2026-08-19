@@ -8,7 +8,7 @@ Buddy-Council helps teams detect contradictions, inconsistencies, and alignment 
 
 ## Architecture
 
-- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:coverage`, `/bc:ask`, `/bc:setup`, `/bc:onboarding`, `/bc:validate`, `/bc:codemap`)
+- **Commands** (`commands/`) — user-facing entry points (`/bc:contradiction`, `/bc:coverage`, `/bc:ask`, `/bc:setup`, `/bc:onboarding`, `/bc:validate`, `/bc:codemap`, `/bc:vnv-sprint-prep`)
 - **Agents** (`agents/`) — reasoning engines that orchestrate skills to complete tasks
 - **Skills** (`skills/`) — reusable capabilities (fetch data, normalize, analyze, enrich, map to code)
 - **Providers** (`providers/`) — platform-specific data fetching instructions (TestRail, Excel, Jama, GitHub)
@@ -33,8 +33,10 @@ Requirements and test cases are fetched live from configured sources, normalized
 - **MCP config is dual-file, like hooks**: Claude Code reads the project/plugin `.mcp.json`; Copilot CLI reads `~/.copilot/mcp-config.json` and **ignores `.mcp.json` entirely**. `/bc:setup` writes both on every run, merging into the Copilot file rather than overwriting it. Copilot's schema additionally requires `type: "local"` and a `tools` allowlist per server, and neither file may rely on `PATH` or `~` expansion — `command` must be the absolute `uv` path and `BC_SECRETS_FILE` a fully expanded path, because the spawned server inherits neither.
 - Source configuration lives in `.buddy-council/sources.json`
 - Provider skills are swappable — adding a new platform means adding a `providers/<name>/` folder
-- Agents never call providers directly — they go through router skills (`fetch-requirements`, `fetch-test-cases`)
-- **Data Contract**: every analysis command fetches **every configured source** — requirements and test cases always, plus GitHub doc enrichment whenever a `github_url` column is mapped and `requirements.enrichment.enabled` is true (scope narrows a fetch, never skips one). Each attempt is surfaced as a visible `Fetch:`/`Readiness:`/`Enrichment:` line, and if any configured source fails the agent stops and asks the user whether to continue with partial data — continuing marks the output **PARTIAL**. Tool calls are logged to `.buddy-council/logs/` by a bundled PostToolUse hook on **both runtimes**.
+- Agents never call providers directly — they go through router skills (`fetch-requirements`, `fetch-test-cases`, `fetch-board-issues`)
+- **Data Contract**: every analysis command fetches **every configured source** — requirements and test cases always, plus GitHub doc enrichment whenever a `github_url` column is mapped and `requirements.enrichment.enabled` is true, plus **Jira board issues** whenever `jira.board` is configured and `jira.pending` is not true (scope narrows a fetch, never skips one). An unconfigured or still-`pending` board is *skipped with a visible line, not failed* — it does not make the run PARTIAL; a configured board that errors does. Each attempt is surfaced as a visible `Fetch:`/`Readiness:`/`Enrichment:` line, and if any configured source fails the agent stops and asks the user whether to continue with partial data — continuing marks the output **PARTIAL**. Tool calls are logged to `.buddy-council/logs/` by a bundled PostToolUse hook on **both runtimes**.
+- **`/bc:vnv-sprint-prep` writes to other teams' tickets, so it is dry-run by default.** A plain run performs zero `createJiraIssue`/`addCommentToJiraIssue`/`editJiraIssue` calls and prints a plan; `--apply` executes after one batch confirmation *per phase*. Never widen this: the auto-approve hook deliberately excludes every Jira write tool, and no `--allow-tool` recipe may list them.
+- **Atlassian MCP cannot create issue links or attach files.** `update.issuelinks` is silently ignored and there is no `createIssueLink` or attachment tool. So V&V clones carry a `src-<DEV-KEY>` label plus a description back-reference instead of a Jira link, and scenarios live in the ticket description instead of an attached `.md`. Reading links works fine. Do not add a code path that assumes either capability exists.
 - **Hooks are dual-manifest**: `hooks/hooks.json` (Claude Code format) and the plugin-root `hooks.json` (Copilot CLI format, `version: 1`) register the same four scripts. The scripts are runtime-agnostic — they parse both payload shapes (`tool_name`/`tool_input` object vs `toolName`/`toolArgs` JSON-string) and emit both decision shapes (top-level `permissionDecision` for Copilot, `hookSpecificOutput` wrapper for Claude Code). Keep all of that intact when editing a hook, and never let a preToolUse script exit non-zero incidentally — Copilot treats that as deny (fail-closed). Copilot runs hook commands with cwd = the plugin dir, so project paths must come from `CLAUDE_PROJECT_DIR`/`COPILOT_PROJECT_DIR` or the payload's `cwd`, never the process cwd.
 
 ## Available Commands
@@ -46,6 +48,7 @@ Requirements and test cases are fetched live from configured sources, normalized
 - `/bc:onboarding` — Walk a new team member through the product feature-by-feature with paced demos, do/don't pairs from test cases, optional code mapping when run from inside a codebase, and an assessment phase. Progress is logged to `.buddy-council/onboarding-progress.json` in the user's project root and resumes across sessions.
 - `/bc:validate` — Validate Jira tickets against requirements and test cases (gap and contradiction detection)
 - `/bc:codemap "<feature>"` — Map a single feature to where it lives in the current codebase (files, communication flow, per-requirement locations). Same output as the onboarding code-mapping phase, invokable standalone.
+- `/bc:vnv-sprint-prep` — Run the V&V (Validation & Verification) sprint workflow: check cross-platform parity on the dev board, clone sprint stories onto the V&V board, validate them against requirements and test cases, draft high-level scenarios, and drive label state through review. Dry-run by default; `--apply` writes. Resumable — re-run it to pick up dev answers and reviewer approvals.
 
 ## Canonical Artifact Schema
 
@@ -53,7 +56,7 @@ All providers normalize data to this shape before analysis:
 
 ```json
 {
-  "type": "requirement | test_case",
+  "type": "requirement | test_case | board_issue",
   "id": "CWA-REQ-85",
   "title": "...",
   "description": "...",
@@ -92,8 +95,25 @@ Every downstream skill treats it as optional and reads `description` non-exclusi
 - **`requirements.item_type_filter`** — array of `Item Type` values to include (everything else is ignored). Optional; never written by `/bc:setup` — hand-edit only.
 - **`requirements.item_type_exclude`** — array of `Item Type` values to skip even when they carry IDs (e.g. `["Text"]` narrative rows). Written automatically by `/bc:setup` when the sheet's Item Type sample contains `Text`; hand-editable for other types.
 - **`requirements.enrichment`** — `{enabled: bool, strategy: "cli" | "mcp", max_doc_chars: int}`. Drives GitHub-doc enrichment when a `github_url` column is mapped.
+- **`jira`** — `{base_url, cloud_id, project_key, default_issue_type, board: {url, id}, pending}`. **Written on every `/bc:setup` run — Step 3 is required, not optional.** `board.url` is the dev board URL the user pasted and `board.id` the integer parsed out of it; `project_key` is taken from that URL and wins over any separately chosen project. `pending: true` means the board was recorded but never verified because the Atlassian server was not authorized at setup time — `/bc:setup` re-verifies and clears it on the next run, analysis commands skip the board source while it is set, and `/bc:validate` refuses to create real tickets. There is deliberately **no credential here or in the secrets file**: Atlassian's MCP server authenticates by browser OAuth.
+- **`jira.vnv_board`** — `{url, id, project_key}`. The V&V team's board, used by `/bc:vnv-sprint-prep`. Optional in `/bc:setup` (unlike the dev board) because `/bc:vnv-sprint-prep` can collect it itself. **Must be a different project from `jira.project_key`** — setup and the agent both refuse a same-project value, because clones would land back on the dev board.
+- **`jira.platform`** — `{field_name, field_id, values, require_parity, title_prefix_fallback}`. Drives the cross-platform parity check. `field_name` defaults to `OS`; `field_id` is the resolved custom-field id, cached after first discovery and re-discovered when stale. The title prefix is a fallback only, and any result derived from it is reported as lower-confidence.
+- **`jira.vnv_workflow`** — `{reviewer: {account_id, display_name}, approval_phrases, labels}`. Who may approve scenarios and what the **four** pipeline labels are called: `pending_validation` (set at clone) → `pending_questions` → `pending_scenario_validation` → `ready_for_test_cases`. **They are mutually exclusive** — every transition removes the previous pipeline label rather than stacking, while preserving `src-<DEV-KEY>`, the platform label, and anything a human added. A ticket with no pipeline label is treated as `pending_validation`; one with several is repaired to the furthest-along and the repair is reported. `/bc:setup` writes the defaults without asking; hand-edit to rename labels.
 - **`project`** — `{enabled: bool, ignore_dirs: [string], id_patterns: [regex]}`. Controls code mapping for `/bc:onboarding` and `/bc:codemap`. When `enabled` is true and cwd contains code markers, the onboarding agent runs a code-mapping phase between demo and assessment for each feature.
 - **`plugin_root`** — absolute path to the plugin's install directory, recorded by `/bc:setup`. Bundled files (MCP servers, the Excel parser) are referenced through it because `${CLAUDE_PLUGIN_ROOT}` only resolves under Claude Code, not Copilot CLI. Per-machine; lives only in the git-excluded config, never committed. **It is a cache, not the source of truth**: Claude Code's install path embeds the plugin version, so a stored value goes stale on every update. Runtime shell snippets resolve `${CLAUDE_PLUGIN_ROOT}`/`$COPILOT_PLUGIN_ROOT` first and fall back to `plugin_root`; `/bc:setup` Step 0a re-resolves on every run and silently repairs both `sources.json` and `.mcp.json` when the path drifted. Never add a code path that trusts the stored value without validating it exists.
+
+## V&V Progress Log
+
+`<user-project>/.buddy-council/vnv-progress.json`, written by `/bc:vnv-sprint-prep`. One entry per sprint story:
+`{version: 1, sprint, dev_board_id, vnv_board_id, started_at, updated_at, stories: [{dev_key, vnv_key,
+platform, platform_source, counterpart, parity, state, concerns, concern_comment_id, concern_posted_at,
+scenarios_written_at, approved_by, approved_at, last_checked_at}]}`. Timestamps are ISO 8601 UTC.
+
+**Jira labels are the source of truth, not this file.** `state` mirrors the ticket's pipeline label; when
+they disagree the next run follows Jira and repairs the file. The log exists to remember *why* a ticket is
+where it is (which concerns were raised, when, and who approved) — never to decide where it is.
+
+Lives inside `.buddy-council/`, kept out of git via the repo-local `.git/info/exclude`, like the onboarding log.
 
 ## Progress Log Schema Additions
 

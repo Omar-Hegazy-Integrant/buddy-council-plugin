@@ -48,7 +48,14 @@ Every Atlassian MCP tool takes a `cloudId` identifying which Atlassian site to a
 
 Call `getJiraIssue` with `cloudId` and `issueIdOrKey`. Return a single issue.
 
-### Strategy 2: A set of issues (scope is "all", a feature name, or a JQL string)
+### Strategy 2: The configured dev board
+
+When the caller wants the board's contents, do not reimplement the scoping here — follow
+`${CLAUDE_PLUGIN_ROOT}/skills/fetch-board-issues/SKILL.md`, which owns the board-scope JQL, the
+Scrum→Kanban fallback, and the active-sprint lookup. This file owns the per-issue field mapping that
+skill reuses.
+
+### Strategy 3: A set of issues (scope is "all", a feature name, or a JQL string)
 
 Call `searchJiraIssuesUsingJql` with `cloudId` and a `jql` string:
 

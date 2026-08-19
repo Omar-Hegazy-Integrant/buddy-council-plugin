@@ -26,6 +26,7 @@ Analyze requirements and test cases to find contradictions, inconsistencies, and
 3. The agent will:
    - Fetch requirements from the configured source (Excel or Jama)
    - Fetch test cases from TestRail
+   - Fetch the in-flight issues on the configured Jira dev board, and check those against the requirements too — so a sprint ticket that contradicts a requirement is caught before it ships. Skipped with a visible line if the board isn't configured or isn't verified yet
    - Normalize and cross-link all artifacts
    - Analyze for 7 types of contradictions
    - Return a human-readable report with severity-classified findings

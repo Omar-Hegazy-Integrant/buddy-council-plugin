@@ -26,10 +26,12 @@ The command expects:
 1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
-2. Check if Jira is configured in `.buddy-council/sources.json` (which site/project to file into — there are no Jira credentials to check; Atlassian's MCP server handles auth via browser OAuth):
-   - If the `jira` section is missing AND `--dry-run` flag is NOT present, warn:
-     > Jira is not configured. Run `/bc:setup` to configure Jira, or use `--dry-run` to test without creating a real ticket.
-   - If `--dry-run` flag is present, proceed (dry-run works without Jira config)
+2. Check the Jira dev board in `.buddy-council/sources.json` (which board/project to file into — there are no Jira credentials to check; Atlassian's MCP server handles auth via browser OAuth):
+   - If the `jira` section or `jira.board` is missing AND `--dry-run` is NOT present, warn:
+     > No Jira dev board is configured. Run `/bc:setup` — Step 3 is required — or use `--dry-run` to test without creating a real ticket.
+   - If `jira.pending` is `true` AND `--dry-run` is NOT present, warn:
+     > Your Jira board is recorded but not yet verified. Authorize the Atlassian server (`/mcp` → **atlassian** → Authenticate, or restart Copilot CLI), then re-run `/bc:setup`.
+   - If `--dry-run` flag is present, proceed (dry-run never touches Jira)
 
 3. Invoke the ticket validation agent by following the instructions in `agents/ticket-validation-agent.agent.md`, passing the ticket description and any flags.
 
@@ -43,8 +45,8 @@ The command expects:
    - Generate a draft Jira ticket with summary, description, and acceptance criteria
    - **Confirm draft**: Ask user to review and approve (or request changes)
    - **If changes requested**: Apply updates and re-validate against requirements
-   - Create Jira ticket via MCP (or dry-run mock)
-   - Return the ticket key and URL
+   - Resolve the board's active sprint, then create the Jira ticket via MCP so it lands on the board (skipped entirely under `--dry-run`)
+   - Return the ticket key, URL, and where it landed — active sprint or backlog
 
 ## Workflow Overview
 

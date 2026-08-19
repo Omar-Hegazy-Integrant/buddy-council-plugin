@@ -60,12 +60,15 @@ When the intent is a general question about requirements or test cases:
 
 2. **Determine the scope** from the question — a requirement ID, a feature name, or "all". Scope narrows each fetch; it never skips one.
 
-3. **Fetch every configured source — always (Data Contract, MANDATORY).** Every answer must be grounded in freshly fetched data. Follow `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md` **and** `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`, both narrowed to the scope. When the config maps a `github_url` column and `requirements.enrichment.enabled` is true, GitHub doc enrichment is a mandatory third source — the fetch-requirements router runs it; include its `Enrichment: fetched K of N` line in the trace. Never answer from memory, general knowledge, or previously seen data instead of fetching. Make every attempt visible by printing:
+3. **Fetch every configured source — always (Data Contract, MANDATORY).** Every answer must be grounded in freshly fetched data. Follow `${CLAUDE_PLUGIN_ROOT}/skills/fetch-requirements/SKILL.md` **and** `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md`, both narrowed to the scope. When the config maps a `github_url` column and `requirements.enrichment.enabled` is true, GitHub doc enrichment is a mandatory third source — the fetch-requirements router runs it; include its `Enrichment: fetched K of N` line in the trace. When `jira.board` is configured and `jira.pending` is not `true`, the dev board is a mandatory fourth source — follow `${CLAUDE_PLUGIN_ROOT}/skills/fetch-board-issues/SKILL.md`, narrowed to the same scope. Never answer from memory, general knowledge, or previously seen data instead of fetching. Make every attempt visible by printing:
 
    ```
    Fetch: requirements → <N> fetched
    Fetch: test cases  → <M> fetched
+   Fetch: board issues → <K> fetched from board <id>
    ```
+
+   An unconfigured or still-`pending` board prints `Fetch: board issues → skipped (Jira board not configured — run /bc:setup)` and does **not** make the answer PARTIAL; a configured board that errors does.
 
    If any configured source fails (provider error, MCP unavailable, enrichment failure) — or you could not attempt it — STOP before answering. Name exactly which source could not be fetched and why, then ask the user whether to continue with partial data or abort. Continue only after explicit confirmation, and mark the answer **PARTIAL**, stating which data was missing.
 

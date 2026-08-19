@@ -12,8 +12,9 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | **Excel** (Jama export) | Requirements | Supported (temporary Jama fallback) |
 | **GitHub** | Requirement doc enrichment | Supported (`gh` CLI or external GitHub MCP server) |
 | **Jama** | Requirements | Planned (auth in progress) |
-| **Jira** | Requirements | Planned |
+| **Jira** | Dev board (in-flight work) | Supported (required — feeds contradiction and coverage analysis) |
 | **Jira** | Ticket creation | Supported (via Atlassian's official remote MCP server, bundled) |
+| **Jira** | Requirements | Planned |
 | **Qase** | Test cases | Planned |
 
 ## Available Commands
@@ -27,6 +28,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis or answers directly |
 | `/bc:onboarding` | Walk a new team member through the product feature-by-feature with paced demos, optional code mapping, and an assessment. Resumes across sessions |
 | `/bc:codemap "<feature>"` | Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations |
+| `/bc:vnv-sprint-prep` | V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, and drive them through scenario review to ready-for-test-case-creation |
 
 These descriptions are the `description:` frontmatter in `commands/*.md` — the same text both CLIs show in their `/` menus. Keep the table and the frontmatter in sync when either changes.
 
@@ -37,7 +39,7 @@ These descriptions are the `description:` frontmatter in `commands/*.md` — the
 - A TestRail account with API access (for test cases)
 - An Excel export from Jama (for requirements), or direct Jama API access (when available)
 - Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your sheet links GitHub docs
-- Optional: an Atlassian Cloud account with Jira access, for `/bc:validate` ticket creation. Atlassian's remote MCP server must be enabled for your site under **Atlassian Administration → Rovo → MCP server** — that's a site-admin action, not something you can turn on yourself
+- An Atlassian Cloud account with access to your team's Jira dev board. `/bc:setup` requires the board — it feeds in-flight work into contradiction and coverage analysis, and is where `/bc:validate` files tickets. Atlassian's remote MCP server must be enabled for your site under **Atlassian Administration → Rovo → MCP server**; that's a site-admin action, not something you can turn on yourself. Until it is, setup records the board as *pending* and finishes — the requirements-vs-test-cases commands work without it
 
 ## Installation
 
@@ -105,8 +107,10 @@ copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suit
 
 Append the read-only tools for any other sources you configured:
 
-- **Jira** (ticket validation): `atlassian(getAccessibleAtlassianResources),atlassian(getVisibleJiraProjects),atlassian(getJiraProjectIssueTypesMetadata),atlassian(getJiraIssue),atlassian(searchJiraIssuesUsingJql)` — leave `atlassian(createJiraIssue)` out on purpose, so ticket creation keeps prompting
+- **Jira** (board reads, ticket validation, V&V sprint prep): `atlassian(getAccessibleAtlassianResources),atlassian(getVisibleJiraProjects),atlassian(getJiraProjectIssueTypesMetadata),atlassian(getJiraIssueTypeMetaWithFields),atlassian(getJiraIssue),atlassian(searchJiraIssuesUsingJql),atlassian(lookupJiraAccountId)`
 - **GitHub MCP** (doc enrichment): `github(get_file_contents)`
+
+**Never add the Jira write tools** — `createJiraIssue`, `editJiraIssue`, `addCommentToJiraIssue`, `transitionJiraIssue`. They are left out on purpose so ticket creation, label changes, and comments on the dev team's stories always prompt.
 
 On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when the Excel parser or the TestRail connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
 
@@ -177,7 +181,8 @@ The wizard runs in four steps with a single review-and-save confirmation at the 
 
 1. **Requirements (Excel)** — point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs); GitHub doc enrichment is auto-configured when the sheet has a GitHub URL column (`gh` CLI preferred, MCP fallback).
 2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on.
-3. **Jira (optional)** — only needed for real ticket creation from `/bc:validate` (dry-run works without it). No credentials are collected: it just records which Atlassian site, project, and issue type to file into. Auth is browser OAuth, handled by Atlassian's own MCP server.
+3. **Jira dev board (required)** — paste your team's board URL and the wizard parses out the board id and project key. No credentials are collected; auth is browser OAuth handled by Atlassian's own MCP server. If Atlassian isn't authorized yet, the answers are saved as *pending*, setup finishes, and it re-verifies on the next run — `/bc:contradiction` and `/bc:coverage` keep working meanwhile, only `/bc:validate` waits.
+   The same step then offers the **V&V board** plus its platform field and scenario reviewer, for `/bc:vnv-sprint-prep`. That part *is* skippable — the command can collect it itself on first run. A V&V board in the same project as the dev board is refused, because clones would land back on the dev board.
 4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
 
 Re-running `/bc:setup` shows the current configuration and changes only what you ask. After setup, restart your CLI tool or toggle the MCP server for it to take effect.
@@ -249,7 +254,7 @@ chmod 600 ~/.buddy-council/secrets.json
 
 Do **not** add an `atlassian` entry here — Claude Code already registers it from the plugin manifest, and a second copy would load the same server twice.
 
-**4. Jira (optional, only for `/bc:validate`).** Add a `jira` block to `.buddy-council/sources.json` — no credentials, just where to file tickets:
+**4. Jira dev board (required).** Add a `jira` block to `.buddy-council/sources.json` — no credentials, just which board to read and file into:
 
 ```json
 {
@@ -257,12 +262,52 @@ Do **not** add an `atlassian` entry here — Claude Code already registers it fr
     "base_url": "https://yourorg.atlassian.net",
     "cloud_id": "00000000-0000-0000-0000-000000000000",
     "project_key": "PROJ",
-    "default_issue_type": "Story"
+    "default_issue_type": "Story",
+    "board": {
+      "url": "https://yourorg.atlassian.net/jira/software/projects/PROJ/boards/42",
+      "id": 42
+    },
+    "pending": false
   }
 }
 ```
 
-`cloud_id` is optional — omit it and `/bc:validate` resolves it once via `getAccessibleAtlassianResources`, then caches it here. On Copilot CLI only, also add the server to `~/.copilot/mcp-config.json`:
+`cloud_id` is optional — omit it and the first Jira call resolves it via `getAccessibleAtlassianResources`, then caches it here. `board.id` is the integer from the board URL. Set `pending: true` if you haven't authorized the Atlassian server yet; analysis commands will skip the board with a visible line and `/bc:validate` will refuse real ticket creation until `/bc:setup` clears it.
+
+**5. V&V workflow (only for `/bc:vnv-sprint-prep`).** Three more keys inside the same `jira` block:
+
+```json
+{
+  "jira": {
+    "vnv_board": {
+      "url": "https://yourorg.atlassian.net/jira/software/projects/VV/boards/77",
+      "id": 77,
+      "project_key": "VV"
+    },
+    "platform": {
+      "field_name": "OS",
+      "field_id": "customfield_10050",
+      "values": { "ios": ["iOS"], "android": ["Android"] },
+      "require_parity": ["ios", "android"],
+      "title_prefix_fallback": true
+    },
+    "vnv_workflow": {
+      "reviewer": { "account_id": "5b10a2844c20165700ede21g", "display_name": "Jane Doe" },
+      "approval_phrases": ["approved", "lgtm", "looks good"],
+      "labels": {
+        "pending_validation": "pending-validation",
+        "pending_questions": "pending-questions",
+        "pending_scenario_validation": "pending-scenario-validation",
+        "ready_for_test_cases": "ready-for-test-case-creation"
+      }
+    }
+  }
+}
+```
+
+- **`vnv_board.project_key` must differ from `jira.project_key`** — clones go into this project, so pointing it at the dev project would put them on the dev board.
+- **`platform`** drives the cross-platform parity check. `field_id` is a cache: leave it out and it's discovered from `field_name` on first run. `title_prefix_fallback` is used only when a story's `OS` field is empty, and any result derived from it is reported as lower-confidence.
+- **`vnv_workflow.labels`** are the four pipeline states. Rename them freely — the workflow reads this config, never hardcoded strings. `reviewer.account_id` can be omitted and resolved from `display_name` via `lookupJiraAccountId`. On Copilot CLI only, also add the server to `~/.copilot/mcp-config.json`:
 
 ```json
 {
@@ -286,7 +331,7 @@ Do **not** add an `atlassian` entry here — Claude Code already registers it fr
 /bc:contradiction "Patient Monitoring"   # Analyze a specific feature
 ```
 
-The agent fetches requirements and test cases, normalizes and cross-links them, then analyzes for 7 types of contradictions:
+The agent fetches requirements, test cases, and the in-flight issues on your Jira dev board, normalizes and cross-links them, then analyzes for 7 types of contradictions:
 
 | Type | Severity |
 |------|----------|
@@ -305,6 +350,8 @@ The agent fetches requirements and test cases, normalizes and cross-links them, 
 /bc:coverage "Login"                     # Coverage for a specific feature
 ```
 
+Alongside the usual untested-requirements and orphan-test-case findings, the report carries a **Delivery risk** section built from your dev board: work in flight whose requirement has no test case, and board issues that match no requirement at all. These are listed separately and deliberately kept out of the headline coverage percentage, which stays requirements-vs-tests so it remains comparable across runs.
+
 ### Validate and Create Tickets
 
 ```
@@ -312,7 +359,39 @@ The agent fetches requirements and test cases, normalizes and cross-links them, 
 /bc:validate "Add real-time heart rate monitor" --dry-run          # Test without creating real ticket
 ```
 
-The agent validates the ticket description against existing requirements, detects contradictions, asks questions to fill gaps, generates a draft, and creates the Jira ticket. Use `--dry-run` to test the workflow and save a draft markdown file without creating a real ticket.
+The agent validates the ticket description against existing requirements, detects contradictions, asks questions to fill gaps, generates a draft, and creates the ticket on your dev board — into the active sprint when there is one, otherwise the backlog (it says which). Use `--dry-run` to test the workflow and save a draft markdown file without creating a real ticket.
+
+### V&V Sprint Preparation
+
+For the Validation & Verification team. Takes a sprint from the dev board through to scenarios ready for
+test-case writing.
+
+```
+/bc:vnv-sprint-prep                              # Dry run — show the full plan, write nothing
+/bc:vnv-sprint-prep --apply                      # Execute, confirming once per phase
+/bc:vnv-sprint-prep --board <vnv-board-url>      # Record/override the V&V board
+/bc:vnv-sprint-prep PROJ-123                     # One story and its platform counterpart
+```
+
+Six phases: confirm the V&V board → fetch the current sprint and check that every iOS story has a linked
+Android counterpart (via the `OS` field, falling back to title prefixes) → clone the stories onto the V&V
+board → validate each clone against requirements and test cases → write high-level scenarios into the ticket
+→ mark ready for test-case creation once the reviewer approves.
+
+It is **resumable and that's the normal way to use it**. Re-run it and it re-reads the dev team's replies to
+questions it raised, folds in the answers, re-validates, and advances any ticket whose blocker has cleared —
+plus checks the V&V tickets for reviewer approval. State is tracked by Jira labels
+(`pending-validation` → `pending-questions` → `pending-scenario-validation` → `ready-for-test-case-creation`,
+exactly one at a time — each transition removes the previous), with
+`.buddy-council/vnv-progress.json` remembering the history behind each one. If someone changes a label in
+Jira, Jira wins.
+
+**Writes are opt-in.** A plain run creates nothing, comments nowhere, and relabels nothing — it prints the
+plan. `--apply` executes it, confirming once per phase. This is deliberate: the workflow comments on stories
+the dev team owns.
+
+Two limits inherited from Atlassian's MCP server, which the workflow states rather than works around:
+it [cannot create issue links](https://community.atlassian.com/forums/Rovo-questions/MCP-Server-create-edit-work-item-links/qaq-p/3109569), so clones carry a `src-<DEV-KEY>` label and a description back-reference and the run prints the pairs for manual linking; and it [cannot attach files](https://github.com/atlassian/atlassian-mcp-server/issues/63), so scenarios are written into the V&V ticket's description.
 
 ### Ask Questions
 
@@ -367,7 +446,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
 - Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
-- The vendored MCP servers (TestRail, Jama) are **read-only**. The one write path in the plugin is Jira ticket creation (`createJiraIssue`, on Atlassian's official server), which always prompts before running — it is deliberately excluded from the auto-approve hook and from every `--allow-tool` recipe
+- The vendored MCP servers (TestRail, Jama) are **read-only**. Every write path in the plugin goes to Jira via Atlassian's official server — `createJiraIssue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `addCommentToJiraIssue` and `editJiraIssue` (from `/bc:vnv-sprint-prep`). All of them **always prompt**: they are deliberately excluded from the auto-approve hook and from every `--allow-tool` recipe. Do not add them
+- **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own. A plain run creates nothing, comments nowhere, and relabels nothing; `--apply` executes after one batch confirmation per phase
 - Jira access holds **no stored credential**: Atlassian's server uses browser OAuth and keeps its own grant, so there is no Jira email or API token anywhere in the plugin's config or secrets file
 - Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
@@ -378,7 +458,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 ## Adding a New Provider
 
 1. Create `providers/<name>/fetch.md` with fetch instructions
-2. Update the router skill (`skills/fetch-requirements/SKILL.md` or `skills/fetch-test-cases/SKILL.md`)
+2. Update the router skill (`skills/fetch-requirements/SKILL.md`, `skills/fetch-test-cases/SKILL.md`, or `skills/fetch-board-issues/SKILL.md`)
 3. Update `/bc:setup` to offer the new provider as an option
 4. Optionally add an MCP server in `mcp-servers/<name>/`
 

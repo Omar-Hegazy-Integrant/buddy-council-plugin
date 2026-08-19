@@ -34,10 +34,12 @@ When invoked, follow these steps in order:
 
 Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
 
-Check if the `jira` section exists in the config:
+Check the `jira` section. Ticket creation needs it **confirmed**, not merely present:
 
-- If missing AND the user did NOT pass `--dry-run` flag, warn them: "Jira is not configured. Run `/bc:setup` to configure Jira, or use `--dry-run` to test without creating a real ticket."
-- If `--dry-run` flag is present, proceed without Jira config (dry-run mode works without it)
+- **Missing entirely** → the config predates the required-board rule or setup was abandoned. Without `--dry-run`, stop: "No Jira dev board is configured. Run `/bc:setup` — Step 3 is required — or use `--dry-run` to test without creating a real ticket."
+- **`jira.pending` is `true`** → the board was recorded but never verified, because Atlassian wasn't authorized at setup time. Without `--dry-run`, stop: "Your Jira board is recorded but not yet verified. Authorize the Atlassian server (`/mcp` → **atlassian** → Authenticate, or restart Copilot CLI), then re-run `/bc:setup` to confirm it. `--dry-run` works in the meantime."
+- **`jira.board` missing while `jira` exists** → same treatment as missing entirely; the board is what makes the config usable.
+- **`--dry-run` present** → proceed regardless. Dry-run never touches Jira, so it works with a missing, pending, or partial config.
 
 ### Step 2: Parse Arguments
 
@@ -247,17 +249,28 @@ If `cloud_id` is absent, resolve it first with `getAccessibleAtlassianResources`
 if exactly one site is returned, use it; if several match ambiguously, ask the user) and write the
 resolved value back into `.buddy-council/sources.json` so later runs skip the lookup.
 
+**Resolve the board's active sprint first**, so the ticket lands on the board rather than in the backlog.
+Follow the *Resolving the Active Sprint* section of
+`${CLAUDE_PLUGIN_ROOT}/skills/fetch-board-issues/SKILL.md`: read the sprint field id and numeric sprint id
+off any issue in the open sprint, then confirm the field is settable on create via
+`getJiraIssueTypeMetaWithFields`. If there is no open sprint, the board is Kanban, or the field is not
+settable, skip this — never fail creation over sprint placement.
+
 Call the `createJiraIssue` MCP tool:
 
 - `cloudId`: from config (or just resolved)
-- `projectKey`: from config
+- `projectKey`: from `jira.project_key` — the board's project, so the ticket appears on the board
 - `issueTypeName`: from config (or default to "Story")
 - `summary`: from draft
 - `description`: from draft
 - `contentFormat`: `"markdown"` — the draft description is markdown, and this tells the server to convert
   it to ADF rather than storing it as a literal string
+- `additional_fields`: `{"<sprint field id>": <sprint id>}` when the sprint was resolved above; omit entirely otherwise
 
-**On success**: Report "Ticket created successfully! [key] - [base_url]/browse/[key]"
+**On success**: Report "Ticket created successfully! [key] - [base_url]/browse/[key]", and say where it
+landed — "on board [board.id], sprint [sprint name]" when the sprint was set, or "in the backlog (no active
+sprint / board is Kanban) — drag it onto the board when ready" when it was not. Do not claim a board
+placement you did not make.
 
 **On failure**:
 
