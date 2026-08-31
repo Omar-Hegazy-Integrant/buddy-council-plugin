@@ -112,4 +112,4 @@ traceability.
 - **No `OS` field on the project** → phase 2 falls back to the title prefix and says so loudly; parity results are marked lower-confidence.
 - **No active sprint** → report it and stop. There is nothing to clone.
 - **401 / 403 from Atlassian** → 401 means the API token in `~/.buddy-council/atlassian.env` is wrong or revoked (re-run `/bc:setup`); 403 means the account lacks permission on that project.
-- **Atlassian tools missing** → Docker is not running, or `TOOLSETS` in `~/.buddy-council/atlassian.env` is missing `jira_agile`, `jira_links` or `jira_users`. Missing toolsets fail silently.
+- **Atlassian tools missing** → the server failed to start (check `command` is an absolute `uvx` path), or `TOOLSETS` in `~/.buddy-council/atlassian.env` is missing `jira_agile`, `jira_links` or `jira_users`. Missing toolsets fail silently.

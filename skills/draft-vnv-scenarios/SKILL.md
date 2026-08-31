@@ -15,7 +15,7 @@ In the **V&V ticket's description**, under a marked section.
 
 Attachments were the obvious home, but this server has no attachment *upload* tool. `jira_download_attachments`
 and `jira_get_issue_images` only read, and although `jira_update_issue` accepts an `attachments` parameter it
-expects **file paths on the server's own filesystem** — inside the Docker container, not on the user's
+expects **file paths on the server's own filesystem** — where the MCP process runs, not the user's
 machine — so it cannot upload a locally generated file. The description is the one place that is always
 present, always readable by reviewers in Jira, and editable through `jira_update_issue`.
 

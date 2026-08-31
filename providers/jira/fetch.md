@@ -1,20 +1,20 @@
 # Jira Issues Fetch — Provider Skill
 
-Fetch Jira issues using the **Dockerized `sooperset/mcp-atlassian` server** (`atlassian`).
+Fetch Jira issues using the **`sooperset/mcp-atlassian` server** (`atlassian`), launched with `uvx`.
 
 ## Prerequisites
 
-The `atlassian` MCP server runs as a Docker container (`ghcr.io/sooperset/mcp-atlassian:latest`). It is not
-vendored and not declared in the plugin manifest — `/bc:setup` registers it in both runtimes' MCP configs,
-pointing at `~/.buddy-council/atlassian.env` for credentials.
+The `atlassian` MCP server runs as a `uvx` subprocess (`mcp-atlassian@0.23.1`). It is not vendored and not
+declared in the plugin manifest — `/bc:setup` registers it in both runtimes' MCP configs, pointing at
+`~/.buddy-council/atlassian.env` for credentials.
 
 Check availability by looking for tools named `mcp__atlassian__*` under Claude Code (e.g.
 `mcp__atlassian__jira_get_issue`) or `jira_get_issue` under Copilot CLI.
 
 If the MCP tools are NOT available, the cause is almost always one of these, in order of likelihood:
 
-- **Docker is not running.** The container cannot start, so the server never registers. Tell the user to
-  start Docker and restart the CLI.
+- **`command` is not an absolute `uvx` path.** The spawned server does not inherit the shell's `PATH`, so a
+  bare `"uvx"` fails to start and the server never registers.
 - **Setup has not been run**, or was run before 0.19.0 — the config may still hold the retired
   `mcp.atlassian.com` HTTP entry. Tell them to run `/bc:setup`.
 - **The CLI was not restarted** after setup.
@@ -166,7 +166,7 @@ so never hand-build ADF and never use Jira wiki markup.
   need `jira_links`, project/field metadata needs `jira_projects`, user lookup needs `jira_users`. Missing
   toolsets fail *silently* — the tool simply does not exist rather than erroring — so if a tool you expect is
   absent, check `TOOLSETS` in `~/.buddy-council/atlassian.env` before assuming anything else is wrong.
-- **Container fails to start** — Docker is not running, or the `--env-file` path is wrong or non-absolute.
+- **Server fails to start** — `command` is not an absolute `uvx` path, or the `--env-file` path is wrong or non-absolute.
 - **Invalid project key** — list valid keys with `jira_get_all_projects` and prompt the user to re-run `/bc:setup`.
 
 Never fabricate issues when a fetch fails. Report the failure and let the caller's Data Contract handling

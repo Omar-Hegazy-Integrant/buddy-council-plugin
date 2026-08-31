@@ -131,7 +131,7 @@ Secrets live in exactly one place; configuration is separate:
 
 - `.buddy-council/sources.json` — user-specific (gitignored), provider selection and non-secret settings (base URLs, project IDs)
 - `~/.buddy-council/secrets.json` — user-local, `chmod 600`, holding API keys/tokens for the servers that read JSON (TestRail, GitHub). The MCP servers read it directly (path overridable via `BC_SECRETS_FILE`, default `~/.buddy-council/secrets.json`)
-- `~/.buddy-council/atlassian.env` — user-local, `chmod 600`, holding the Jira/Confluence credentials plus `TOOLSETS`/`ENABLED_TOOLS`. It exists as a separate file because the Dockerized Atlassian server is configured through environment variables (`--env-file`) and cannot read JSON. Values must be unquoted: Docker's parser is literal, so quotes become part of the token
+- `~/.buddy-council/atlassian.env` — user-local, `chmod 600`, holding the Jira/Confluence credentials plus `TOOLSETS`/`ENABLED_TOOLS`. It exists as a separate file because the Atlassian server is configured through environment variables (`--env-file`) and cannot read JSON. Values must be unquoted: the parser is literal, so quotes become part of the token
 - `.mcp.json` — gitignored launch config holding **no credentials**: only non-secret env (`*_BASE_URL`), `BC_SECRETS_FILE`, and the Atlassian `--env-file` *path*. Env vars still take precedence if set, so legacy files with literal credentials keep working. Exception: the external GitHub MCP server reads `GITHUB_TOKEN` from env, so under the `mcp` enrichment strategy its token stays here
 - `.mcp.example.json` — committed template
 - `/bc:setup` writes the config and secrets files and generates `.mcp.json`
@@ -203,12 +203,17 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 | `testrail-server` | Active | `testrail_get_projects`, `testrail_get_suites`, `testrail_get_sections`, `testrail_get_cases`, `testrail_get_case` |
 | `jama-server` | Placeholder | None yet (auth blocked) |
 
-Jira/Confluence are **not** vendored here. They use the Dockerized community server
-[`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian)
-(`ghcr.io/sooperset/mcp-atlassian:latest`), which authenticates with an Atlassian API token and runs as a
-stdio container. `/bc:setup` writes the entry into both `.mcp.json` (Claude Code) and
-`~/.copilot/mcp-config.json` (Copilot CLI) — it is deliberately **not** declared in a plugin manifest,
+Jira/Confluence are **not** vendored here. They use the community server
+[`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian), launched with `uvx` at a pinned
+version (`mcp-atlassian@0.23.1`) and authenticated with an Atlassian API token. Running it through `uv` —
+already required for the TestRail server and the Excel parser — means no extra prerequisite and no
+background daemon. `/bc:setup` writes the entry into both `.mcp.json` (Claude Code) and
+`~/.copilot/mcp-config.json` (Copilot CLI); it is deliberately **not** declared in a plugin manifest,
 because the `--env-file` path is absolute and per-machine.
+
+The version is pinned rather than floating: the server changed its default `TOOLSETS` in 0.22.0, so an
+unpinned upgrade could silently change which tools exist. Bump it deliberately, as with the vendored
+servers' `uv.lock`.
 
 The tools the plugin uses, by toolset:
 

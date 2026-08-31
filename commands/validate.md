@@ -30,7 +30,7 @@ The command expects:
    - If the `jira` section or `jira.board` is missing AND `--dry-run` is NOT present, warn:
      > No Jira dev board is configured. Run `/bc:setup` — Step 3 is required — or use `--dry-run` to test without creating a real ticket.
    - If `jira.pending` is `true` AND `--dry-run` is NOT present, warn:
-     > Your Jira board is recorded but not yet verified. Make sure Docker is running, then re-run `/bc:setup`.
+     > Your Jira board is recorded but not yet verified. Re-run `/bc:setup` to confirm it.
    - If `--dry-run` flag is present, proceed (dry-run never touches Jira)
 
 3. Invoke the ticket validation agent by following the instructions in `agents/ticket-validation-agent.agent.md`, passing the ticket description and any flags.
@@ -153,7 +153,7 @@ https://yourorg.atlassian.net/browse/PROJ-1234
 - **No ticket description provided**: Prompt user for description
 - **No related requirements found**: Automatically skip contradiction detection and proceed to gap analysis
 - **Jira not configured**: Suggest `/bc:setup` or `--dry-run` mode
-- **Atlassian tools unavailable**: Check Docker is running first — the server is a container, so a stopped daemon means no Jira tools. Then confirm `/bc:setup` has been run and the CLI fully restarted. There is nothing to authorize.
+- **Atlassian tools unavailable**: Check that `command` in the MCP config is an absolute `uvx` path — the spawned server does not inherit your shell's `PATH`. Then confirm `/bc:setup` has been run and the CLI fully restarted. There is nothing to authorize.
 - **Ticket creation fails**: If 401, the API token in `~/.buddy-council/atlassian.env` is wrong or revoked — re-run `/bc:setup`. If 400, check the project key and issue type. If 403, the account lacks "Create Issues" on that project.
 
 ## Tips

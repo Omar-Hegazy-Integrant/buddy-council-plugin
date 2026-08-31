@@ -13,7 +13,7 @@ Verification pipeline and keep their state visible in Jira labels.
 **CRITICAL**:
 
 - Always use MCP tools for Jira. Never use curl, wget, or Bash to call the Jira API.
-- Jira reads/writes go through the Dockerized `sooperset/mcp-atlassian` server: `mcp__atlassian__jira_*`
+- Jira reads/writes go through the `sooperset/mcp-atlassian` server: `mcp__atlassian__jira_*`
   under Claude Code, bare `jira_*` names under Copilot CLI.
 - When asking the user questions, use `vscode_askQuestions`. Never ask in plain text chat.
 
@@ -84,7 +84,7 @@ against remembered requirements.
 
 1. Read `.buddy-council/sources.json`. If absent → stop, tell the user to run `/bc:setup`.
 2. Require a usable dev board: `jira.board` present and `jira.pending` not `true`. If pending → stop and
-   tell the user to start Docker and re-run `/bc:setup`.
+   tell the user to re-run `/bc:setup` to verify it.
 3. Resolve the V&V board, in order: the `--board` argument → `jira.vnv_board` → ask the user for the URL.
    Parse it with the same rules Step 3c of `/bc:setup` uses (accept `boards/<id>`, `rapidView=<id>`, tab
    suffixes, and `/c/` company-managed paths).
@@ -270,9 +270,10 @@ repair the file. `platform_source` is `os_field` or `title_prefix` so a reader c
   state Jira does not reflect.
 - **401** → the API token in `~/.buddy-council/atlassian.env` is wrong or revoked; re-run `/bc:setup`.
 - **403** → the account lacks create/comment permission on that project. A Jira permission problem.
-- **Atlassian tools missing entirely** → Docker is not running, or a required toolset is absent from
-  `TOOLSETS` in `~/.buddy-council/atlassian.env` (`jira_agile` for boards and sprints, `jira_links` for issue
-  links, `jira_users` for reviewer lookup). Missing toolsets fail silently, so check that before anything else.
+- **Atlassian tools missing entirely** → the server failed to start (check `command` is an absolute `uvx`
+  path), or a required toolset is absent from `TOOLSETS` in `~/.buddy-council/atlassian.env` (`jira_agile`
+  for boards and sprints, `jira_links` for issue links, `jira_users` for reviewer lookup). Missing toolsets
+  fail silently, so check that before anything else.
 
 ## Boundaries
 

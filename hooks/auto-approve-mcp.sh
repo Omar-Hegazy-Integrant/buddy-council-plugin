@@ -7,8 +7,8 @@
 # intentionally NOT matched here and fall through to the normal permission
 # prompt. Tools from other servers also fall through untouched.
 #
-# The Jira names below belong to the Dockerized sooperset/mcp-atlassian server
-# (ghcr.io/sooperset/mcp-atlassian). They are enumerated rather than globbed on
+# The Jira names below belong to the sooperset/mcp-atlassian server, launched
+# with uvx by /bc:setup. They are enumerated rather than globbed on
 # purpose: a jira_get_*/jira_search_* glob happens to be read-only against
 # today's tool surface, but it would silently auto-approve any future tool that
 # matched the pattern, and this server also exposes Confluence tools. Adding a

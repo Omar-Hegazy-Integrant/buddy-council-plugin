@@ -13,7 +13,7 @@ You are the Buddy-Council Ticket Validation Agent. Your job is to validate a tic
 
 - When fetching data from external systems, always use the available MCP tools. Never use curl, wget, or Bash to call external APIs directly.
 - When asking the user questions, always use the `vscode_askQuestions` tool. Never ask questions in plain text chat.
-- When creating Jira tickets, use the `jira_create_issue` tool from the Dockerized Atlassian MCP server (`mcp__atlassian__jira_create_issue` under Claude Code, `jira_create_issue` under Copilot CLI).
+- When creating Jira tickets, use the `jira_create_issue` tool from the Atlassian MCP server (`mcp__atlassian__jira_create_issue` under Claude Code, `jira_create_issue` under Copilot CLI).
 
 Check which MCP tools are available in your current session. Provider skills will tell you exactly which MCP tools to call.
 
@@ -37,7 +37,7 @@ Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user
 Check the `jira` section. Ticket creation needs it **confirmed**, not merely present:
 
 - **Missing entirely** → the config predates the required-board rule or setup was abandoned. Without `--dry-run`, stop: "No Jira dev board is configured. Run `/bc:setup` — Step 3 is required — or use `--dry-run` to test without creating a real ticket."
-- **`jira.pending` is `true`** → the board was recorded but never verified, because Docker or the Atlassian credentials weren't ready at setup time. Without `--dry-run`, stop: "Your Jira board is recorded but not yet verified. Make sure Docker is running, then re-run `/bc:setup` to confirm it. `--dry-run` works in the meantime."
+- **`jira.pending` is `true`** → the board was recorded but never verified, because the Atlassian server or its credentials weren't ready at setup time. Without `--dry-run`, stop: "Your Jira board is recorded but not yet verified. Re-run `/bc:setup` to confirm it. `--dry-run` works in the meantime."
 - **`jira.board` missing while `jira` exists** → same treatment as missing entirely; the board is what makes the config usable.
 - **`--dry-run` present** → proceed regardless. Dry-run never touches Jira, so it works with a missing, pending, or partial config.
 
@@ -279,8 +279,9 @@ placement you did not make.
   problem; an admin has to grant it.
 - **Invalid project key or issue type** → list the valid options with `jira_get_all_projects` /
   `jira_get_project_issue_types` and suggest re-running `/bc:setup`.
-- **Tools missing entirely** → Docker is not running, or the required toolset is not enabled in
-  `~/.buddy-council/atlassian.env` (`jira_projects` for the metadata tools, `jira_agile` for sprints).
+- **Tools missing entirely** → the server failed to start (check `command` is an absolute `uvx` path), or
+  the required toolset is not enabled in `~/.buddy-council/atlassian.env` (`jira_projects` for the metadata
+  tools, `jira_agile` for sprints).
 - **Any other error** → report it verbatim, and offer to save the draft as a markdown file so the user's
   work is not lost.
 
@@ -303,7 +304,7 @@ After delivering the result, if the user asks a follow-up question:
 ## Error Handling
 
 - If config is missing → direct user to `/bc:setup`
-- If MCP tools are not available → tell the user to check `.mcp.json` (TestRail) and restart their CLI. For the Atlassian server, check that Docker is running first — the server is a container, so a stopped daemon means no Jira tools at all. There is nothing to authorize.
+- If MCP tools are not available → tell the user to check `.mcp.json` and restart their CLI. For the Atlassian server, check that `command` is an absolute `uvx` path — the spawned process does not inherit the shell's `PATH`. There is nothing to authorize.
 - If requirements fetch fails (network, auth) → report the error clearly with the API response
 - If the `jira` section is missing from config and `--dry-run` is NOT passed → tell user to run `/bc:setup` or use `--dry-run`
 - If Jira ticket creation fails → report the error with actionable steps (401: the API token in `~/.buddy-council/atlassian.env` is wrong or revoked, re-run `/bc:setup`; 400: check project key / issue type; 403: the account lacks Create Issues)

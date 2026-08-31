@@ -10,7 +10,7 @@ what is being built against what the requirements and test cases say.
 
 ## This reads the board itself
 
-The Dockerized `sooperset/mcp-atlassian` server exposes the real Agile API: `jira_get_agile_boards`,
+The `sooperset/mcp-atlassian` server exposes the real Agile API: `jira_get_agile_boards`,
 `jira_get_board_issues`, `jira_get_sprints_from_board`, `jira_get_sprint_issues` and
 `jira_add_issues_to_sprint`. The board's contents come from the board, by id.
 

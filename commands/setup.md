@@ -30,8 +30,8 @@ Only walk the steps for the sections the user names; carry every other section o
 **Three exceptions, because the Jira board is required** — all three run even when the user answers "nothing":
 
 - **Missing `jira` block** → the config predates the requirement, or an earlier run was abandoned. Say so and walk Step 3 regardless of what they asked to change.
-- **`jira.pending` is `true`** → re-verify now. Run the Docker preflight (Step 3a) and the credential check (Step 3b); if both pass, run the board check from Step 3c, drop `pending`, and report `Jira board: PROJ board 42 — verified`. If it still fails, leave `pending` as it is and remind them `/bc:validate` stays blocked until it clears. Never silently keep a stale `pending: true` that would now verify.
-- **`jira.cloud_id` is present, or either MCP config has an `atlassian` entry pointing at `mcp.atlassian.com`** → this config predates 0.19.0, when Jira moved from Atlassian's OAuth server to the Dockerized one. **Remove the stale `atlassian` entry from both MCP configs and drop `cloud_id` immediately**, as part of the Step 0a automatic repair — a user who answers "nothing" must not be left with a server that 401s on every call. Then walk Step 3 to collect the API token and write the Docker entry. Say why in one line.
+- **`jira.pending` is `true`** → re-verify now. Run the server preflight (Step 3a) and the credential check (Step 3b); if both pass, run the board check from Step 3c, drop `pending`, and report `Jira board: PROJ board 42 — verified`. If it still fails, leave `pending` as it is and remind them `/bc:validate` stays blocked until it clears. Never silently keep a stale `pending: true` that would now verify.
+- **`jira.cloud_id` is present, or either MCP config has an `atlassian` entry pointing at `mcp.atlassian.com`** → this config predates 0.19.0, when Jira moved off Atlassian's OAuth server. **Remove the stale `atlassian` entry from both MCP configs and drop `cloud_id` immediately**, as part of the Step 0a automatic repair — a user who answers "nothing" must not be left with a server that 401s on every call. Then walk Step 3 to collect the API token and write the `uvx` entry. Say why in one line.
 
 **If it does not exist**, run all steps in order.
 
@@ -219,36 +219,35 @@ Persist as `project: { enabled, ignore_dirs, id_patterns }` in `.buddy-council/s
 lives, and every analysis command reads it: `/bc:contradiction` and `/bc:coverage` compare board issues
 against requirements and test cases, and `/bc:validate` files new tickets onto it.
 
-Jira and Confluence run on the **Dockerized `sooperset/mcp-atlassian` server**
-(`ghcr.io/sooperset/mcp-atlassian:latest`), which authenticates with an **Atlassian API token**. Unlike
-earlier versions of this plugin, this step **does collect credentials** — there is no browser OAuth. They
-go into `~/.buddy-council/atlassian.env`, never into the repo and never into an MCP config.
+Jira and Confluence run on the **`sooperset/mcp-atlassian` server**, launched with `uvx` — the same `uv`
+that already runs the TestRail server and the Excel parser, so this adds no new prerequisite and no
+background daemon. It authenticates with an **Atlassian API token**. Unlike earlier versions of this plugin,
+this step **does collect credentials** — there is no browser OAuth. They go into
+`~/.buddy-council/atlassian.env`, never into the repo and never into an MCP config.
 
-This step has four parts: check Docker, collect credentials, pick the dev board, then the V&V settings.
+This step has four parts: check `uvx`, collect credentials, pick the dev board, then the V&V settings.
 
-### 3a: Docker preflight
+### 3a: Server preflight
 
-The server is a container, so Docker must be installed *and* running. Check both — a stopped daemon is the
-most common failure and produces a confusing "server not loaded" error later:
-
-```bash
-docker --version && docker info >/dev/null 2>&1 && echo "daemon: running"
-```
-
-- **`docker` not found** → Docker is not installed. Point the user at
-  https://docs.docker.com/get-started/get-docker/ and continue in *deferred* mode (below) — record their
-  answers with `"pending": true` rather than abandoning the run.
-- **Command found but `docker info` fails** → the daemon is not running. Ask them to start Docker Desktop
-  (or `sudo systemctl start docker`) and say you will wait. Re-check once. If it still fails, defer.
-
-Then make sure the image is present, so the first real tool call isn't a silent multi-minute pull:
+Confirm `uvx` is present and can fetch the server. `uv` is already a plugin prerequisite, so this normally
+passes silently:
 
 ```bash
-docker pull ghcr.io/sooperset/mcp-atlassian:latest
+command -v uvx && uvx mcp-atlassian@0.23.1 --version
 ```
 
-Report it as one line — `Docker: ready (image pulled)` — not as a wall of layer output. A pull failure on an
-otherwise-healthy daemon usually means no network or a registry block; report the error verbatim and defer.
+- **`uvx` not found** → `uv` is not installed, which also breaks Step 1 and Step 2. Point the user at
+  https://docs.astral.sh/uv/getting-started/installation/ and continue in *deferred* mode (below) — record
+  their answers with `"pending": true` rather than abandoning the run.
+- **`uvx` present but the fetch fails** → no network, or a proxy blocking PyPI. Report the error verbatim
+  and defer; the version is pinned, so this is a download problem, not a version-resolution one.
+
+The first run downloads and caches the package (a few seconds); later runs start from cache. Report it as
+one line — `Atlassian server: mcp-atlassian 0.23.1 ready` — not as a wall of download output.
+
+**Pin the version.** The server changed its default `TOOLSETS` in 0.22.0; floating to latest would let a
+future release silently change which tools exist. Write `mcp-atlassian@0.23.1` in both MCP configs and bump
+it deliberately, the same way the vendored servers' `uv.lock` is bumped.
 
 ### 3b: Credentials
 
@@ -417,10 +416,11 @@ that they can be hand-edited in `.buddy-council/sources.json`. If the user skipp
 `vnv_board` and `vnv_workflow` entirely, but still write `platform` if the `OS` field was found — the
 parity data is useful to `/bc:coverage` regardless.
 
-### Deferral (when Docker or the credentials aren't ready)
+### Deferral (when the server or the credentials aren't ready)
 
-The requirement is firm, but it must not strand a user whose Docker install is broken or who has to request
-an API token. If Docker is unavailable, or credential verification never succeeds:
+The requirement is firm, but it must not strand a user whose `uv` install is broken, who is behind a proxy
+that blocks PyPI, or who has to request an API token. If the preflight fails, or credential verification
+never succeeds:
 
 - Say plainly that the board is required and setup will keep asking until it is confirmed.
 - Still collect what they can give: the site URL → `base_url`, the board URL → `board.url` + `board.id` +
@@ -449,7 +449,7 @@ Ready to save:
   Test cases:    testrail — https://company.testrail.io, project 1
   Jira board:    PROJ board 42 — https://company.atlassian.net (37 issues)
   Confluence:    https://company.atlassian.net/wiki (same account + token)
-  Atlassian MCP: docker ghcr.io/sooperset/mcp-atlassian:latest (image ready)
+  Atlassian MCP: uvx mcp-atlassian@0.23.1 (ready)
   V&V board:     VV board 77 — parity on OS field; reviewer Jane Doe
                  (labels/approval phrases: edit jira.vnv_workflow in .buddy-council/sources.json)
   Code mapping:  enabled — detected Node project; ID patterns CWA-REQ-\d+, TC-\d+
@@ -548,7 +548,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 }
 ```
 
-The `"jira"` section is **always written** — Step 3 is required. If Docker or the credentials were not ready, write it with `"pending": true`. Never write `cloud_id` — it was only meaningful to the retired OAuth server; drop it if a pre-0.19.0 config still carries one. `board.id` is an integer, not a string. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
+The `"jira"` section is **always written** — Step 3 is required. If the preflight or the credentials were not ready, write it with `"pending": true`. Never write `cloud_id` — it was only meaningful to the retired OAuth server; drop it if a pre-0.19.0 config still carries one. `board.id` is an integer, not a string. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
@@ -585,7 +585,7 @@ Write `~/.buddy-council/secrets.json` with credentials — this file is the **si
 ```
 
 **There is no `jira` section in this file.** Jira and Confluence credentials go in the env file below
-instead, because the Dockerized Atlassian server reads environment variables and cannot read this JSON.
+instead, because the Atlassian server reads environment variables and cannot read this JSON.
 
 If the GitHub enrichment strategy is **not** `mcp` (e.g., CLI was chosen, or enrichment is disabled), omit the `"github"` section — `gh` CLI handles its own credentials.
 
@@ -597,7 +597,7 @@ chmod 600 ~/.buddy-council/secrets.json
 
 #### The Atlassian env file — `~/.buddy-council/atlassian.env`
 
-The Docker server takes its configuration as environment variables via `--env-file`, so its credentials live
+The Atlassian server takes its configuration as environment variables via `--env-file`, so its credentials live
 in a flat env file beside `secrets.json` — same protected directory, same `chmod 600`, still outside the
 repo. **Step 3b already wrote this file** so it could verify the credentials; re-write it here only if
 something changed since (most often a corrected token), and otherwise just confirm it exists with the right
@@ -638,8 +638,8 @@ Five rules for this file, each of which breaks something specific if ignored:
   concludes nothing has been cloned yet, and it creates duplicates on a board another team works from. Every
   query the plugin issues is already explicitly project-scoped, so the filter buys no safety — only that
   failure. If a user hand-adds one, warn them it must list every project the plugin touches.
-- **No quotes around values, no `export`, no trailing spaces.** Docker's `--env-file` parser is literal:
-  quotes become part of the value, which produces authentication failures that look like a wrong token.
+- **No quotes around values, no `export`, no trailing spaces.** The `--env-file` parser is literal: quotes
+  become part of the value, which produces authentication failures that look like a wrong token.
 
 Tell the user this file exists, that it holds a real credential, and that revoking the token at
 https://id.atlassian.com/manage-profile/security/api-tokens is how you cut off access.
@@ -681,28 +681,27 @@ If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.jso
 ```
 
 **Add the `atlassian` entry to `.mcp.json` too.** As of 0.19.0 it is an ordinary stdio server like TestRail,
-written by setup into both configs — it is no longer declared in the plugin manifest, because a Docker
-invocation needs an absolute, per-machine `--env-file` path that cannot be committed:
+written by setup into both configs — it is no longer declared in the plugin manifest, because the
+`--env-file` path is absolute and per-machine, so it cannot be committed:
 
 ```json
 {
   "mcpServers": {
     "atlassian": {
-      "command": "docker",
+      "command": "uvx",
       "args": [
-        "run", "--rm", "-i",
+        "mcp-atlassian@0.23.1",
         "--env-file", "/Users/<you>/.buddy-council/atlassian.env",
-        "ghcr.io/sooperset/mcp-atlassian:latest"
+        "--transport", "stdio"
       ]
     }
   }
 }
 ```
 
-**The `--env-file` path must be absolute and fully expanded.** Docker does not expand `~`, and it is the
-host's `docker` CLI that reads the file, not the container. A tilde here produces
-`open ~/.buddy-council/atlassian.env: no such file or directory`. Note also that no credential appears in
-this entry — the env file holds them, which is why `.mcp.json` stays secret-free even for Jira.
+**The `--env-file` path must be absolute and fully expanded.** A tilde is not expanded here, and produces a
+"no such file" error at startup. Note also that no credential appears in this entry — the env file holds
+them, which is why `.mcp.json` stays secret-free even for Jira.
 
 `<plugin_root>` is the absolute path from 4a-bis — it differs per machine and stays only in the local, gitignored `.mcp.json`, never in a committed file.
 
@@ -728,11 +727,11 @@ overwrite**: read the file if it exists, add or replace only the `testrail`/`atl
     },
     "atlassian": {
       "type": "local",
-      "command": "<absolute path from `command -v docker`>",
+      "command": "<absolute path from `command -v uvx`>",
       "args": [
-        "run", "--rm", "-i",
+        "mcp-atlassian@0.23.1",
         "--env-file", "/Users/<you>/.buddy-council/atlassian.env",
-        "ghcr.io/sooperset/mcp-atlassian:latest"
+        "--transport", "stdio"
       ],
       "tools": ["*"]
     }
@@ -740,15 +739,14 @@ overwrite**: read the file if it exists, add or replace only the `testrail`/`atl
 }
 ```
 
-**Resolve `docker` the same way you resolved `uv`** — `command -v docker` — and write the absolute result
-(e.g. `/usr/local/bin/docker`). A bare `"docker"` fails for exactly the same reason a bare `"uv"` does: the
-spawned server does not inherit your shell's `PATH`. This bites harder with Docker Desktop on macOS, where
-the binary lives in `/usr/local/bin` or `~/.docker/bin` rather than a default system path.
+**Resolve `uvx` the same way you resolved `uv`** — `command -v uvx` — and write the absolute result (e.g.
+`/opt/homebrew/bin/uvx`). A bare `"uvx"` fails for exactly the same reason a bare `"uv"` does: the spawned
+server does not inherit your shell's `PATH`.
 
 Three differences from the Claude Code file, all required:
 
-- **`"type": "local"`** — Copilot rejects entries without it. It applies to the Docker server too: `local`
-  describes how Copilot spawns the process (stdio subprocess), not where Jira lives.
+- **`"type": "local"`** — Copilot rejects entries without it. It applies to the Atlassian server too:
+  `local` describes how Copilot spawns the process (a stdio subprocess), not where Jira lives.
 - **`"tools": ["*"]`** — the per-server tool allowlist. Without it the server loads but exposes nothing. The
   real narrowing happens in the env file's `ENABLED_TOOLS`, so `["*"]` here is not over-permissive.
 - **Fully expanded `$HOME`** in `BC_SECRETS_FILE` and in `--env-file`. Neither is tilde-expanded.
@@ -762,7 +760,7 @@ The TestRail server reads its credentials (`username`/`api_key`) from `~/.buddy-
 
 - A `"jira"` server pointing at `mcp-servers/jira-server` (pre-0.17.0, vendored, since deleted).
 - An `"atlassian"` server with `"type": "http"` and a `mcp.atlassian.com` URL (0.17.0–0.18.x, the official
-  OAuth server). Replace it with the Docker entry above. Leaving it behind gives the user two servers named
+  OAuth server). Replace it with the `uvx` entry above. Leaving it behind gives the user two servers named
   `atlassian`, or a stale one that fails every call with 401.
 
 Tell the user which were removed.
@@ -787,22 +785,22 @@ If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github
 
 **Important**: Tell the user that after setup completes, they need to restart their CLI — Claude Code can also just toggle the servers with `/mcp`; Copilot CLI must be fully exited and relaunched — for the MCP servers to become available.
 
-**There is no authorization step anymore.** The Docker server authenticates with the API token in the env
-file, so once the CLI restarts the Jira tools work immediately — no browser consent, no `/mcp` →
-Authenticate, and no dependency on a site admin enabling anything. If a user is coming from 0.18.x, say this
-explicitly; they will otherwise go looking for the OAuth prompt.
+**There is no authorization step anymore.** The server authenticates with the API token in the env file, so
+once the CLI restarts the Jira tools work immediately — no browser consent, no `/mcp` → Authenticate, and no
+dependency on a site admin enabling anything. If a user is coming from 0.18.x, say this explicitly; they
+will otherwise go looking for the OAuth prompt.
 
 If Atlassian tools are missing after a restart, the cause is one of three things, in this order:
 
-1. **Docker isn't running** — the server can't start at all. This is by far the most common.
+1. **`command` is not an absolute `uvx` path** — the spawned server does not inherit your `PATH`.
 2. **The `--env-file` path is wrong or not absolute** — check the entry in both MCP configs.
 3. **A bad token** — re-run the 3b verification curl.
 
-Verify by hand with the same command the CLI runs; it should print a JSON-RPC handshake rather than an error:
+Verify by hand with the same command the CLI runs. It should print a JSON-RPC handshake rather than an error:
 
 ```bash
-docker run --rm -i --env-file ~/.buddy-council/atlassian.env \
-  ghcr.io/sooperset/mcp-atlassian:latest </dev/null
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' \
+  | uvx mcp-atlassian@0.23.1 --env-file ~/.buddy-council/atlassian.env --transport stdio
 ```
 
 ## After saving: validate
@@ -817,7 +815,7 @@ docker run --rm -i --env-file ~/.buddy-council/atlassian.env \
 - Confirm neither MCP config still carries a `jira` entry pointing at the removed `mcp-servers/jira-server`, nor an `atlassian` entry with an `mcp.atlassian.com` URL
 - Confirm both MCP configs use an **absolute** `--env-file` path with no `~`
 - Confirm `.buddy-council/sources.json` has a `jira` block with a `board.id` and `board.url`, and that `pending` is `false` whenever the credential and board checks actually succeeded
-- Confirm the `command` in both files is an absolute `uv` / `docker` path that exists on disk
+- Confirm the `command` in both files is an absolute `uv` / `uvx` path that exists on disk
 - If Excel was configured, confirm the file is readable
 - Tell the user:
   1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate
@@ -845,10 +843,10 @@ If the user's Copilot version predates plugin hooks, tell them to also append th
 ## Important
 
 - NEVER write credentials into `.buddy-council/sources.json` — that file is user-specific and contains no secrets
-- ALWAYS write credentials ONLY into `~/.buddy-council/` — `secrets.json` for the servers that read JSON (TestRail, GitHub), `atlassian.env` for the Docker server that reads environment variables. Both `chmod 600`. `.mcp.json` gets non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE`, never tokens (the external GitHub MCP server is the sole exception)
+- ALWAYS write credentials ONLY into `~/.buddy-council/` — `secrets.json` for the servers that read JSON (TestRail, GitHub), `atlassian.env` for the Atlassian server that reads environment variables. Both `chmod 600`. `.mcp.json` gets non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE`, never tokens (the external GitHub MCP server is the sole exception)
 - `.mcp.json` is gitignored; under this design it carries no secrets (except the GitHub MCP token). The Atlassian entry references the env file by path rather than inlining credentials, so adding Jira did not add a secret to it
 - If `~/.buddy-council/secrets.json` already exists, merge new entries without overwriting existing ones
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
-- Step 3 (Jira & Confluence) is **required** — never offer to skip it. When Docker or the credentials are not ready, record the answers with `"pending": true` and finish the wizard; do not abandon the run and do not omit the `jira` block
-- DO ask for the Atlassian email and API token — that changed in 0.19.0. The Dockerized server has no browser OAuth, so the credential is required and lives in `~/.buddy-council/atlassian.env`. Never put it in `sources.json` or either MCP config
+- Step 3 (Jira & Confluence) is **required** — never offer to skip it. When the server preflight or the credentials are not ready, record the answers with `"pending": true` and finish the wizard; do not abandon the run and do not omit the `jira` block
+- DO ask for the Atlassian email and API token — that changed in 0.19.0. The `sooperset/mcp-atlassian` server has no browser OAuth, so the credential is required and lives in `~/.buddy-council/atlassian.env`. Never put it in `sources.json` or either MCP config
 - If the user explicitly asks about Jama: explain the API integration is in progress and that the Excel export path is the supported route for now
