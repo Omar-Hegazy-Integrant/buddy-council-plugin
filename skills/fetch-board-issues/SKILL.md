@@ -42,17 +42,36 @@ rather than reporting a generic failure, because the tools vanish silently rathe
 ```
 board_id: "<jira.board.id>"        # string, from config
 jql:      "<filter, or empty>"     # REQUIRED parameter — see below
-fields:   "*all"                   # when custom fields matter (sprint, platform)
+fields:   "summary,description,status,issuetype,priority,labels,components,parent,assignee,issuelinks"
 limit:    50                       # max 50; page with start_at
 start_at: 0
 ```
 
-Two parameters bite:
+Three parameters bite:
 
 - **`jql` is required, not optional.** It has no default. Pass an **empty string** to mean "everything on
   the board" — the board's own filter still applies, so an empty JQL is the whole board, not the whole site.
+  If the server rejects an empty string, **do not give up and do not fall back to a project-wide search**:
+  retry with `ORDER BY updated DESC`, which narrows nothing, and only then with
+  `project = <jira.project_key> ORDER BY updated DESC`. Say which form worked — the third is a
+  project-scoped approximation, not the board, and a reader deserves to know that.
 - **`limit` caps at 50.** Page with `start_at` until fewer than `limit` rows come back. A board with 60
   issues silently returns 50 if you don't.
+- **Name the `fields` you need; do not pass `*all` on this path.** A board fetch can return 50 issues, and
+  `*all` pulls every custom field and full description on each — enough to crowd out the requirements and
+  test cases this data is meant to be compared against.
+
+**Custom fields are not in that default list, and two callers need them.** Append their ids explicitly:
+
+| Caller | Extra fields | How to get the id |
+|---|---|---|
+| `/bc:vnv-sprint-prep` parity check | the platform (`OS`) field | `jira.platform.field_id`, or `jira_search_fields` with `keyword: "OS"` |
+| Anything populating `raw_fields.sprint` | the sprint field | `jira_search_fields` with `keyword: "Sprint"` — never hardcode `customfield_10020` |
+
+If a needed custom field id cannot be resolved, say so and continue with an empty value for it. **Do not
+silently fall back to `*all`** to paper over a failed lookup — that trades a named gap for an unbounded
+response. A missing platform value is handled downstream (`check-platform-parity` falls back to title
+prefixes and flags lower confidence); an oversized fetch is not handled anywhere.
 
 The `jql` narrows *within* the board:
 

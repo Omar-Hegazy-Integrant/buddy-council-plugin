@@ -44,6 +44,7 @@ Claude Code's install path embeds the plugin version, so **every plugin update i
 - `plugin_root` in `.buddy-council/sources.json`
 - each `--directory` argument in the project's `.mcp.json`
 - each `--directory` argument in `~/.copilot/mcp-config.json`, **and whether that file exists at all** — a config written before this check was added will be missing it entirely, which is the single most common reason TestRail tools don't load under Copilot. If it is absent, create it per Step 4c instead of only repairing paths.
+- the `atlassian` entry in **both** MCP configs. If it has `"type": "http"` or a `mcp.atlassian.com` URL, it is the retired official server: **delete it here**, and drop any `jira.cloud_id` from `sources.json`. This entry has no `--directory`, so the path comparison above will never catch it. Repairing it in Step 0a is what makes the removal actually automatic — a 0.18.x user who answers "nothing" would otherwise keep a server that 401s on every call.
 
 If either differs from the resolved path — or points at a directory that no longer exists — **repair both files automatically**, without a confirmation prompt (this is a path correction, not a configuration change; nothing else in either file is touched). Then report it in one line:
 
@@ -599,8 +600,8 @@ chmod 600 ~/.buddy-council/secrets.json
 The Docker server takes its configuration as environment variables via `--env-file`, so its credentials live
 in a flat env file beside `secrets.json` — same protected directory, same `chmod 600`, still outside the
 repo. **Step 3b already wrote this file** so it could verify the credentials; re-write it here only if
-something changed since (a corrected token, a V&V project key that needs adding to `JIRA_PROJECTS_FILTER`),
-and otherwise just confirm it exists with the right contents:
+something changed since (most often a corrected token), and otherwise just confirm it exists with the right
+contents:
 
 ```bash
 cat > ~/.buddy-council/atlassian.env <<'EOF'
@@ -611,8 +612,6 @@ JIRA_API_TOKEN=<the API token>
 CONFLUENCE_URL=https://yourorg.atlassian.net/wiki
 CONFLUENCE_USERNAME=you@company.com
 CONFLUENCE_API_TOKEN=<the same API token>
-
-JIRA_PROJECTS_FILTER=PROJ,VV
 
 TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
 ENABLED_TOOLS=jira_get_issue,jira_search,jira_create_issue,jira_update_issue,jira_add_comment,jira_get_transitions,jira_transition_issue,jira_search_fields,jira_get_agile_boards,jira_get_board_issues,jira_get_sprints_from_board,jira_get_sprint_issues,jira_add_issues_to_sprint,jira_get_link_types,jira_create_issue_link,jira_get_all_projects,jira_get_project_issue_types,jira_get_create_fields,jira_get_project_fields,jira_get_user_profile,jira_search_assignable_users,confluence_search,confluence_get_page,confluence_get_page_children,confluence_get_comments
@@ -632,8 +631,13 @@ Five rules for this file, each of which breaks something specific if ignored:
   reads keeps the required Confluence credentials useful without handing the agent destructive tools.
 - **Never set `READ_ONLY_MODE=true`.** It blocks writes at execution time regardless of `ENABLED_TOOLS`, and
   `/bc:validate` and `/bc:vnv-sprint-prep --apply` would fail with a permission error rather than a clear one.
-- **`JIRA_PROJECTS_FILTER`** should list the dev project and, when configured, the V&V project. Omit it
-  entirely if the user skipped the V&V board and you only have one key.
+- **Never write `JIRA_PROJECTS_FILTER`.** It looks like useful hardening and is actively dangerous here.
+  The V&V board is optional in Step 3d, and `/bc:vnv-sprint-prep` can collect it later — at which point it
+  writes `jira.vnv_board` to `sources.json` and *nothing updates this file*. A filter naming only the dev
+  project would then hide the V&V project: the clone duplicate guard's `jira_search` returns zero, the run
+  concludes nothing has been cloned yet, and it creates duplicates on a board another team works from. Every
+  query the plugin issues is already explicitly project-scoped, so the filter buys no safety — only that
+  failure. If a user hand-adds one, warn them it must list every project the plugin touches.
 - **No quotes around values, no `export`, no trailing spaces.** Docker's `--env-file` parser is literal:
   quotes become part of the value, which produces authentication failures that look like a wrong token.
 
