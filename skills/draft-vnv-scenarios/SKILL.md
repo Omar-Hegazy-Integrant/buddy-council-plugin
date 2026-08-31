@@ -13,10 +13,13 @@ former: the next stage of the pipeline is a human writing cases in TestRail.
 
 In the **V&V ticket's description**, under a marked section.
 
-Attachments were the obvious home, but Atlassian's MCP server has no attachment tool at all — see
-[atlassian-mcp-server#63](https://github.com/atlassian/atlassian-mcp-server/issues/63) and
-[#125](https://github.com/atlassian/atlassian-mcp-server/issues/125). The description is the one place that
-is always present, always readable by reviewers in Jira, and editable through `editJiraIssue`.
+Attachments were the obvious home, but this server has no attachment *upload* tool. `jira_download_attachments`
+and `jira_get_issue_images` only read, and although `jira_update_issue` accepts an `attachments` parameter it
+expects **file paths on the server's own filesystem** — inside the Docker container, not on the user's
+machine — so it cannot upload a locally generated file. The description is the one place that is always
+present, always readable by reviewers in Jira, and editable through `jira_update_issue`.
+
+This limit survived the move off Atlassian's official server; do not add a code path that assumes otherwise.
 
 ## Input
 
@@ -82,10 +85,12 @@ indistinguishable from an oversight, and a reviewer needs to see that the check 
 
 ## Writing it to the ticket
 
-1. `getJiraIssue` the V&V ticket and read its current description.
+1. `jira_get_issue` the V&V ticket and read its current description.
 2. **Read-modify-write.** If the markers already exist, replace only what is between them. Otherwise append
    the block. Never overwrite the whole description — the clone's back-reference header lives there.
-3. `editJiraIssue` with `contentFormat: "markdown"`.
+3. `jira_update_issue` with `issue_key` and `fields` — a JSON **string**, e.g.
+   `'{"description": "<the full rewritten description>"}'`. There is no `contentFormat` parameter on this
+   server: Markdown is converted unconditionally, so pass the description as plain Markdown.
 4. Transition to `jira.vnv_workflow.labels.pending_scenario_validation` (default
    `pending-scenario-validation`) using the remove-then-add procedure in *Label Discipline*
    (`${CLAUDE_PLUGIN_ROOT}/agents/vnv-sprint-prep-agent.agent.md`): strip every pipeline label — including
@@ -113,7 +118,7 @@ VV-45 — would write 3 scenarios into the description, add label `pending-scena
 - **No related requirements** → still write scenarios from the story text, but list every one under
   *Not traced to any requirement* and say plainly that traceability could not be established.
 - **Description contains media nodes** → skip the edit, print the scenarios, explain why (above).
-- **`editJiraIssue` fails** → the ticket is unchanged and keeps its previous label. Report it; do not record
+- **`jira_update_issue` fails** → the ticket is unchanged and keeps its previous label. Report it; do not record
   `scenarios_written_at` for a write that did not land.
 - **Ticket already has a scenarios block and is labelled `ready-for-test-case-creation`** → do not overwrite
   approved scenarios. Report that it is already past this stage and leave it alone.

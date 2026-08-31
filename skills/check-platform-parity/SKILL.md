@@ -39,9 +39,13 @@ The `OS` field is a custom field, so its id differs per site. Resolve once per r
 
 1. **`jira.platform.field_id` in config** — use it directly. Validate it appears in at least one fetched
    issue's `fields`; if it never does, treat it as stale and fall through to discovery.
-2. **`getJiraIssueTypeMetaWithFields`** for the dev project and its story issue type. Find the field whose
-   `name` equals `jira.platform.field_name` (default `"OS"`), case-insensitively. Take its id.
-3. **The issue payload's `names` map**, when `getJiraIssue` returns one.
+2. **`jira_search_fields`** with `keyword` set to `jira.platform.field_name` (default `"OS"`). This searches
+   the site's field catalogue by name and returns the id directly — it is the purpose-built tool for this and
+   is preferred over reading create-metadata.
+3. **`jira_get_project_fields`** for the dev project, or `jira_get_create_fields` for its story issue type,
+   when the keyword search is ambiguous. Match `name` case-insensitively and take the id.
+4. **The issue payload itself** — request `jira_get_issue` with `use_display_names: true`, which returns
+   human-readable field names instead of `customfield_NNNNN` keys.
 
 Cache the resolved id back into `jira.platform.field_id` so later runs skip discovery.
 

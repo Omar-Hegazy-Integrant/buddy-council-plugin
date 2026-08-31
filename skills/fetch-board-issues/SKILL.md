@@ -1,5 +1,5 @@
 ---
-description: Internal (used by /bc:contradiction, /bc:coverage, /bc:ask, /bc:validate) — Fetch the in-flight issues on the configured Jira dev board via JQL, normalized to the canonical schema. Reads jira.board from .buddy-council/sources.json.
+description: Internal (used by /bc:contradiction, /bc:coverage, /bc:ask, /bc:validate) — Fetch the in-flight issues on the configured Jira dev board via the Agile board API, normalized to the canonical schema. Reads jira.board from .buddy-council/sources.json.
 user-invocable: false
 ---
 
@@ -8,23 +8,23 @@ user-invocable: false
 Fetch the issues currently on the team's Jira **dev board** — the in-flight work — so analysis can compare
 what is being built against what the requirements and test cases say.
 
-## Why this is JQL and not a board API
+## This reads the board itself
 
-Atlassian's official MCP server exposes **no board, sprint, backlog, or epic tools**. Its entire Jira
-surface is `getJiraIssue`, `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
-`getJiraIssueTypeMetaWithFields`, `getJiraIssueRemoteIssueLinks`, `getIssueLinkTypes`,
-`getTransitionsForJiraIssue`, `lookupJiraAccountId`, `searchJiraIssuesUsingJql`, and the write tools.
-There is no `/rest/agile/1.0/board` equivalent.
+The Dockerized `sooperset/mcp-atlassian` server exposes the real Agile API: `jira_get_agile_boards`,
+`jira_get_board_issues`, `jira_get_sprints_from_board`, `jira_get_sprint_issues` and
+`jira_add_issues_to_sprint`. The board's contents come from the board, by id.
 
-A board is a saved filter plus sprint state, so its contents are reachable through
-`searchJiraIssuesUsingJql`. This skill reconstructs the board's scope from `jira.project_key`. **Say so
-when it matters**: for a standard single-project board the reconstruction is exact, but for a board whose
-filter spans multiple projects or excludes issue types, the result is the project's in-flight work rather
-than literally the board's rows. Never present a reconstructed scope as if it were read from the board.
+Earlier versions reconstructed board scope from a project-wide JQL guess and had to warn that the result was
+approximate for boards whose filter spanned projects or excluded issue types. **That caveat is gone** — do
+not repeat it, and do not fall back to project-wide JQL when a board id is configured.
+
+These tools live in the **`jira_agile` toolset, which is not enabled by default**. If they are missing
+entirely, `TOOLSETS` in `~/.buddy-council/atlassian.env` is missing `jira_agile` — say that explicitly
+rather than reporting a generic failure, because the tools vanish silently rather than erroring.
 
 ## Input
 
-- `scope`: Optional — a feature name, a set of requirement IDs, or "all" (default). Narrows the JQL.
+- `scope`: Optional — a feature name, a set of requirement IDs, or "all" (default). Narrows the JQL filter.
 - `include_done`: Optional, default `false`. When true, drops the "not done" restriction.
 
 ## How It Works
@@ -33,35 +33,56 @@ than literally the board's rows. Never present a reconstructed scope as if it we
 2. If there is no `jira` section, or `jira.pending` is `true`, or `jira.board` is missing → **do not fail
    the run**. Print `Fetch: board issues → skipped (Jira board not configured — run /bc:setup)` and return
    an empty array. The caller treats this as a configured-but-unavailable source, not a hard error.
-3. Resolve `cloudId` exactly as `providers/jira/fetch.md` describes (use `jira.cloud_id`; otherwise
-   `getAccessibleAtlassianResources`, then cache it back).
-4. Build the board-scope JQL (below) and call `searchJiraIssuesUsingJql`, paging until exhausted.
-5. Normalize each issue to the canonical schema with `type: "board_issue"`.
-6. Print one line: `Fetch: board issues → <N> fetched from board <id>`.
+3. Fetch the board's issues with `jira_get_board_issues` (below).
+4. Normalize each issue to the canonical schema with `type: "board_issue"`.
+5. Print one line: `Fetch: board issues → <N> fetched from board <id>`.
 
-## Board-Scope JQL
+## Calling `jira_get_board_issues`
 
-Try these in order, stopping at the first that the server accepts:
+```
+board_id: "<jira.board.id>"        # string, from config
+jql:      "<filter, or empty>"     # REQUIRED parameter — see below
+fields:   "*all"                   # when custom fields matter (sprint, platform)
+limit:    50                       # max 50; page with start_at
+start_at: 0
+```
 
-1. **Scrum board — active sprint** (the common case):
-   ```
-   project = <project_key> AND sprint in openSprints() AND statusCategory != Done ORDER BY updated DESC
-   ```
-2. **Kanban, or team-managed without sprints.** If step 1 is rejected because the `sprint` field does not
-   exist on this site, or returns zero issues while the project demonstrably has open work:
-   ```
-   project = <project_key> AND statusCategory != Done ORDER BY updated DESC
-   ```
-3. **`include_done: true`** drops the `statusCategory` clause from whichever form was used.
+Two parameters bite:
 
-Narrow further when the caller passed a scope:
+- **`jql` is required, not optional.** It has no default. Pass an **empty string** to mean "everything on
+  the board" — the board's own filter still applies, so an empty JQL is the whole board, not the whole site.
+- **`limit` caps at 50.** Page with `start_at` until fewer than `limit` rows come back. A board with 60
+  issues silently returns 50 if you don't.
 
+The `jql` narrows *within* the board:
+
+- **Default (`include_done: false`)** → `statusCategory != Done`
+- **`include_done: true`** → empty string
 - **Feature name** → append `AND (component = "<feature>" OR labels = "<feature-slug>" OR text ~ "<feature>")`
 - **Requirement IDs** → append `AND text ~ "<REQ-ID>"` per ID, OR-joined. Requirement IDs usually appear in
   the summary or description of the implementing ticket.
 
-Report which form was used. If step 1 was rejected and you fell back, say so — the user should know the
-result is project-scoped rather than sprint-scoped.
+### Sprint-scoped reads
+
+When the caller wants only the active sprint rather than the whole board:
+
+1. `jira_get_sprints_from_board` with `board_id` and `state: "active"`.
+2. `jira_get_sprint_issues` with the returned `sprint_id`, `limit: 50` and `start_at`, paging until fewer
+   than `limit` rows come back.
+
+**`jira_get_sprint_issues` has the same 1–50 cap as `jira_get_board_issues`, and the same consequence.** A
+sprint with more than 50 issues silently returns the first 50 — and in `/bc:vnv-sprint-prep` the overflow is
+never cloned, never validated, and never reported as missing. Page it every time; never accept the default.
+
+A Kanban board has no sprints — `jira_get_sprints_from_board` returns an empty list. That is a normal
+result, not an error: fall back to `jira_get_board_issues` and say the board is Kanban.
+
+### If the board id is stale
+
+`jira_get_board_issues` returns 404 when the board was deleted or renumbered. Re-resolve with
+`jira_get_agile_boards` (filter by `project_key`, optionally `board_name`), report the mismatch, and tell the
+user to re-run `/bc:setup` to update `jira.board.id`. Do not silently adopt a different board — picking the
+wrong one would misrepresent what the team is working on.
 
 ## Output
 
@@ -89,35 +110,37 @@ A JSON array in the canonical schema:
 ]
 ```
 
-Field mapping, ADF→text conversion, `issuelinks` → `linked_ids`, and feature derivation are all identical
+Field mapping, description handling, `issuelinks` → `linked_ids`, and feature derivation are all identical
 to `${CLAUDE_PLUGIN_ROOT}/providers/jira/fetch.md` — follow that file rather than duplicating the rules
 here. One addition specific to board issues: also scan `summary` and `description` for requirement-ID
 patterns (`project.id_patterns` in the config, e.g. `CWA-REQ-\d+`) and merge any matches into
 `linked_ids`. That is what lets coverage and contradiction analysis tie a sprint ticket back to a
 requirement when no formal Jira link exists.
 
-## Resolving the Active Sprint (for `/bc:validate`)
+## Placing a New Ticket in the Active Sprint (for `/bc:validate`)
 
-`createJiraIssue` cannot set a sprint by name, and there is no sprint tool. To file a new ticket into the
-board's active sprint:
+Sprint assignment is a real operation now — no custom-field guesswork:
 
-1. Run the step-1 JQL above with a small `maxResults` and read the sprint field off any returned issue —
-   that yields the numeric **sprint id** and the field id carrying it (commonly `customfield_10020`, but
-   never hardcode it; take it from the issue payload).
-2. Confirm the same field id is settable on create via `getJiraIssueTypeMetaWithFields`.
-3. Pass it through `createJiraIssue`'s `additional_fields`, e.g. `{"customfield_10020": 42}`.
+1. `jira_get_sprints_from_board` with `board_id` and `state: "active"` → the active `sprint_id`. Page this
+   too if the board has many sprints; `limit` caps at 50 here as well.
+2. Create the issue with `jira_create_issue`.
+3. `jira_add_issues_to_sprint` with `sprint_id` and `issue_keys` (comma-separated, e.g. `"PROJ-150"`).
 
-If any step fails — no open sprint, a Kanban board, the field not settable on create — **create the ticket
-anyway without the sprint** and tell the user it landed in the backlog rather than the active sprint. Never
-fail ticket creation over sprint placement.
+Step 3 is a **write** and follows the same rules as any other write: it prompts, and it does not run at all
+in a dry run.
+
+If there is no active sprint, the board is Kanban, or step 3 fails — **keep the created ticket** and tell the
+user it landed in the backlog rather than the active sprint. Never fail or roll back ticket creation over
+sprint placement.
 
 ## Error Handling
 
 - **No `jira` section / `jira.pending` true / no `jira.board`** → skip with the visible line above, return `[]`.
-- **401** → the Atlassian OAuth grant is missing or expired. Tell the user to re-authorize (`/mcp` →
-  **atlassian** → Authenticate on Claude Code; restart Copilot CLI). Treat as a failed source.
-- **403** → the account cannot browse this project, or the site admin has not enabled the Rovo MCP server.
-  Name both possibilities; you cannot distinguish them from the response.
+- **Board tools missing entirely** → `jira_agile` is not in `TOOLSETS`. Name that as the cause and point at
+  `~/.buddy-council/atlassian.env`. Treat as a failed source.
+- **401** → bad or revoked API token; tell the user to re-run `/bc:setup`. Treat as a failed source.
+- **403** → the account cannot browse this project or board. A Jira permission problem, not a config one.
+- **404 on the board** → stale `jira.board.id`; handle as described above.
 - **Malformed JQL** → report the exact server error and the query that produced it. Do not silently
   broaden the query; a wider result set would misrepresent the board.
 - **Empty result with a working query** → acceptable. Report `0` and continue; an empty sprint is a real

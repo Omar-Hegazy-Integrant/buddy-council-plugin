@@ -92,13 +92,17 @@ one found with several is repaired to the furthest-along, and the repair is repo
 
 ## Known Platform Limits
 
-Two things Atlassian's MCP server cannot do, surfaced here so the output is never misleading:
+One thing the Atlassian MCP server cannot do, surfaced here so the output is never misleading:
 
-- **It cannot create issue links.** `update.issuelinks` is silently ignored and there is no `createIssueLink`
-  tool. Clones therefore carry a `src-<DEV-KEY>` label and a back-reference line in the description instead
-  of a real Jira link. The final summary prints the clone↔original pairs so someone can link them in the UI
-  in one pass if the team wants formal links. *Reading* links works fine, so the phase-2 parity check is unaffected.
-- **It cannot attach files.** Scenarios go into the V&V ticket's description rather than an attached `.md`.
+- **It cannot upload attachments.** There is no upload tool — `jira_download_attachments` and
+  `jira_get_issue_images` only read, and `jira_update_issue`'s `attachments` parameter takes paths on the
+  server's own filesystem, not local files. Scenarios therefore go into the V&V ticket's description rather
+  than an attached `.md`.
+
+Issue links, by contrast, *are* supported: clones are linked back to their dev story with a real Jira link
+(plus a `src-<DEV-KEY>` label, which is what makes re-runs idempotent). If linking fails on a given ticket —
+usually because the `jira_links` toolset is not enabled — the run says so and falls back to label-only
+traceability.
 
 ## Error Handling
 
@@ -107,4 +111,5 @@ Two things Atlassian's MCP server cannot do, surfaced here so the output is neve
 - **V&V board in the same project as the dev board** → stop and explain; this is a configuration error, not something to work around.
 - **No `OS` field on the project** → phase 2 falls back to the title prefix and says so loudly; parity results are marked lower-confidence.
 - **No active sprint** → report it and stop. There is nothing to clone.
-- **401 / 403 from Atlassian** → re-authorize (`/mcp` → **atlassian** → Authenticate, or restart Copilot CLI); a 403 may instead mean the site admin has not enabled the Rovo MCP server.
+- **401 / 403 from Atlassian** → 401 means the API token in `~/.buddy-council/atlassian.env` is wrong or revoked (re-run `/bc:setup`); 403 means the account lacks permission on that project.
+- **Atlassian tools missing** → Docker is not running, or `TOOLSETS` in `~/.buddy-council/atlassian.env` is missing `jira_agile`, `jira_links` or `jira_users`. Missing toolsets fail silently.

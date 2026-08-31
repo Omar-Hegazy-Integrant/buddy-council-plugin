@@ -5,6 +5,7 @@ config/sources.json
 *.secrets.json
 .env
 .env.*
+*.env
 
 # OS
 .DS_Store

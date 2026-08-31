@@ -1,5 +1,5 @@
 {
-  "_comment_atlassian": "Jira/Confluence are NOT configured here. The plugin registers Atlassian's official remote MCP server (https://mcp.atlassian.com/v1/mcp/authv2) automatically via .claude-plugin/plugin.json, so Claude Code picks it up the moment the plugin is installed — adding an 'atlassian' entry to this file would create a duplicate server. Authorize it once with /mcp (browser OAuth). Copilot CLI does not read plugin-declared MCP servers reliably, so /bc:setup writes the same entry into ~/.copilot/mcp-config.json instead.",
+  "_comment": "Copy to .mcp.json (gitignored) or let /bc:setup write it. This file carries NO credentials: the vendored servers read ~/.buddy-council/secrets.json, and the Atlassian server reads ~/.buddy-council/atlassian.env. The two exceptions are noted on their entries.",
   "mcpServers": {
     "testrail": {
       "_comment": "Credentials (username, api_key) are read from the secrets file at BC_SECRETS_FILE (default ~/.buddy-council/secrets.json), NOT from here. Put only the non-secret base URL in env. The --directory below uses ${CLAUDE_PLUGIN_ROOT}, which resolves under Claude Code; under Copilot CLI that token does NOT resolve, so /bc:setup rewrites --directory to the absolute plugin path. Setting an env var here still takes precedence if you prefer the legacy inline style.",
@@ -9,6 +9,20 @@
         "TESTRAIL_BASE_URL": "",
         "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
       }
+    },
+    "atlassian": {
+      "_comment": "Jira + Confluence via the Dockerized sooperset/mcp-atlassian server. NOT vendored and NOT declared in the plugin manifest — /bc:setup writes this entry into both .mcp.json and ~/.copilot/mcp-config.json. Credentials live in ~/.buddy-council/atlassian.env (chmod 600), passed with --env-file, so no secret appears here. Requires Docker running and the image pulled: docker pull ghcr.io/sooperset/mcp-atlassian:latest",
+      "_comment_toolsets": "TOOLSETS is set in the env file, not here. It must opt into jira_agile, jira_links and jira_projects — those are NOT part of the server's default toolset, and without them the board, issue-link and project tools silently do not exist.",
+      "_comment_envfile": "--env-file needs an ABSOLUTE path. A leading ~ is not expanded by Docker, and the path is read by the docker CLI on the host, not inside the container.",
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "--env-file",
+        "/absolute/path/to/your/home/.buddy-council/atlassian.env",
+        "ghcr.io/sooperset/mcp-atlassian:latest"
+      ]
     },
     "github": {
       "_comment": "OPTIONAL: only needed if you chose the 'mcp' GitHub enrichment strategy in /bc:setup. Otherwise delete this entry. Requires `github-mcp-server` installed externally — see https://github.com/github/github-mcp-server. Unlike the testrail server, this external server reads GITHUB_TOKEN from its env and cannot read the secrets file, so the token must live here. If you chose the 'cli' strategy, gh CLI handles auth via its own keychain and this entry is not used.",

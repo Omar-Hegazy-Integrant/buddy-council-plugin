@@ -1,44 +1,38 @@
 # Jira Issues Fetch — Provider Skill
 
-Fetch Jira issues using the **official Atlassian Remote MCP Server** (`atlassian`).
+Fetch Jira issues using the **Dockerized `sooperset/mcp-atlassian` server** (`atlassian`).
 
 ## Prerequisites
 
-The `atlassian` MCP server is bundled with the plugin — it is Atlassian's hosted server at
-`https://mcp.atlassian.com/v1/mcp/authv2`, not a vendored local process.
-
-- **Claude Code** registers it automatically from `.claude-plugin/plugin.json` when the plugin is installed.
-- **Copilot CLI** gets it from `~/.copilot/mcp-config.json`, which `/bc:setup` writes.
+The `atlassian` MCP server runs as a Docker container (`ghcr.io/sooperset/mcp-atlassian:latest`). It is not
+vendored and not declared in the plugin manifest — `/bc:setup` registers it in both runtimes' MCP configs,
+pointing at `~/.buddy-council/atlassian.env` for credentials.
 
 Check availability by looking for tools named `mcp__atlassian__*` under Claude Code (e.g.
-`mcp__atlassian__getJiraIssue`) or `getJiraIssue` under Copilot CLI.
+`mcp__atlassian__jira_get_issue`) or `jira_get_issue` under Copilot CLI.
 
-If the MCP tools are NOT available:
+If the MCP tools are NOT available, the cause is almost always one of these, in order of likelihood:
 
-- Tell the user to authorize the server: `/mcp` → **atlassian** → Authenticate (Claude Code), or fully
-  restart Copilot CLI after `/bc:setup`.
-- If the server is present but every call returns 401/403, the user has not completed the browser OAuth
-  consent, or a site admin has not enabled the Rovo MCP server for the site.
-- Do NOT fall back to curl — the MCP server is the required data access method.
+- **Docker is not running.** The container cannot start, so the server never registers. Tell the user to
+  start Docker and restart the CLI.
+- **Setup has not been run**, or was run before 0.19.0 — the config may still hold the retired
+  `mcp.atlassian.com` HTTP entry. Tell them to run `/bc:setup`.
+- **The CLI was not restarted** after setup.
+
+There is **no authorization step** — the server uses the API token in the env file, not browser OAuth. If a
+user asks where to authenticate, tell them there is nothing to approve.
+
+Do NOT fall back to curl — the MCP server is the required data access method. (`/bc:setup` uses curl once,
+to verify credentials before the server is registered; that is the sole exception and it does not apply here.)
 
 ## Input
 
 - `project_key`: Jira project key (from `.buddy-council/sources.json` → `jira.project_key`)
-- `cloud_id`: Atlassian site cloud ID (from `.buddy-council/sources.json` → `jira.cloud_id`)
 - `scope`: Optional — a specific issue key (e.g., "PROJ-123"), a JQL query, or "all"
 
-## Resolving `cloudId` (required by every tool)
-
-Every Atlassian MCP tool takes a `cloudId` identifying which Atlassian site to act on.
-
-1. If `jira.cloud_id` is present in `.buddy-council/sources.json`, use it — no extra call.
-2. Otherwise call `getAccessibleAtlassianResources`, which returns the sites the authorized user can reach:
-   ```json
-   [{ "id": "00000000-0000-0000-0000-000000000000", "url": "https://yourorg.atlassian.net", "name": "yourorg" }]
-   ```
-   Match on `jira.base_url` when set; if exactly one site is returned, use it. If several match and
-   `base_url` does not disambiguate, ask the user which site to use.
-3. Cache the resolved value back into `jira.cloud_id` so later runs skip the lookup.
+**There is no `cloudId` to resolve.** The server is bound to one site by `JIRA_URL` in its env file, so no
+tool takes a site identifier. If you find a `cloud_id` in `sources.json`, it is a leftover from a pre-0.19.0
+config — ignore it.
 
 ## Fetching Strategy
 
@@ -46,27 +40,32 @@ Every Atlassian MCP tool takes a `cloudId` identifying which Atlassian site to a
 
 ### Strategy 1: Single issue (scope is an issue key like "PROJ-123")
 
-Call `getJiraIssue` with `cloudId` and `issueIdOrKey`. Return a single issue.
+Call `jira_get_issue` with `issue_key`. Useful parameters:
+
+- `fields` — comma-separated; defaults to a set of essentials. Pass `"*all"` when you need custom fields.
+- `comment_limit` — number of comments to include (default 10, max 100, `0` to suppress).
+- `include` — comma-separated extras: `comments`, `remote_links`, `transitions`, `changelog`, `watchers`.
+- `use_display_names` — return human-readable custom field names instead of `customfield_NNNNN` keys.
 
 ### Strategy 2: The configured dev board
 
 When the caller wants the board's contents, do not reimplement the scoping here — follow
-`${CLAUDE_PLUGIN_ROOT}/skills/fetch-board-issues/SKILL.md`, which owns the board-scope JQL, the
-Scrum→Kanban fallback, and the active-sprint lookup. This file owns the per-issue field mapping that
-skill reuses.
+`${CLAUDE_PLUGIN_ROOT}/skills/fetch-board-issues/SKILL.md`, which owns the board and sprint calls. This file
+owns the per-issue field mapping that skill reuses.
 
 ### Strategy 3: A set of issues (scope is "all", a feature name, or a JQL string)
 
-Call `searchJiraIssuesUsingJql` with `cloudId` and a `jql` string:
+Call `jira_search` with a `jql` string:
 
 - **All issues in the project**: `project = PROJ ORDER BY created DESC`
 - **Open work only**: `project = PROJ AND statusCategory != Done ORDER BY created DESC`
 - **Scoped to a feature/component**: `project = PROJ AND component = "Checkout"`
 - **Caller supplied raw JQL**: pass it through unchanged
 
-Use `maxResults` (the server caps it; 50 is a safe page size) and page with `nextPageToken` — or
-`startAt` on older responses — until the result set is exhausted or the caller's scope is satisfied.
-Report how many issues were fetched so the Data Contract line is accurate.
+`limit` defaults to **10** — low enough that accepting the default will silently truncate almost any real
+result set. Always set it explicitly (50 is a safe page size) and page with `start_at`, or `page_token` on
+Cloud, until the set is exhausted or the caller's scope is satisfied. Report how many issues were fetched so
+the Data Contract line is accurate.
 
 If a JQL query is rejected as malformed, report the exact server error and the query that produced it.
 Do not silently retry with a broadened query — a wider result set would misrepresent the scope.
@@ -77,7 +76,7 @@ For each issue returned, extract and map fields:
 
 - `key` → issue key (e.g., "PROJ-123")
 - `fields.summary` → title
-- `fields.description` → description (extract text from ADF format — see below)
+- `fields.description` → description (see format note below)
 - `fields.issuetype.name` → issue type (Story, Task, Bug, etc.)
 - `fields.status.name` → status
 - `fields.priority.name` → priority
@@ -128,8 +127,13 @@ Example link extraction:
 
 Extract `["PROJ-456", "PROJ-789"]` into `linked_ids`.
 
-`getJiraIssueRemoteIssueLinks` returns links to systems outside Jira (Confluence pages, external URLs).
-Fetch it only when the caller specifically needs external traceability — it costs an extra call per issue.
+**Remote links** (Confluence pages, external URLs) are not a separate tool. Request them inline with
+`jira_get_issue` using `include: "remote_links"`, which adds a `remote_links` key to the response. Do this
+only when the caller specifically needs external traceability — it costs an extra API round trip per issue.
+
+To create a link rather than read one, use `jira_create_issue_link` (`link_type`, `inward_issue_key`,
+`outward_issue_key`); `jira_get_link_types` lists the valid `link_type` names for the site. Both live in the
+`jira_links` toolset, which the env file must opt into.
 
 ## Feature Extraction
 
@@ -140,25 +144,30 @@ Jira issues have no native "feature" field. Derive it, in order:
 3. `fields.parent.fields.summary` — the parent Epic's summary
 4. Fallback: the project key (e.g., "PROJ")
 
-## Description Format Conversion
+## Description Format
 
-Jira Cloud stores descriptions in Atlassian Document Format (ADF). Convert ADF to plain text:
+This server converts Atlassian Document Format to **Markdown** for you, so a description usually arrives as
+a Markdown string rather than an ADF tree. Use it directly.
 
-- Extract all text nodes recursively from the `content` array
-- Preserve paragraph breaks
-- Convert headings, lists, and code blocks to markdown where possible
-
-If the description is already a plain string (Jira Server / older payloads), use it directly.
+If a raw ADF object does come back (older payloads, unusual field configurations), extract text nodes
+recursively from the `content` array, preserving paragraph breaks. Writes go the other way and are also
+Markdown: `jira_create_issue`, `jira_update_issue` and `jira_add_comment` all take Markdown and convert it,
+so never hand-build ADF and never use Jira wiki markup.
 
 ## Error Handling
 
-- **Not authorized (401)**: the OAuth grant is missing or expired — tell the user to re-authorize via `/mcp`
-  (Claude Code) or to restart Copilot CLI and complete the browser consent.
-- **Permission denied (403)**: the account lacks "Browse Projects"/"View Issues" on that project, or the
-  site admin has not enabled the Rovo MCP server. Name which of the two you cannot distinguish.
-- **Issue not found (404)**: return an empty array `[]`.
-- **Unknown `cloudId`**: re-resolve with `getAccessibleAtlassianResources` and update `jira.cloud_id`.
-- **Invalid project key**: list valid keys with `getVisibleJiraProjects` and prompt the user to re-run `/bc:setup`.
+- **401** — bad or revoked API token. Tell the user to re-run `/bc:setup`, or to check
+  `~/.buddy-council/atlassian.env` directly. Note that quoting a value in that file is a common cause: the
+  quotes become part of the token.
+- **403** — the account lacks "Browse Projects"/"View Issues" on that project. This is a Jira permission
+  problem, not a configuration one.
+- **404** — issue not found; return an empty array `[]`.
+- **Tool missing entirely** — the tool's toolset is not enabled. Board tools need `jira_agile`, link tools
+  need `jira_links`, project/field metadata needs `jira_projects`, user lookup needs `jira_users`. Missing
+  toolsets fail *silently* — the tool simply does not exist rather than erroring — so if a tool you expect is
+  absent, check `TOOLSETS` in `~/.buddy-council/atlassian.env` before assuming anything else is wrong.
+- **Container fails to start** — Docker is not running, or the `--env-file` path is wrong or non-absolute.
+- **Invalid project key** — list valid keys with `jira_get_all_projects` and prompt the user to re-run `/bc:setup`.
 
 Never fabricate issues when a fetch fails. Report the failure and let the caller's Data Contract handling
 decide whether to continue with partial data.

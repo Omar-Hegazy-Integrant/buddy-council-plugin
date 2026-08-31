@@ -44,8 +44,9 @@ Generate three fields matching Jira's expected structure:
   2. **Acceptance Criteria**: Bulleted list under `## Acceptance Criteria` heading
   3. **Related Requirements**: Bulleted list under `## Related Requirements` heading (if any requirements were matched)
 
-**Formatting — standard Markdown, not Jira wiki markup.** The ticket is created through Atlassian's
-official MCP server with `contentFormat: "markdown"`, which converts CommonMark to ADF server-side:
+**Formatting — standard Markdown, not Jira wiki markup.** The ticket is created through the Dockerized
+Atlassian MCP server, which converts Markdown to ADF server-side. There is no `contentFormat` parameter —
+conversion is unconditional, so pass the description as plain Markdown:
 - Headings: `## Heading`
 - Bold: `**bold text**`
 - Italic: `*italic text*`
