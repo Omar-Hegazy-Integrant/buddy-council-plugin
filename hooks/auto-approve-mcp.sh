@@ -38,6 +38,10 @@ except Exception:
     print('')
 " 2>/dev/null)
 
+# The testrail_get_* glob is safe ONLY because every write tool on that server
+# is named testrail_add_*. Never name a TestRail write tool testrail_get_*: the
+# glob would auto-approve it silently, and testrail_add_case/add_cases/add_section
+# create rows in the team's live TestRail.
 case "$TOOL" in
   mcp__testrail__testrail_get_* | mcp__github__get_file_contents | \
   testrail_get_* | get_file_contents | \

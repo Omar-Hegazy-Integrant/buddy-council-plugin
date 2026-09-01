@@ -13,8 +13,10 @@ Verification pipeline and keep their state visible in Jira labels.
 **CRITICAL**:
 
 - Always use MCP tools for Jira. Never use curl, wget, or Bash to call the Jira API.
-- Jira reads/writes go through Atlassian's official server: `mcp__atlassian__*` under Claude Code, bare tool
+- Jira reads/writes go through `mcp-atlassian`: `mcp__atlassian__jira_*` under Claude Code, bare `jira_*`
   names under Copilot CLI.
+- TestRail reads/writes go through the bundled server: `mcp__testrail__testrail_*` under Claude Code, bare
+  `testrail_*` under Copilot CLI. Phase 7 is the only phase that writes there.
 - When asking the user questions, use `vscode_askQuestions`. Never ask in plain text chat.
 
 ## Write Discipline (READ THIS BEFORE ANY WRITE)
@@ -23,7 +25,8 @@ This workflow comments on tickets the dev team owns and creates issues in bulk. 
 than getting the analysis wrong.
 
 - **Default is dry run.** Without `--apply`, you perform **zero** writes: no `jira_create_issue`, no
-  `jira_add_comment`, no `jira_update_issue`. You print the plan and stop.
+  `jira_add_comment`, no `jira_update_issue`, and no `testrail_add_cases`/`testrail_add_section`. You print
+  the plan and stop.
 - **With `--apply`, confirm each phase once.** Show the full batch for that phase — every ticket key, every
   comment body, every label change — then ask once. Execute only after an explicit yes. A yes for one phase
   is not a yes for the next.
@@ -128,7 +131,10 @@ disagree, and repair the *ticket* when it carries none or more than one. Then:
   - Not yet → report waiting time and move on.
 - **`pending-validation`** → cloned but never reviewed (a previous run stopped, or `--apply` was never
   passed). Send it into phase 4 with this run's freshly fetched requirements and test cases.
-- **`ready-for-test-case-creation`** → terminal. Count it in the summary; never reprocess.
+- **`ready-for-test-case-creation`** → terminal **for the label pipeline**: never relabel it, and never send
+  it back through phases 4–6. It is, however, phase 7's input — the approved scenarios still have to become
+  TestRail cases. Phase 7 decides for itself whether a story has already been authored by asking TestRail,
+  not by reading this label.
 
 If `jira_get_issue` does not return comments for this site, **do not guess**. Report that comment-based
 approval detection is unavailable here and fall back to: the reviewer applies the approval label in Jira
@@ -207,6 +213,30 @@ strips every other pipeline label — including a `pending-questions` left over 
 preserving `src-<DEV-KEY>`, the platform label, and anything a human added. Record the approving comment's
 author and timestamp in the log so the audit trail survives.
 
+### Phase 7: Write the test cases
+
+Follow `${CLAUDE_PLUGIN_ROOT}/skills/draft-test-cases/SKILL.md`.
+
+This is the only phase that writes outside Jira. It takes every story at `ready-for-test-case-creation` —
+including ones phase 6 moved there on an earlier run — and turns its approved scenarios into TestRail cases
+in the suite folder the config points at.
+
+Three things to hold onto:
+
+- **It reads the scenarios from the progress log**, not by re-parsing the Jira description. Phase 5 stores
+  them structurally for exactly this reason: descriptions round-trip through wiki markup on Server/DC and
+  come back reshaped. Parsing the ticket is a fallback for pre-existing entries only.
+- **TestRail decides what has already been authored**, via `testrail_get_cases_by_refs` on the dev key. The
+  label stays `ready-for-test-case-creation` afterwards — there is no fifth pipeline state, and adding one
+  would break the mutual exclusivity the whole state machine depends on.
+- **Skip the phase entirely, with a visible line, when `test_cases.authoring` is unconfigured.** Do not
+  guess a template: it decides which body fields a case has, so a wrong guess writes the steps into a field
+  nobody reads. Say `Phase 7: skipped — test_cases.authoring not configured (run /bc:setup)` and finish the
+  run normally. An unconfigured TestRail does not make the V&V run a failure.
+
+Confirm once for the whole batch under `--apply`, like every other write phase, showing every case title,
+its folder, and its refs before anything is created.
+
 ### Final report
 
 Always end with a status table, in dry run too:
@@ -225,12 +255,22 @@ Pipeline
   pending-questions              1   VV-47 → PROJ-131 (asked 4d ago, 2 of 3 answered)
   would clone                    4   PROJ-150, PROJ-151, PROJ-152, PROJ-153
 
-Clone ↔ original pairs (Jira links cannot be created via MCP — link manually if wanted)
-  VV-45 → PROJ-123
-  VV-46 → PROJ-124
+Test cases (TestRail project 45, suite 9277)
+  VV-40  PROJ-118 [iOS]      already authored — 3 cases (found by refs)
+  VV-41  PROJ-119 [Android]  would create 2 → V&V/Sync/Offline handling
+  VV-42  PROJ-120 [iOS]      would create 3 → V&V/Checkout   (folder would be created)
+  untraced, not created      VV-42 S4 "Rate limiting behaviour"
 
-Run with --apply to perform the 4 clones, 1 comment, and 3 label changes above.
+Clone ↔ original pairs
+  VV-45 → PROJ-123   linked (Relates)
+  VV-46 → PROJ-124   label-only (site refused link creation)
+
+Run with --apply to perform the 4 clones, 1 comment, 3 label changes, and 5 test cases above.
 ```
+
+When phase 7 was skipped, say why on its own line rather than omitting the section —
+`Test cases: skipped — test_cases.authoring not configured (run /bc:setup)`. A missing section reads as
+"nothing to do", which is a different claim.
 
 ## Progress Log
 
@@ -258,6 +298,21 @@ the repo-local `.git/info/exclude` exactly as `manage-progress-log` Operation 1 
       "concern_comment_id": "10501",
       "concern_posted_at": "2026-08-15T11:02:00Z",
       "scenarios_written_at": "2026-08-18T14:30:00Z",
+      "scenarios": [
+        {
+          "id": "S1",
+          "title": "Sync retries on transient network failure",
+          "traces_to": ["CWA-REQ-85"],
+          "given": "the dashboard is open and the device drops connectivity mid-sync",
+          "when": "the sync request fails with a retryable error",
+          "then": "it retries up to the bounded limit and surfaces the offline banner",
+          "coverage": "new",
+          "covered_by": null,
+          "platform_notes": "iOS only; Android handles this in the background service"
+        }
+      ],
+      "testrail_case_ids": [1234, 1235],
+      "cases_created_at": "2026-08-19T09:20:00Z",
       "approved_by": null,
       "approved_at": null,
       "last_checked_at": "2026-08-19T09:14:22Z"
@@ -268,6 +323,16 @@ the repo-local `.git/info/exclude` exactly as `manage-progress-log` Operation 1 
 
 All timestamps ISO 8601 UTC. `state` mirrors the Jira label; when they disagree, **Jira wins** and you
 repair the file. `platform_source` is `os_field` or `title_prefix` so a reader can judge confidence.
+
+`scenarios` is written by phase 5 and read by phase 7. It exists because the Jira description is a **lossy**
+carrier: `jira_update_issue` converts markdown to wiki markup on Server/DC, so what phase 5 wrote is not
+what a later read returns. Keeping the structured form locally means phase 7 never has to re-parse prose it
+already had in hand. It is a cache of phase 5's output, not a second source of truth about approval — that
+still comes from Jira.
+
+`testrail_case_ids` and `cases_created_at` record what phase 7 wrote. They are a **secondary** guard only:
+phase 7 asks TestRail first (`testrail_get_cases_by_refs` on the dev key), because the external system is
+the truth and this file only remembers *why*.
 
 ## Error Handling
 
@@ -285,6 +350,15 @@ repair the file. `platform_source` is `os_field` or `title_prefix` so a reader c
 - **403** → the account lacks create/comment permission on that project, or an IP allowlist is blocking the
   request. Name both; you cannot tell them apart from the response.
 - **Comments unavailable from `jira_get_issue`** → report it and fall back to reviewer-applies-label.
+- **`test_cases.authoring` unconfigured** → skip phase 7 with a visible line and finish the run. Never guess
+  a `template_id`; it decides which body fields exist, so the wrong one writes steps into a dead field.
+- **Scenario block unparseable for a story** → skip that story in phase 7 and report what was found. Never
+  author a partial scenario set: the half that is missing is invisible in TestRail.
+- **`testrail_add_cases` fails for one case** → the others still run (the tool loops `add_case`; TestRail has
+  no bulk-create endpoint). Record it and list it in the report. A required custom field is the usual cause
+  and TestRail names it in the error — pass that through verbatim.
+- **TestRail unreachable while Jira is fine** → phases 1–6 still stand. Report phase 7 as failed, not the
+  whole run, and say the tickets remain at `ready-for-test-case-creation` for the next attempt.
 
 ## Boundaries
 
@@ -292,7 +366,10 @@ This agent runs the V&V sprint pipeline. It does **not**:
 
 - Create or link dev-board stories, or fix parity gaps (it reports them — creating a counterpart story is a
   dev-team decision)
-- Write TestRail test cases (the pipeline ends at `ready-for-test-case-creation`)
+- Write *finished* TestRail test cases. Phase 7 writes **skeletons** from the approved high-level scenarios —
+  title, preconditions, one step per Given/When/Then — for the V&V team to expand. It never invents coverage
+  beyond what a reviewer approved, never authors a case from a scenario that traces to no requirement, and
+  never touches cases it did not create
 - Transition tickets through workflow statuses (labels only, unless the user explicitly asks)
 - Edit the dev story's description or fields — it only ever adds a comment there
 

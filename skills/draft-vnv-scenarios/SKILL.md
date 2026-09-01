@@ -91,7 +91,34 @@ indistinguishable from an oversight, and a reviewer needs to see that the check 
    (`${CLAUDE_PLUGIN_ROOT}/agents/vnv-sprint-prep-agent.agent.md`): strip every pipeline label — including
    the `pending-validation` from cloning and any `pending-questions` from an earlier round — then add this
    one. `src-<DEV-KEY>`, the platform label, and human-added labels are preserved.
-5. Stamp `scenarios_written_at` (ISO 8601 UTC) in the progress log.
+5. Stamp `scenarios_written_at` (ISO 8601 UTC) in the progress log, **and store the scenarios structurally**
+   alongside it as `stories[].scenarios`:
+
+   ```json
+   "scenarios": [
+     {
+       "id": "S1",
+       "title": "Sync retries on transient network failure",
+       "traces_to": ["CWA-REQ-85"],
+       "given": "the dashboard is open and the device drops connectivity mid-sync",
+       "when": "the sync request fails with a retryable error",
+       "then": "it retries up to the bounded limit and surfaces the offline banner",
+       "coverage": "new",
+       "covered_by": null,
+       "platform_notes": "iOS only; Android handles this in the background service"
+     }
+   ]
+   ```
+
+   `coverage` is `"new"` or `"covered"`; `covered_by` carries the case id (`"TC-1234"`) when covered, else
+   `null`. Store what you just rendered — do not re-read the ticket to build it.
+
+   **Why this exists.** The markdown you write above does not come back as markdown. `jira_update_issue`
+   converts it to ADF on Cloud and to **wiki markup on Jira Server/Data Center**, so a later read returns
+   `h3. S1 — …` rather than `### S1 — …`, and the HTML-comment markers may not survive at all. Phase 7 turns
+   these scenarios into TestRail cases and must not depend on re-parsing prose that has been through that
+   round trip. This is a cache of what you rendered, not a second source of truth: approval state still comes
+   from Jira.
 
 **Media warning.** Editing a description through this server drops ADF media nodes — embedded images do not
 survive the round-trip. Before writing, check the fetched description for media nodes. If any are present,

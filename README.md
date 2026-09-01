@@ -28,7 +28,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis or answers directly |
 | `/bc:onboarding` | Walk a new team member through the product feature-by-feature with paced demos, optional code mapping, and an assessment. Resumes across sessions |
 | `/bc:codemap "<feature>"` | Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations |
-| `/bc:vnv-sprint-prep` | V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, and drive them through scenario review to ready-for-test-case-creation |
+| `/bc:vnv-sprint-prep` | V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, drive them through scenario review, and write the approved scenarios into TestRail as test cases |
 
 These descriptions are the `description:` frontmatter in `commands/*.md` — the same text both CLIs show in their `/` menus. Keep the table and the frontmatter in sync when either changes.
 
@@ -106,7 +106,7 @@ The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/ho
 If your Copilot version still prompts for MCP reads (MCP tool naming in hooks varies by version), pre-approve them at launch with `--allow-tool`:
 
 ```bash
-copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case)'
+copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates)'
 ```
 
 Append the read-only tools for any other sources you configured:
@@ -393,10 +393,17 @@ test-case writing.
 /bc:vnv-sprint-prep PROJ-123                     # One story and its platform counterpart
 ```
 
-Six phases: confirm the V&V board → fetch the current sprint and check that every iOS story has a linked
+Seven phases: confirm the V&V board → fetch the current sprint and check that every iOS story has a linked
 Android counterpart (via the `OS` field, falling back to title prefixes) → clone the stories onto the V&V
 board → validate each clone against requirements and test cases → write high-level scenarios into the ticket
-→ mark ready for test-case creation once the reviewer approves.
+→ mark ready for test-case creation once the reviewer approves → **create the TestRail cases**.
+
+That last phase turns each approved ticket's scenarios into cases in the suite folder your config points at,
+setting `refs` to the requirement IDs and the dev story key. Those refs are what let `/bc:coverage` see the
+requirement as covered on its next run — a case created without them would leave the requirement untested
+*and* add a new orphan. The cases are **skeletons** (title, preconditions, one step per Given/When/Then) for
+the V&V team to expand, not finished tests. It needs `test_cases.authoring` in your config; without it the
+phase skips itself with a visible line rather than guessing which TestRail template to use.
 
 It is **resumable and that's the normal way to use it**. Re-run it and it re-reads the dev team's replies to
 questions it raised, folds in the answers, re-validates, and advances any ticket whose blocker has cleared —
@@ -472,8 +479,9 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
 - Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
-- The vendored MCP servers (TestRail, Jama) are **read-only**. Every write path in the plugin goes to Jira via `mcp-atlassian` — `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). All of them **always prompt**: they are deliberately excluded from the auto-approve hook and from every `--allow-tool` recipe. Do not add them
-- **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own. A plain run creates nothing, comments nowhere, and relabels nothing; `--apply` executes after one batch confirmation per phase
+- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section`. The Jama server remains read-only (a placeholder)
+- The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*`. Never name a write tool `testrail_get_*`
+- **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes no test cases; `--apply` executes after one batch confirmation per phase
 - The Jira token lives in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `sources.json`, not in `secrets.json`, not in either MCP config, which reference it only by absolute path. That file is the single place to rotate or revoke it
 - Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)

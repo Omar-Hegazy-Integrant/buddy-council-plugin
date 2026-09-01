@@ -17,7 +17,7 @@ Before anything else, check whether `.buddy-council/sources.json` exists in the 
 ```
 Buddy-Council is already configured in this project:
   Requirements:  excel — /path/to/requirements.xls (7 columns mapped)
-  Test cases:    testrail — https://company.testrail.io (project 1)
+  Test cases:    testrail — https://company.testrail.io (project 1, authoring configured)
   Jira board:    PROJ board 42 (or: NOT VERIFIED — re-testing this run)
   Enrichment:    cli
   Code mapping:  enabled
@@ -173,6 +173,49 @@ Test cases come from **TestRail** — currently the only supported test-case sou
     ```
 - If successful, ask which project to use (list the projects returned)
 - Ask if they want to filter by suite (optional)
+
+### Step 2a: Case authoring defaults (one question, only when the tools are live)
+
+`/bc:vnv-sprint-prep` phase 7 writes test cases into this instance. Creating a case needs three ids and a
+folder policy that have no safe universal default, so resolve them **now**, once, rather than asking on every
+run. This is a single question — everything else is detected.
+
+Skip this sub-step entirely when the MCP tools are not yet live (first-time setup): omit `authoring`, and the
+next `/bc:setup` run fills it in. Phase 7 skips itself with a visible line until it exists, which is correct
+— it must never guess a template.
+
+With the tools live:
+
+1. `testrail_get_templates` for the project. **Pick the steps-style template automatically** — the one whose
+   name contains "Steps" — because scenarios are written as Given/When/Then and only that template has the
+   `custom_steps_separated` field to hold them. If no steps template exists, take the default and say that
+   steps will be written as plain text into `custom_steps`/`custom_expected` instead.
+2. `testrail_get_case_types` → default to the type named "Functional", else the instance default.
+3. `testrail_get_priorities` → default to the middle priority, else the instance default.
+4. Ask the **one** question — where generated cases should live:
+
+   > Where should `/bc:vnv-sprint-prep` file the test cases it generates?
+   > - Under a `V&V` folder, mirroring each feature (`V&V/Sync/Offline handling`) — keeps generated cases separate from hand-written ones
+   > - Mirroring the feature directly (`Sync/Offline handling`) — mixed in with existing cases
+   > - All in one fixed folder — you name it
+
+Write the block, and show the resolved names (not just ids) in the Step 4 recap so the user can veto:
+
+```json
+"authoring": {
+  "template_id": 2,
+  "type_id": 7,
+  "priority_id": 4,
+  "section_strategy": "feature",
+  "section_root": "V&V",
+  "create_missing_sections": true
+}
+```
+
+`section_strategy` is `"feature"` (folder path from each requirement's feature) or `"fixed"` (everything in
+`section_root`). `section_root` is `null` when the user picked the un-prefixed option.
+`create_missing_sections` defaults to `true`; set it to `false` only if the user says their suite structure
+is fixed and a missing folder should be an error.
 
 ## Code mapping — automatic, no questions
 
@@ -499,6 +542,8 @@ Ready to save:
   Item types:    Requirement, MAS Software Requirement Specification (Text excluded — narrative)
   Enrichment:    cli (gh CLI, smoke test OK)
   Test cases:    testrail — https://company.testrail.io, project 1
+  Case authoring: template "Test Case (Steps)", type "Functional", priority "Medium"
+                 generated cases → V&V/<feature>, missing folders created
   Jira:          connected as Jane Doe — jira.company.com (Server/Data Center)
   Jira board:    PROJ board 42 "PROJ Scrum Board" (scrum) — 37 open issues
   V&V board:     PROJ board 77 "V&V Board" — same project, clones stamped label "vnv"
@@ -556,7 +601,15 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
     "provider": "testrail",
     "base_url": "https://company.testrail.io",
     "project_id": 1,
-    "suite_id": null
+    "suite_id": null,
+    "authoring": {
+      "template_id": 2,
+      "type_id": 7,
+      "priority_id": 4,
+      "section_strategy": "feature",
+      "section_root": "V&V",
+      "create_missing_sections": true
+    }
   },
   "jira": {
     "base_url": "https://jira.company.com",
@@ -822,7 +875,7 @@ The bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`
 Because MCP tool naming in Copilot's hooks varies by version, MCP reads may still prompt there. Print a ready-to-paste `--allow-tool` launch recipe covering the MCP read tools that were just configured, and tell the user it's only needed if prompts appear (writes like Jira creation still prompt by design):
 
 - Always include the TestRail read tools:
-  `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case)`
+  `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates)` — deliberately **not** `testrail(testrail_add_case)`, `testrail(testrail_add_cases)`, or `testrail(testrail_add_section)`, which must keep prompting
 - If Jira was configured, also add the Atlassian read tools: `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)` — deliberately **none** of `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, or `jira_add_issues_to_sprint`, which must keep prompting
 - If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
 

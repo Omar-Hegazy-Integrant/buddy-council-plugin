@@ -2,6 +2,10 @@
 
 Fetch test cases from TestRail using the `testrail` MCP server.
 
+> **This file covers reading.** The same server can also *create* cases — see
+> [Creating test cases](#creating-test-cases-write) at the bottom. Those tools write to the team's live
+> TestRail and always prompt.
+
 ## Prerequisites
 
 The `testrail` MCP server must be configured in `.mcp.json` and running. Check if the MCP tools are available by looking for tools prefixed with `mcp__testrail__` (e.g., `mcp__testrail__testrail_get_cases`).
@@ -115,3 +119,58 @@ The `custom_jama_req_id` field contains Jama requirement references. Parse this 
 - A single ID: "CWA-REQ-85"
 - Multiple IDs: "CWA-REQ-85, CWA-REQ-86"
 - IDs with prefixes or formatting variations — normalize to consistent format
+
+## Creating test cases (write)
+
+`mcp__testrail__testrail_add_cases` creates one or more cases; `testrail_add_case` is the single-case
+wrapper. **These write to the team's live TestRail and always prompt** — they are excluded from the
+auto-approve hook on purpose. Never call them to "check" something; use the read tools for that.
+
+### Choosing the folder
+
+Every case must land in a section. Pass one of these, at batch level or per case:
+
+- `section_id` — a numeric id, validated against the suite before anything is written. A wrong id would
+  quietly file cases into another team's folder, so it is checked rather than trusted.
+- `section_path` — `"Login/Negative cases"`, matched case-insensitively against the section tree.
+  `create_missing_sections` (default true) creates missing folders in the chain and reports them under
+  `sections_created`. Set it to `false` when the team's suite structure is fixed and a missing folder should
+  be an error instead.
+
+Entries inside `cases` may override the batch target with their own `section_id`/`section_path`, so one call
+can write into several folders. Read `mcp__testrail__testrail_get_sections` first when you need to show the
+user where cases will go — it returns a derived `path` on every section, which is exactly what
+`section_path` accepts.
+
+### Building a case
+
+Use the readable aliases; the server maps them onto TestRail's field names:
+
+| You pass | TestRail field |
+|---|---|
+| `preconditions` | `custom_preconds` |
+| `steps` | `custom_steps` |
+| `expected` | `custom_expected` |
+| `steps_separated` | `custom_steps_separated` — `[{"content": ..., "expected": ...}]`, needs a steps template |
+| `custom_fields` | merged as-is; a missing `custom_` prefix is added |
+
+`title` is the only required field. `refs` is the built-in References field — put requirement IDs there
+(`"CWA-REQ-85,CWA-REQ-86"`) so `testrail_get_cases_by_refs` can find the case later. `type_id`,
+`priority_id`, and `template_id` take **ids, not names**: resolve them with `testrail_get_case_types`,
+`testrail_get_priorities`, and `testrail_get_templates`.
+
+**Against an unfamiliar instance, call `testrail_get_case_fields` first.** A required custom field you did
+not set is the usual cause of a 400, and the error names the field.
+
+### Before writing anything
+
+1. **Dry-run first** when creating more than a couple of cases: `dry_run: true` resolves folders and
+   duplicate-checks without creating anything, so you can show the user the plan.
+2. **Leave `skip_if_title_exists` on** (the default). It skips a case whose title already exists in the
+   target folder, which makes a re-run safe. Turn it off only when the team genuinely wants duplicate
+   titles.
+3. **Report `failed` verbatim.** TestRail has no bulk-create endpoint, so the server loops `add_case`: a
+   failed case does not stop the others. A silently dropped case is a test that never gets written.
+
+The response shape is `{dry_run, created[], skipped[], failed[], sections_created[]}`, where each `created`
+entry carries the new `id`, its `section_path`, and a browse `url`.

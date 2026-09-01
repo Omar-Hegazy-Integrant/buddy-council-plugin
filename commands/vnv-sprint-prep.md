@@ -1,11 +1,12 @@
 ---
-description: V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, and drive them through scenario review to ready-for-test-case-creation.
+description: V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, drive them through scenario review, and write the approved scenarios into TestRail as test cases.
 ---
 
 # /bc:vnv-sprint-prep — V&V Sprint Preparation
 
 Walk a sprint's dev stories through the V&V team's pipeline: platform-parity check → clone to the V&V
-board → validate against requirements and test cases → high-level scenarios → ready for test-case creation.
+board → validate against requirements and test cases → high-level scenarios → reviewer approval → TestRail
+test cases.
 
 The workflow is **resumable**. Run it once to start a sprint, then re-run it as the dev team answers your
 questions and the reviewer approves your scenarios — each run picks up where the last left off and advances
@@ -42,7 +43,7 @@ This workflow writes to tickets other people own. Three rules hold at all times:
 3. Resolve the V&V board: `--board` if given, else `jira.vnv_board`. If neither exists, ask for the URL now, parse it, and record it. **Refuse only if it resolves to the same board *id* as the dev board.** A shared project is supported — resolve `vnv_board.discriminator` (what the V&V board's filter keys off) so clones land on the right board.
 4. Follow `${CLAUDE_PLUGIN_ROOT}/agents/vnv-sprint-prep-agent.agent.md`, passing the scope and flags.
 
-## The Six Phases
+## The Seven Phases
 
 | # | Phase | What it does | Writes? |
 |---|---|---|---|
@@ -52,6 +53,13 @@ This workflow writes to tickets other people own. Three rules hold at all times:
 | 4 | **Validate** | Check each clone against requirements and test cases for gaps, conflicts, and contradictions. Concerns → comment on the **original dev story**, label the clone `pending-questions` | yes |
 | 5 | **Scenarios** | Write high-level scenarios into the V&V ticket's description; label `pending-scenario-validation` | yes |
 | 6 | **Ready** | Once the designated reviewer approves in a comment, relabel `ready-for-test-case-creation` | yes |
+| 7 | **Test cases** | Turn each approved ticket's scenarios into TestRail cases in the configured suite folder, with `refs` pointing back at the requirements and the dev story, then comment the case links onto the V&V ticket | yes |
+
+Phase 7 writes **skeleton** cases — title, preconditions, one step per Given/When/Then — for the V&V team to
+expand. It creates nothing from a scenario that traces to no requirement, and nothing from a scenario phase 5
+already marked as covered by an existing case. It skips itself with a visible line when
+`test_cases.authoring` is unconfigured, because the template alone decides which body fields a case has and
+guessing it writes the steps into a field nobody reads. Run `/bc:setup` to fill it in.
 
 ## Resuming
 

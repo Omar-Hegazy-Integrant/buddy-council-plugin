@@ -24,14 +24,18 @@ buddy_council_plugin/
 │   ├── fetch-test-cases/        # Router: delegates to configured provider
 │   ├── normalize-artifacts/     # Clean, normalize IDs, cross-link
 │   ├── detect-contradictions/   # Core analysis (7 contradiction types)
-│   └── analyze-coverage/        # Coverage gap detection and metrics
+│   ├── analyze-coverage/        # Coverage gap detection and metrics
+│   ├── check-platform-parity/   # V&V phase 2: iOS ↔ Android counterparts
+│   ├── clone-to-vnv-board/      # V&V phase 3: sprint stories → V&V board
+│   ├── draft-vnv-scenarios/     # V&V phase 5: high-level scenarios → ticket
+│   └── draft-test-cases/        # V&V phase 7: approved scenarios → TestRail cases
 ├── providers/                   # Platform-specific data fetching instructions
 │   ├── excel/fetch.md           # Jama Excel export parser
 │   ├── testrail/fetch.md        # TestRail via MCP tools
 │   └── jama/fetch.md            # Jama API (placeholder, auth blocked)
 ├── mcp-servers/                 # Standalone MCP servers wrapping external APIs
 │   ├── testrail-server/         # Python MCP server for TestRail REST API
-│   │   ├── server.py            # 5 read-only tools (projects, suites, sections, cases, case)
+│   │   ├── server.py            # 10 read tools + 3 write tools (add_case/add_cases/add_section)
 │   │   └── pyproject.toml       # Dependencies: mcp[cli], httpx
 │   └── jama-server/             # Placeholder for future Jama MCP server
 │       └── server.py            # Empty skeleton

@@ -7,7 +7,15 @@
     "provider": "testrail",
     "base_url": "https://your-instance.testrail.io",
     "project_id": 1,
-    "suite_id": null
+    "suite_id": null,
+    "authoring": {
+      "template_id": 2,
+      "type_id": 7,
+      "priority_id": 4,
+      "section_strategy": "feature",
+      "section_root": "V&V",
+      "create_missing_sections": true
+    }
   },
   "jira": {
     "base_url": "https://jira.company.com",
