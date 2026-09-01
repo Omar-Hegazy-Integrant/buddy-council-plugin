@@ -39,7 +39,7 @@ These descriptions are the `description:` frontmatter in `commands/*.md` — the
 - A TestRail account with API access (for test cases)
 - An Excel export from Jama (for requirements), or direct Jama API access (when available)
 - Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your sheet links GitHub docs
-- An Atlassian Cloud account with access to your team's Jira dev board, plus an [API token](https://id.atlassian.com/manage-profile/security/api-tokens). `/bc:setup` requires the board — it feeds in-flight work into contradiction and coverage analysis, and is where `/bc:validate` files tickets. No site-admin action is needed. If the token isn't ready, setup records the board as *pending* and finishes — the requirements-vs-test-cases commands work without it
+- A Jira account with access to your team's dev board, plus a token. **Both deployments are supported**: on **Cloud** that's your email + an [API token](https://id.atlassian.com/manage-profile/security/api-tokens); on **Server / Data Center** it's a Personal Access Token from your Jira profile (avatar → Profile → Personal Access Tokens). `/bc:setup` detects which you're on and asks for the right one. It requires the board — that feeds in-flight work into contradiction and coverage analysis, and is where `/bc:validate` files tickets. No site-admin action is needed. If the token isn't ready, setup records the board as *pending* and finishes — the requirements-vs-test-cases commands work without it
 
 ## Installation
 
@@ -264,7 +264,9 @@ Add an `atlassian` entry here too — it is an ordinary stdio server, and both r
 }
 ```
 
-The `--env-file` path must be **absolute** — a leading `~` is not expanded. The version is pinned on purpose: the server changed its default `TOOLSETS` in 0.22.0, so floating to latest could silently change which tools exist. Create the env file with your Atlassian credentials (`chmod 600`):
+The `--env-file` path must be **absolute** — a leading `~` is not expanded. The version is pinned on purpose: the server changed its default `TOOLSETS` in 0.22.0, so floating to latest could silently change which tools exist. Create the env file with your credentials (`chmod 600`), using the shape that matches your deployment.
+
+**Jira Cloud** — email + API token, Confluence at `<site>/wiki`:
 
 ```bash
 JIRA_URL=https://yourorg.atlassian.net
@@ -276,6 +278,19 @@ CONFLUENCE_API_TOKEN=your-api-token
 TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
 ENABLED_TOOLS=jira_get_issue,jira_search,jira_create_issue,jira_update_issue,jira_add_comment,jira_get_transitions,jira_transition_issue,jira_search_fields,jira_get_agile_boards,jira_get_board_issues,jira_get_sprints_from_board,jira_get_sprint_issues,jira_add_issues_to_sprint,jira_get_link_types,jira_create_issue_link,jira_get_all_projects,jira_get_project_issue_types,jira_get_create_fields,jira_get_project_fields,jira_get_user_profile,jira_search_assignable_users,confluence_search,confluence_get_page,confluence_get_page_children,confluence_get_comments
 ```
+
+**Jira Server / Data Center** — Personal Access Tokens, and Confluence on its own host:
+
+```bash
+JIRA_URL=https://jira.company.com
+JIRA_PERSONAL_TOKEN=your-jira-pat
+CONFLUENCE_URL=https://confluence.company.com
+CONFLUENCE_PERSONAL_TOKEN=your-confluence-pat
+TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
+ENABLED_TOOLS=<same list as above>
+```
+
+**Never mix the two shapes.** The server picks its auth method from which variables are present, so a stray `JIRA_USERNAME` next to a PAT makes it try the wrong one — and a stale Data Center PAT left behind after a Cloud migration produces 401s that look like a bad token rather than a config error. Add `JIRA_SSL_VERIFY=false` only if your Data Center instance uses an internal CA and you accept the tradeoff.
 
 **`TOOLSETS` is not optional.** `jira_agile`, `jira_links`, `jira_projects` and `jira_users` are not in the server's default set, and an omitted toolset fails *silently* — the tools just don't appear. Values must be unquoted; the env-file parser is literal, so quotes become part of the token.
 
@@ -298,7 +313,7 @@ ENABLED_TOOLS=jira_get_issue,jira_search,jira_create_issue,jira_update_issue,jir
 }
 ```
 
-`board.id` is the integer from the board URL and is passed straight to the Agile API. There is no `cloud_id` — the server is bound to one site by `JIRA_URL`; drop it if an older config still has one. Set `pending: true` if your token isn't ready yet; analysis commands will skip the board with a visible line and `/bc:validate` will refuse real ticket creation until `/bc:setup` clears it.
+`deployment` is `cloud` or `server`, detected by `/bc:setup` from `/rest/api/2/serverInfo`; it selects the auth shape and the REST API version (Cloud serves `/rest/api/3`, Data Center tops out at `/rest/api/2`). `board.id` is the integer from the board URL and is passed straight to the Agile API — which is unversioned and identical on both. There is no `cloud_id` — the server is bound to one site by `JIRA_URL`; drop it if an older config still has one. Set `pending: true` if your token isn't ready yet; analysis commands will skip the board with a visible line and `/bc:validate` will refuse real ticket creation until `/bc:setup` clears it.
 
 **5. V&V workflow (only for `/bc:vnv-sprint-prep`).** Three more keys inside the same `jira` block:
 

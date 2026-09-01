@@ -205,7 +205,8 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 
 Jira/Confluence are **not** vendored here. They use the community server
 [`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian), launched with `uvx` at a pinned
-version (`mcp-atlassian@0.23.1`) and authenticated with an Atlassian API token. Running it through `uv` —
+version (`mcp-atlassian@0.23.1`) and authenticated with an API token on Cloud or a Personal Access Token on
+Server/Data Center — it supports both deployments, which the retired official server did not. Running it through `uv` —
 already required for the TestRail server and the Excel parser — means no extra prerequisite and no
 background daemon. `/bc:setup` writes the entry into both `.mcp.json` (Claude Code) and
 `~/.copilot/mcp-config.json` (Copilot CLI); it is deliberately **not** declared in a plugin manifest,

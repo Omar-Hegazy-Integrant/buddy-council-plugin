@@ -45,8 +45,9 @@ Generate three fields matching Jira's expected structure:
   3. **Related Requirements**: Bulleted list under `## Related Requirements` heading (if any requirements were matched)
 
 **Formatting — standard Markdown, not Jira wiki markup.** The ticket is created through the Atlassian MCP
-server, which converts Markdown to ADF server-side. There is no `contentFormat` parameter —
-conversion is unconditional, so pass the description as plain Markdown:
+server, which converts Markdown into whatever the deployment stores — ADF on Cloud, wiki markup on
+Server/Data Center. There is no `contentFormat` parameter; conversion is unconditional. Pass plain Markdown
+and let the server handle it — hand-writing wiki markup would be double-encoded on Cloud, and vice versa:
 - Headings: `## Heading`
 - Bold: `**bold text**`
 - Italic: `*italic text*`

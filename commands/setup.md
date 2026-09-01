@@ -31,6 +31,15 @@ Only walk the steps for the sections the user names; carry every other section o
 
 - **Missing `jira` block** → the config predates the requirement, or an earlier run was abandoned. Say so and walk Step 3 regardless of what they asked to change.
 - **`jira.pending` is `true`** → re-verify now. Run the server preflight (Step 3a) and the credential check (Step 3b); if both pass, run the board check from Step 3c, drop `pending`, and report `Jira board: PROJ board 42 — verified`. If it still fails, leave `pending` as it is and remind them `/bc:validate` stays blocked until it clears. Never silently keep a stale `pending: true` that would now verify.
+- **`jira.base_url` no longer matches `jira.deployment`** → the team migrated Jira, almost always Server/DC
+  → Cloud. Detect it by re-probing `<base_url>/rest/api/2/serverInfo` (Step 3b) and comparing `deploymentType`
+  against the recorded value. On a mismatch, walk Step 3: the auth model changes entirely — a Data Center PAT
+  does not work on Cloud, and the env file must be rewritten from `JIRA_PERSONAL_TOKEN` to
+  `JIRA_USERNAME`+`JIRA_API_TOKEN`. Say exactly that, and **delete the stale variables** rather than leaving
+  both shapes in the file. Board and project ids change too on a Cloud migration, so re-verify the board
+  rather than trusting the recorded id.
+- **`jira.deployment` is missing entirely** → the config predates deployment detection. Probe once and record
+  it, without re-walking Step 3 if everything else still verifies.
 - **`jira.cloud_id` is present, or either MCP config has an `atlassian` entry pointing at `mcp.atlassian.com`** → this config predates 0.19.0, when Jira moved off Atlassian's OAuth server. **Remove the stale `atlassian` entry from both MCP configs and drop `cloud_id` immediately**, as part of the Step 0a automatic repair — a user who answers "nothing" must not be left with a server that 401s on every call. Then walk Step 3 to collect the API token and write the `uvx` entry. Say why in one line.
 
 **If it does not exist**, run all steps in order.
@@ -225,7 +234,7 @@ background daemon. It authenticates with an **Atlassian API token**. Unlike earl
 this step **does collect credentials** — there is no browser OAuth. They go into
 `~/.buddy-council/atlassian.env`, never into the repo and never into an MCP config.
 
-This step has four parts: check `uvx`, collect credentials, pick the dev board, then the V&V settings.
+This step has four parts: check `uvx`, identify the deployment and collect credentials, pick the dev board, then the V&V settings.
 
 ### 3a: Server preflight
 
@@ -249,22 +258,58 @@ one line — `Atlassian server: mcp-atlassian 0.23.1 ready` — not as a wall of
 future release silently change which tools exist. Write `mcp-atlassian@0.23.1` in both MCP configs and bump
 it deliberately, the same way the vendored servers' `uv.lock` is bumped.
 
-### 3b: Credentials
+### 3b: Deployment type, then credentials
 
-Ask for three things, once:
+**Jira comes in two deployments and they authenticate differently.** Ask for the URL first and settle this
+before asking for anything else — guessing wrong wastes the user's time on a token that cannot work.
 
-> 1. Your Atlassian site URL — e.g. `https://yourorg.atlassian.net`
-> 2. Your Atlassian account email
-> 3. An API token — create one at https://id.atlassian.com/manage-profile/security/api-tokens
+> What is your Jira URL? e.g. `https://yourorg.atlassian.net` (Cloud) or `https://jira.company.com`
+> (Server / Data Center)
 
-**Derive the Confluence settings; do not ask for them separately.** On Atlassian Cloud, Confluence lives at
-`<site>/wiki` and accepts the *same* account email and API token. Compute
-`CONFLUENCE_URL = <site>/wiki` and reuse the credentials. Show the derived value in the Step 4 recap and let
-the user correct it if their Confluence is on a different site — but never turn this into three more
-questions.
+Normalize it before storing: strip a trailing slash and any path (`/jira`, `/browse/...`) so `base_url` is
+the bare origin.
 
-Normalize the site URL before storing it: strip a trailing slash and any path (`/jira`, `/browse/...`) so
-`base_url` is the bare origin.
+#### Detect the deployment — don't infer it from the hostname alone
+
+A `*.atlassian.net` host is always Cloud, but the converse does not hold: a Cloud site can sit behind a
+custom domain. Ask the server:
+
+```bash
+curl -sS "<base_url>/rest/api/2/serverInfo"
+```
+
+`deploymentType` comes back as `"Cloud"` or `"Server"` (Data Center reports `Server`). This endpoint needs no
+credentials on most instances, which is why it runs before the token question. If it is locked down, fall
+back to the hostname rule and say you did, so a wrong guess is visible rather than silent.
+
+Record the result as **`jira.deployment`** (`"cloud"` or `"server"`) in `sources.json`. Everything below
+branches on it, and recording it is what lets a later re-run notice a Cloud migration.
+
+#### Then collect credentials, per deployment
+
+**Cloud** — email plus an API token:
+
+> 1. Your Atlassian account email
+> 2. An API token — create one at https://id.atlassian.com/manage-profile/security/api-tokens
+
+**Server / Data Center** — a Personal Access Token, and **no email**:
+
+> A Personal Access Token — in Jira, click your avatar → **Profile** → **Personal Access Tokens** →
+> **Create token**.
+
+Server/DC PATs authenticate as `Authorization: Bearer <token>`, not as basic auth, and there is no username
+component. Asking a Data Center user for an `id.atlassian.com` token is a dead end — that site only issues
+Cloud tokens.
+
+#### Confluence
+
+- **Cloud**: Confluence lives at `<site>/wiki` and takes the *same* email and API token. Derive
+  `CONFLUENCE_URL = <site>/wiki` and reuse the credentials — do not ask. Show the derived value in the Step 4
+  recap so the user can correct it.
+- **Server / Data Center**: Confluence is usually a **separate host** (`https://confluence.company.com`), not
+  a path under Jira, and needs its **own** PAT. Ask for both — one question, two fields — and say why the
+  Cloud shortcut does not apply. If the user does not use Confluence, omit the `CONFLUENCE_*` variables
+  entirely rather than writing a guessed URL that will fail on first use.
 
 **Do not write `sources.json` or either MCP config yet** — those wait for the Step 4 save prompt. The env
 file is the one exception, for the reason given below.
@@ -282,13 +327,28 @@ verified, and each shell call runs in a fresh process, so there is nowhere else 
 the checks in 3b, 3c and 3d. Everything else — `sources.json`, `.mcp.json`, the Copilot config — still waits
 for the save confirmation.
 
-Write it exactly as specified in Step 4b, then:
+Write it exactly as specified in Step 4b, then verify with the call matching the deployment. **The REST API
+version differs**: Cloud serves `/rest/api/3`, while Server/Data Center tops out at `/rest/api/2` and returns
+404 for v3.
+
+**Cloud** — basic auth, API v3:
 
 ```bash
 set -a; . ~/.buddy-council/atlassian.env; set +a
 curl -sS -o /dev/null -w '%{http_code}' -u "$JIRA_USERNAME:$JIRA_API_TOKEN" \
   "$JIRA_URL/rest/api/3/myself"
 ```
+
+**Server / Data Center** — bearer auth, API v2:
+
+```bash
+set -a; . ~/.buddy-council/atlassian.env; set +a
+curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $JIRA_PERSONAL_TOKEN" \
+  "$JIRA_URL/rest/api/2/myself"
+```
+
+A `-u`-style basic auth call against a DC PAT usually returns 401 and looks exactly like a bad token, so use
+the right form rather than trying both and guessing from the result.
 
 Say plainly that the file was created: *"Saved your Atlassian credentials to
 `~/.buddy-council/atlassian.env` (chmod 600) so I can verify them."* If the user later answers **no** at the
@@ -302,8 +362,10 @@ of shell history and out of the tool log.
 | `200` | Credentials are good | Report `Atlassian: authenticated as <displayName>` and continue |
 | `401` | Bad email or token | Say which two fields to re-check and re-ask. Do not defer on a typo |
 | `403` | Token valid, account lacks access | Report it; the user needs Jira permissions from an admin |
-| `404` | Wrong site URL | Re-ask for the site URL |
-| connection error | Wrong host or no network | Report verbatim and re-ask |
+| `404` | Wrong site URL — or API v3 against Server/DC | Re-check `jira.deployment` before re-asking for the URL; a v3 call to Data Center 404s even when everything else is right |
+| `401` on Server/DC | PAT sent as basic auth | Confirm the call used `Authorization: Bearer`, not `-u` |
+| SSL / certificate error | Internal CA on a Data Center instance | Common on self-hosted Jira. Do **not** disable verification silently — tell the user, and only set `JIRA_SSL_VERIFY=false` in the env file if they explicitly accept it |
+| connection error | Wrong host, VPN required, or no network | Self-hosted Jira is often reachable only on the corporate network or VPN. Say so — it is the most likely cause for a Data Center URL |
 
 ### 3c: The dev board
 
@@ -312,9 +374,12 @@ user picks from a list rather than hunting for an address:
 
 ```bash
 set -a; . ~/.buddy-council/atlassian.env; set +a
-curl -sS -u "$JIRA_USERNAME:$JIRA_API_TOKEN" \
-  "$JIRA_URL/rest/agile/1.0/board?maxResults=50"
+curl -sS <AUTH> "$JIRA_URL/rest/agile/1.0/board?maxResults=50"
 ```
+
+Throughout 3c and 3d, `<AUTH>` means the deployment's auth flag from 3b — `-u "$JIRA_USERNAME:$JIRA_API_TOKEN"`
+on Cloud, `-H "Authorization: Bearer $JIRA_PERSONAL_TOKEN"` on Server/DC — and `<APIV>` means `3` on Cloud,
+`2` on Server/DC. The Agile API (`/rest/agile/1.0/...`) is **unversioned and identical on both**.
 
 Re-source the env file in every shell call that needs credentials — each call is a fresh process, so
 variables set in 3b are gone by the time this runs.
@@ -351,7 +416,7 @@ Then:
 - If a pasted URL has no recognizable board id, show what you tried to match and ask again. Do **not** invent
   an id and do **not** proceed with a partial board block.
 - **Verify the board reads back**, when credentials are live:
-  `set -a; . ~/.buddy-council/atlassian.env; set +a; curl -sS -u "$JIRA_USERNAME:$JIRA_API_TOKEN" "$JIRA_URL/rest/agile/1.0/board/<ID>/issue?maxResults=1"`
+  `set -a; . ~/.buddy-council/atlassian.env; set +a; curl -sS <AUTH> "$JIRA_URL/rest/agile/1.0/board/<ID>/issue?maxResults=1"`
   and report the `total`, e.g. `Board check: board 42 has 37 issues`. A zero count is not a failure — report
   it and move on.
 
@@ -379,15 +444,17 @@ Then collect two more things, both with working defaults so this stays one or tw
 
 - **Platform field.** `/bc:vnv-sprint-prep` checks that each iOS story has an Android counterpart. Default to the `OS`
   field. When credentials are live, resolve its id directly:
-  `set -a; . ~/.buddy-council/atlassian.env; set +a; curl -sS -u "$JIRA_USERNAME:$JIRA_API_TOKEN" "$JIRA_URL/rest/api/3/field"` and find the entry whose
+  `set -a; . ~/.buddy-council/atlassian.env; set +a; curl -sS <AUTH> "$JIRA_URL/rest/api/<APIV>/field"` and find the entry whose
   `name` matches `OS` (case-insensitive); cache its `id` as `jira.platform.field_id`. If no such field
   exists, say so and record `field_name` anyway — the skill falls back to title prefixes and flags lower
   confidence.
 - **Scenario reviewer.** Who approves high-level scenarios. Ask for an email or display name and store
   `{account_id, display_name}`. Resolve the account id when credentials are live:
-  `set -a; . ~/.buddy-council/atlassian.env; set +a; curl -sS -u "$JIRA_USERNAME:$JIRA_API_TOKEN" "$JIRA_URL/rest/api/3/user/search?query=<email>"` and take
-  `accountId` from the single match. If it cannot be resolved, store the display name alone;
-  `/bc:vnv-sprint-prep` re-resolves it later with `jira_get_user_profile`.
+  on **Cloud**, `curl -sS <AUTH> "$JIRA_URL/rest/api/3/user/search?query=<email>"` and take `accountId`;
+  on **Server/DC**, `curl -sS <AUTH> "$JIRA_URL/rest/api/2/user/search?username=<name-or-email>"` and take
+  `name` or `key` — the query parameter and the identifier field both differ, and Data Center has no
+  `accountId` at all. Store whichever identifier the deployment returned. If it cannot be resolved, store the
+  display name alone; `/bc:vnv-sprint-prep` re-resolves it later with `jira_get_user_profile`.
 
 Write the block with defaults filled in:
 
@@ -419,12 +486,13 @@ parity data is useful to `/bc:coverage` regardless.
 ### Deferral (when the server or the credentials aren't ready)
 
 The requirement is firm, but it must not strand a user whose `uv` install is broken, who is behind a proxy
-that blocks PyPI, or who has to request an API token. If the preflight fails, or credential verification
-never succeeds:
+that blocks PyPI, or who has to request a token from an admin. If the preflight fails, or credential
+verification never succeeds:
 
 - Say plainly that the board is required and setup will keep asking until it is confirmed.
-- Still collect what they can give: the site URL → `base_url`, the board URL → `board.url` + `board.id` +
-  `project_key`, and the default issue type.
+- Still collect what they can give: the site URL → `base_url`, the detected `deployment` if the
+  `serverInfo` probe worked (it needs no credentials on most instances), the board URL → `board.url` +
+  `board.id` + `project_key`, and the default issue type.
 - Write the `jira` block with **`"pending": true`**.
 - Write the env file with whatever credentials were given (or omit it entirely if none were).
 - Finish the wizard normally. `/bc:contradiction` and `/bc:coverage` keep working — they skip the board
@@ -447,7 +515,7 @@ Ready to save:
   Item types:    Requirement, MAS Software Requirement Specification (Text excluded — narrative)
   Enrichment:    cli (gh CLI, smoke test OK)
   Test cases:    testrail — https://company.testrail.io, project 1
-  Jira board:    PROJ board 42 — https://company.atlassian.net (37 issues)
+  Jira board:    PROJ board 42 — https://company.atlassian.net (Cloud, 37 issues)
   Confluence:    https://company.atlassian.net/wiki (same account + token)
   Atlassian MCP: uvx mcp-atlassian@0.23.1 (ready)
   V&V board:     VV board 77 — parity on OS field; reviewer Jane Doe
@@ -510,6 +578,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
   },
   "jira": {
     "base_url": "https://yourorg.atlassian.net",
+    "deployment": "cloud",
     "project_key": "PROJ",
     "default_issue_type": "Story",
     "board": {
@@ -603,6 +672,12 @@ repo. **Step 3b already wrote this file** so it could verify the credentials; re
 something changed since (most often a corrected token), and otherwise just confirm it exists with the right
 contents:
 
+**The variable set depends on `jira.deployment`.** Write one shape or the other, never a mixture — the
+server picks its auth method from which variables are present, so a stray `JIRA_USERNAME` alongside a PAT
+makes it try the wrong one.
+
+**Cloud:**
+
 ```bash
 cat > ~/.buddy-council/atlassian.env <<'EOF'
 JIRA_URL=https://yourorg.atlassian.net
@@ -619,7 +694,31 @@ EOF
 chmod 600 ~/.buddy-council/atlassian.env
 ```
 
-Five rules for this file, each of which breaks something specific if ignored:
+**Server / Data Center** — PATs instead of email+token, and Confluence on its own host:
+
+```bash
+cat > ~/.buddy-council/atlassian.env <<'EOF'
+JIRA_URL=https://jira.company.com
+JIRA_PERSONAL_TOKEN=<the Jira PAT>
+
+CONFLUENCE_URL=https://confluence.company.com
+CONFLUENCE_PERSONAL_TOKEN=<the Confluence PAT>
+
+TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
+ENABLED_TOOLS=jira_get_issue,jira_search,jira_create_issue,jira_update_issue,jira_add_comment,jira_get_transitions,jira_transition_issue,jira_search_fields,jira_get_agile_boards,jira_get_board_issues,jira_get_sprints_from_board,jira_get_sprint_issues,jira_add_issues_to_sprint,jira_get_link_types,jira_create_issue_link,jira_get_all_projects,jira_get_project_issue_types,jira_get_create_fields,jira_get_project_fields,jira_get_user_profile,jira_search_assignable_users,confluence_search,confluence_get_page,confluence_get_page_children,confluence_get_comments
+EOF
+chmod 600 ~/.buddy-council/atlassian.env
+```
+
+Omit the two `CONFLUENCE_*` lines entirely if the user does not use Confluence. Add
+`JIRA_SSL_VERIFY=false` **only** if the user explicitly accepted that after an internal-CA certificate error
+in 3b — never pre-emptively.
+
+Six rules for this file, each of which breaks something specific if ignored:
+
+- **Never mix the two auth shapes.** `JIRA_USERNAME`/`JIRA_API_TOKEN` is Cloud; `JIRA_PERSONAL_TOKEN` is
+  Server/DC. Writing both, or carrying a stale one across a Cloud migration, produces 401s that look like a
+  bad token rather than a configuration error.
 
 - **`TOOLSETS` must list `jira_agile`, `jira_links`, `jira_projects` and `jira_users` explicitly.** None of
   the four are in the server's `default` set, and **unknown or missing toolsets fail silently** — the tools
@@ -810,6 +909,9 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 - Confirm `~/.buddy-council/atlassian.env` was written and is `chmod 600`, and that its `TOOLSETS` line
   contains all four non-core toolsets (`jira_agile`, `jira_links`, `jira_projects`, `jira_users`) — a missing
   one fails silently at runtime, so check it here where it is still cheap to fix
+- Confirm the env file carries **exactly one** auth shape matching `jira.deployment`: `JIRA_USERNAME` +
+  `JIRA_API_TOKEN` for `cloud`, `JIRA_PERSONAL_TOKEN` for `server`, never both
+- Confirm `.buddy-council/sources.json` records `jira.deployment`
 - Confirm `.mcp.json` was written (base URLs + `BC_SECRETS_FILE`, no secrets)
 - Confirm `~/.copilot/mcp-config.json` was written, contains every server with `type: "local"` and `tools: ["*"]`, and that any pre-existing servers in it survived the merge
 - Confirm neither MCP config still carries a `jira` entry pointing at the removed `mcp-servers/jira-server`, nor an `atlassian` entry with an `mcp.atlassian.com` URL
@@ -848,5 +950,6 @@ If the user's Copilot version predates plugin hooks, tell them to also append th
 - If `~/.buddy-council/secrets.json` already exists, merge new entries without overwriting existing ones
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
 - Step 3 (Jira & Confluence) is **required** — never offer to skip it. When the server preflight or the credentials are not ready, record the answers with `"pending": true` and finish the wizard; do not abandon the run and do not omit the `jira` block
-- DO ask for the Atlassian email and API token — that changed in 0.19.0. The `sooperset/mcp-atlassian` server has no browser OAuth, so the credential is required and lives in `~/.buddy-council/atlassian.env`. Never put it in `sources.json` or either MCP config
+- Ask for the credential that matches the deployment: an **email + API token** on Cloud, a **Personal Access Token** on Server/Data Center. Never send a DC user to `id.atlassian.com`; it only issues Cloud tokens
+- DO ask for a credential at all — that changed in 0.19.0. The `sooperset/mcp-atlassian` server has no browser OAuth, so the credential is required and lives in `~/.buddy-council/atlassian.env`. Never put it in `sources.json` or either MCP config
 - If the user explicitly asks about Jama: explain the API integration is in progress and that the Excel export path is the supported route for now

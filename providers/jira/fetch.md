@@ -146,19 +146,27 @@ Jira issues have no native "feature" field. Derive it, in order:
 
 ## Description Format
 
-This server converts Atlassian Document Format to **Markdown** for you, so a description usually arrives as
-a Markdown string rather than an ADF tree. Use it directly.
+**Markdown in both directions, on both deployments.** The server normalizes the storage format for you, so
+you neither parse nor build the native one:
+
+- **Cloud** stores Atlassian Document Format (ADF) — a JSON tree.
+- **Server / Data Center** stores **wiki markup** (`h1.`, `*bold*`, `{code}`), not ADF. ADF does not exist there.
+
+Reads arrive as a Markdown string either way. Writes (`jira_create_issue`, `jira_update_issue`,
+`jira_add_comment`) take Markdown and are converted to whichever format the deployment uses. So never
+hand-build ADF, and never hand-write wiki markup — both would be double-encoded on the deployment that
+doesn't use them.
 
 If a raw ADF object does come back (older payloads, unusual field configurations), extract text nodes
-recursively from the `content` array, preserving paragraph breaks. Writes go the other way and are also
-Markdown: `jira_create_issue`, `jira_update_issue` and `jira_add_comment` all take Markdown and convert it,
-so never hand-build ADF and never use Jira wiki markup.
+recursively from the `content` array, preserving paragraph breaks.
 
 ## Error Handling
 
-- **401** — bad or revoked API token. Tell the user to re-run `/bc:setup`, or to check
-  `~/.buddy-council/atlassian.env` directly. Note that quoting a value in that file is a common cause: the
-  quotes become part of the token.
+- **401** — bad or revoked credential. Tell the user to re-run `/bc:setup`, or to check
+  `~/.buddy-council/atlassian.env` directly. Two common causes: quoting a value in that file (the quotes
+  become part of the token), and a mismatched auth shape — `JIRA_USERNAME`+`JIRA_API_TOKEN` is Cloud only,
+  `JIRA_PERSONAL_TOKEN` is Server/Data Center only. Carrying the wrong pair across a Cloud migration looks
+  exactly like a bad token.
 - **403** — the account lacks "Browse Projects"/"View Issues" on that project. This is a Jira permission
   problem, not a configuration one.
 - **404** — issue not found; return an empty array `[]`.
