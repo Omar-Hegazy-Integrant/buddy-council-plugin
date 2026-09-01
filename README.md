@@ -181,7 +181,7 @@ The wizard runs in four steps with a single review-and-save confirmation at the 
 1. **Requirements (Excel)** — point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs); GitHub doc enrichment is auto-configured when the sheet has a GitHub URL column (`gh` CLI preferred, MCP fallback).
 2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on.
 3. **Jira & Confluence (required)** — paste your Jira URL and the wizard detects whether it's **Cloud or Server/Data Center**, then asks for the right credential (email + API token on Cloud, a Personal Access Token on Server/DC) and lists your boards so you can pick the dev board instead of hunting for a URL. Confluence is derived automatically on Cloud, or asked for separately on Server/DC where it lives on its own host. Credentials go to `~/.buddy-council/atlassian.env`. If the token isn't ready, the answers are saved as *pending*, setup finishes, and it re-verifies on the next run — `/bc:contradiction` and `/bc:coverage` keep working meanwhile, only `/bc:validate` waits.
-   The same step then offers the **V&V board** plus its platform field and scenario reviewer, for `/bc:vnv-sprint-prep`. That part *is* skippable — the command can collect it itself on first run. A V&V board in the same project as the dev board is refused, because clones would land back on the dev board.
+   The same step then offers the **V&V board** plus its platform field and scenario reviewer, for `/bc:vnv-sprint-prep`. That part *is* skippable — the command can collect it itself on first run. Only the dev board itself is refused as a V&V board; sharing a project is fine, since one Jira project can host several boards.
 4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` and `~/.buddy-council/atlassian.env` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
 
 Re-running `/bc:setup` shows the current configuration and changes only what you ask. After setup, restart your CLI tool or toggle the MCP server for it to take effect.
@@ -346,7 +346,7 @@ ENABLED_TOOLS=<same list as above>
 }
 ```
 
-- **`vnv_board.project_key` must differ from `jira.project_key`** — clones go into this project, so pointing it at the dev project would put them on the dev board.
+- **`vnv_board.id` must differ from `board.id`** — cloning onto the dev board itself is always wrong. Sharing a *project* is fine, and common: a Jira project can host several boards. When both boards are in one project the clones live in the dev project, so board fetches exclude anything carrying a V&V pipeline label and `/bc:coverage` won't double-count them.
 - **`platform`** drives the cross-platform parity check. `field_id` is a cache: leave it out and it's discovered from `field_name` on first run. `title_prefix_fallback` is used only when a story's `OS` field is empty, and any result derived from it is reported as lower-confidence.
 - **`vnv_workflow.labels`** are the four pipeline states. Rename them freely — the workflow reads this config, never hardcoded strings. `reviewer.account_id` can be omitted and resolved from `display_name` via `jira_get_user_profile` (which needs the `jira_users` toolset).
 

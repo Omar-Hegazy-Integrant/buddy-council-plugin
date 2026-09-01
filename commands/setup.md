@@ -394,7 +394,16 @@ If the list is long, ask for a project key first and re-request with `?projectKe
 for the URL:
 
 > Paste the URL of your team's dev board in Jira — open the board and copy the address bar.
-> It looks like `https://yourorg.atlassian.net/jira/software/projects/PROJ/boards/42`.
+
+Show an example matching the **deployment detected in 3b**, so the shape is recognizable:
+
+- **Cloud** — `https://yourorg.atlassian.net/jira/software/projects/PROJ/boards/42`
+- **Server / Data Center** — `https://jira.company.com/secure/RapidBoard.jspa?rapidView=42`
+
+**Always use these neutral placeholders.** Never build an example out of the user's real site, and never
+echo a URL they already entered — showing someone their own dev board as the "example" for the next question
+is confusing, and it puts a real internal address into the transcript for no reason. `yourorg` and
+`jira.company.com` are the only hostnames that belong in a prompt.
 
 Parse it rather than asking for the pieces separately. Accept every layout Jira produces:
 
@@ -436,9 +445,24 @@ second mandatory gate.
 Offer the same board list from 3c when it is available; otherwise accept a URL and parse it with the same
 rules. Record `jira.vnv_board = {url, id, project_key}`.
 
-**Refuse a V&V board in the same project as the dev board.** Clones would land straight back on the dev
-board, on a board other people work from. Say exactly that and ask for the V&V team's own project — do not
-record it and do not offer a workaround.
+**Refuse only a V&V board that is the same *board* as the dev board.** Compare `board.id`, not the project
+key: a Jira project can host many boards, each backed by its own filter, and running dev and V&V boards side
+by side inside one project is a normal setup. If the ids match, say so plainly — cloning a story onto the
+board it came from is always a mistake — and ask for the other board.
+
+When the two boards **share a project** (`vnv_board.project_key == jira.project_key`), accept it and say what
+follows, once:
+
+> Both boards are in `PROJ`. Clones are created in that project, so whether they also show up on the dev
+> board depends on the dev board's own filter. If they do, narrow that filter — the clones all carry the
+> `pending-validation` label, which makes them easy to exclude.
+
+Then reassure them about the part that would otherwise be a silent problem: when the projects coincide,
+`fetch-board-issues` excludes issues carrying a V&V pipeline label, so clones are never counted as in-flight
+dev work by `/bc:contradiction` or `/bc:coverage`.
+
+Also apply the same placeholder rule as 3c — offer the board list where possible, and if you must ask for a
+URL, use the neutral example, never the dev board URL the user just gave you.
 
 Then collect two more things, both with working defaults so this stays one or two questions:
 

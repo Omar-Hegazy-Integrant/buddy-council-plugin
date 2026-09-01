@@ -39,14 +39,14 @@ This workflow writes to tickets other people own. Three rules hold at all times:
 
 1. Verify `.buddy-council/sources.json` exists. If not: tell the user to run `/bc:setup` first.
 2. Verify the dev board is configured and not `pending` (`jira.board`, `jira.pending`). If it is pending, stop — the workflow reads the dev sprint and cannot proceed without a verified board.
-3. Resolve the V&V board: `--board` if given, else `jira.vnv_board`. If neither exists, ask for the URL now, parse it, and record it. **Refuse if it resolves to the same project as the dev board** — clones would land straight back on the dev board.
+3. Resolve the V&V board: `--board` if given, else `jira.vnv_board`. If neither exists, ask for the URL now, parse it, and record it. **Refuse only if it resolves to the same board as the dev board** — cloning onto the source board is always wrong. The same *project* is allowed.
 4. Follow `${CLAUDE_PLUGIN_ROOT}/agents/vnv-sprint-prep-agent.agent.md`, passing the scope and flags.
 
 ## The Six Phases
 
 | # | Phase | What it does | Writes? |
 |---|---|---|---|
-| 1 | **Board** | Accept or confirm the V&V board link; validate it is a different project from the dev board | config only |
+| 1 | **Board** | Accept or confirm the V&V board link; validate it is a different board from the dev board | config only |
 | 2 | **Sprint + parity** | Fetch the dev board's current-sprint stories; group by the `OS` field; flag any story whose platform counterpart is missing or unlinked | no |
 | 3 | **Clone** | Create a matching story on the V&V board for each in-scope dev story, carrying summary, description, a `src-<DEV-KEY>` back-reference, and label `pending-validation` | yes |
 | 4 | **Validate** | Check each clone against requirements and test cases for gaps, conflicts, and contradictions. Concerns → comment on the **original dev story**, label the clone `pending-questions` | yes |
@@ -108,7 +108,7 @@ traceability.
 
 - **Dev board pending or unconfigured** → stop; run `/bc:setup`.
 - **V&V board missing** → ask for the URL, or accept `--board`.
-- **V&V board in the same project as the dev board** → stop and explain; this is a configuration error, not something to work around.
+- **V&V board is the same board as the dev board** → stop and explain; this is a configuration error, not something to work around. A V&V board that merely shares the dev *project* is fine — one project can host many boards — and the run says so, since clones then live in the dev project.
 - **No `OS` field on the project** → phase 2 falls back to the title prefix and says so loudly; parity results are marked lower-confidence.
 - **No active sprint** → report it and stop. There is nothing to clone.
 - **401 / 403 from Atlassian** → 401 means the API token in `~/.buddy-council/atlassian.env` is wrong or revoked (re-run `/bc:setup`); 403 means the account lacks permission on that project.

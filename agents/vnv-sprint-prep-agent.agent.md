@@ -88,9 +88,12 @@ against remembered requirements.
 3. Resolve the V&V board, in order: the `--board` argument → `jira.vnv_board` → ask the user for the URL.
    Parse it with the same rules Step 3c of `/bc:setup` uses (accept `boards/<id>`, `rapidView=<id>`, tab
    suffixes, and `/c/` company-managed paths).
-4. **Refuse a same-project V&V board.** If the parsed project key equals `jira.project_key`, stop:
-   "The V&V board is in the same project as the dev board (`PROJ`). Clones would land back on the dev board.
-   Point `--board` at the V&V team's own project." Do not offer a workaround.
+4. **Refuse only the same *board*.** If the parsed board id equals `jira.board.id`, stop: "That is the dev
+   board itself — clones would land on the board they came from. Point `--board` at the V&V board." A shared
+   *project* is fine and common: one Jira project can host many boards. When
+   `vnv_board.project_key == jira.project_key`, note it once — clones live in the dev project, so whether
+   they surface on the dev board depends on that board's filter, and `fetch-board-issues` excludes them from
+   analysis by pipeline label — then carry on.
 5. Persist `jira.vnv_board = {url, id, project_key}` when it is new or changed. This is a config write and is
    allowed in dry run — it records intent, it does not touch Jira.
 6. Load `.buddy-council/vnv-progress.json` if present (see Progress Log below).
@@ -263,7 +266,7 @@ repair the file. `platform_source` is `os_field` or `title_prefix` so a reader c
 ## Error Handling
 
 - **Config or dev board missing/pending** → stop, direct to `/bc:setup`.
-- **V&V board same project as dev** → stop; configuration error, no workaround.
+- **V&V board is the same board as dev** (same id) → stop; configuration error, no workaround. A shared *project* is not an error — proceed and note it.
 - **`jira_create_issue` fails for one story** → record the failure, continue with the rest, and list the
   failures explicitly in the final report. Never fabricate a key.
 - **`jira_update_issue` label write fails** → the ticket keeps its old label. Say so; do not update the log to a

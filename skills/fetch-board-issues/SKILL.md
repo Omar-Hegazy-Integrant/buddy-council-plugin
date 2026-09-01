@@ -77,6 +77,34 @@ The `jql` narrows *within* the board:
 
 - **Default (`include_done: false`)** → `statusCategory != Done`
 - **`include_done: true`** → empty string
+
+### Excluding V&V clones when both boards share a project
+
+`jira.vnv_board` may legitimately sit in the **same project** as the dev board — one Jira project can host
+many boards. When `jira.vnv_board.project_key == jira.project_key`, the V&V clones created by
+`/bc:vnv-sprint-prep` live in the dev project, and a dev board whose filter is project-wide will return them.
+Counting them would be a real analysis error: every clone is a near-duplicate of a dev story, so
+`/bc:coverage` would double-count the work and `/bc:contradiction` would compare a story against its own copy.
+
+So when — and **only** when — the two project keys match, append an exclusion built from
+`jira.vnv_workflow.labels` (every clone always carries exactly one of the four):
+
+```
+AND (labels IS EMPTY OR labels NOT IN ("pending-validation", "pending-questions",
+     "pending-scenario-validation", "ready-for-test-case-creation"))
+```
+
+Read the four names from config rather than hardcoding them — they are renameable. The `labels IS EMPTY OR`
+half is required: in JQL, a bare `labels NOT IN (...)` also drops issues that have no labels at all, which
+would silently hide most of the board.
+
+Say what you did in the fetch line when the exclusion is active, e.g.
+`Fetch: board issues → 37 from board 1656 (V&V clones excluded — shared project)`. A user who sees a lower
+count than the board shows in Jira deserves to know why.
+
+Skip the exclusion entirely when the projects differ, when `jira.vnv_board` is absent, or when
+`jira.vnv_workflow.labels` is not configured — there are no clones to exclude, and a needless `labels` clause
+only risks hiding a real dev story that happens to share a label name.
 - **Feature name** → append `AND (component = "<feature>" OR labels = "<feature-slug>" OR text ~ "<feature>")`
 - **Requirement IDs** → append `AND text ~ "<REQ-ID>"` per ID, OR-joined. Requirement IDs usually appear in
   the summary or description of the implementing ticket.

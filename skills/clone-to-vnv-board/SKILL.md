@@ -44,7 +44,7 @@ Call `jira_create_issue` with:
 
 | Parameter | Value |
 |---|---|
-| `project_key` | `jira.vnv_board.project_key` — **never** the dev project |
+| `project_key` | `jira.vnv_board.project_key` — the V&V *board's* project, which may legitimately be the dev project when both boards share one |
 | `issue_type` | `jira.default_issue_type`, falling back to `"Task"`. Verify it exists in the V&V project with `jira_get_project_issue_types`; the V&V project may not have the dev project's types |
 | `summary` | The source summary, unchanged — keep it recognizable; the differing project key already distinguishes it |
 | `description` | Back-reference block + the source description (below), as Markdown |
@@ -136,8 +136,9 @@ link them by hand. A silently dropped story is a story that never gets tested.
 
 ## Error Handling
 
-- **V&V project key equals the dev project key** → refuse; the caller checks this first, but check again
-  rather than trusting it. Clones landing on the dev board are hard to undo on a shared board.
+- **V&V board id equals the dev board id** → refuse; the caller checks this first, but check again rather
+  than trusting it. Cloning onto the source board is hard to undo on a board other people work from. A
+  shared project key is **not** a refusal — many teams run both boards in one project.
 - **Issue type missing in the V&V project** → list the types that do exist and suggest the closest; do not
   silently substitute one.
 - **403 on create** → the account lacks Create Issues on the V&V project. A Jira permission problem.
