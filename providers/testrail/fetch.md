@@ -154,8 +154,15 @@ Use the readable aliases; the server maps them onto TestRail's field names:
 | `steps_separated` | `custom_steps_separated` — `[{"content": ..., "expected": ...}]`, needs a steps template |
 | `custom_fields` | merged as-is; a missing `custom_` prefix is added |
 
-`title` is the only required field. `refs` is the built-in References field — put requirement IDs there
-(`"CWA-REQ-85,CWA-REQ-86"`) so `testrail_get_cases_by_refs` can find the case later. `type_id`,
+`title` is the only required field.
+
+**Requirement IDs go in two fields, always.** `refs` is the built-in References field, which
+`testrail_get_cases_by_refs` searches (Strategy 3 above). But this plugin builds a case's `linked_ids` from
+`custom_jama_req_id` — the *Linking* section above — so a case written with `refs` alone comes back with no
+`linked_ids` and is counted an **orphan**, while the requirement it covers still reads **untested**. Write
+both: `refs` gets the requirement IDs plus any originating Jira key,
+`test_cases.authoring.requirement_field` (default `custom_jama_req_id`) gets the requirement IDs only, in
+the same delimiter format the existing cases use. `type_id`,
 `priority_id`, and `template_id` take **ids, not names**: resolve them with `testrail_get_case_types`,
 `testrail_get_priorities`, and `testrail_get_templates`.
 

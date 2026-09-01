@@ -192,7 +192,20 @@ With the tools live:
    steps will be written as plain text into `custom_steps`/`custom_expected` instead.
 2. `testrail_get_case_types` → default to the type named "Functional", else the instance default.
 3. `testrail_get_priorities` → default to the middle priority, else the instance default.
-4. Ask the **one** question — where generated cases should live:
+4. **Resolve the requirement-link field — the one that silently breaks everything.** Call
+   `testrail_get_case_fields` and find the custom field this instance uses to reference requirements: match
+   a `system_name` containing `req`, `jama`, `requirement`, or `story` (`custom_jama_req_id` is the common
+   one). Confirm the guess against reality by reading a handful of existing cases with `testrail_get_cases`
+   and checking which field actually holds requirement-shaped IDs — the config's `project.id_patterns`
+   (e.g. `CWA-REQ-\d+`) tells you what those look like.
+
+   Record it as `requirement_field`. **If nothing matches, say so plainly and record `null`** — do not guess
+   a field name. `/bc:coverage` builds `linked_ids` from this field, so a wrong name means every case the
+   plugin creates comes back an orphan while its requirement still reads untested. That failure is silent:
+   TestRail accepts a payload with an unknown `custom_*` key and discards the value without an error.
+
+   State what you found: `Requirement link: custom_jama_req_id (found on 18 of 20 sampled cases)`.
+5. Ask the **one** question — where generated cases should live:
 
    > Where should `/bc:vnv-sprint-prep` file the test cases it generates?
    > - Under a `V&V` folder, mirroring each feature (`V&V/Sync/Offline handling`) — keeps generated cases separate from hand-written ones
@@ -206,6 +219,7 @@ Write the block, and show the resolved names (not just ids) in the Step 4 recap 
   "template_id": 2,
   "type_id": 7,
   "priority_id": 4,
+  "requirement_field": "custom_jama_req_id",
   "section_strategy": "feature",
   "section_root": "V&V",
   "create_missing_sections": true
@@ -543,6 +557,7 @@ Ready to save:
   Enrichment:    cli (gh CLI, smoke test OK)
   Test cases:    testrail — https://company.testrail.io, project 1
   Case authoring: template "Test Case (Steps)", type "Functional", priority "Medium"
+                 requirement link → custom_jama_req_id (+ built-in References)
                  generated cases → V&V/<feature>, missing folders created
   Jira:          connected as Jane Doe — jira.company.com (Server/Data Center)
   Jira board:    PROJ board 42 "PROJ Scrum Board" (scrum) — 37 open issues
@@ -606,6 +621,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
       "template_id": 2,
       "type_id": 7,
       "priority_id": 4,
+      "requirement_field": "custom_jama_req_id",
       "section_strategy": "feature",
       "section_root": "V&V",
       "create_missing_sections": true

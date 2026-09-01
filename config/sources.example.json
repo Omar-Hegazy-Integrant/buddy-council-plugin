@@ -12,6 +12,7 @@
       "template_id": 2,
       "type_id": 7,
       "priority_id": 4,
+      "requirement_field": "custom_jama_req_id",
       "section_strategy": "feature",
       "section_root": "V&V",
       "create_missing_sections": true

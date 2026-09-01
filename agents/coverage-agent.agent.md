@@ -94,6 +94,38 @@ Present the findings as a human-readable report following the format specified i
 - Carry a distinct **Delivery risk (in flight)** section when the board index was non-empty: *untested in flight* first (each with issue key, browse link, and the requirement it implements), then *unanchored work*, then a one-line covered count. State the board scope actually queried (active sprint vs. whole-project fallback) so the reader knows what "in flight" covered. Keep these findings out of the headline coverage percentage — that figure is requirements-vs-tests and must stay comparable across runs
 - End with prioritized recommendations
 
+### Step 8: Offer to close the gaps — no flag, no extra command
+
+After the report, when **both** are true — the run found at least one untested requirement, and
+`test_cases.authoring` is configured — end with a single offer:
+
+```
+12 requirements have no test case. I can draft skeleton cases for them in TestRail,
+linked to their requirement IDs. Want me to? (all / pick some / no)
+```
+
+That is the whole interface. **Do not add a flag for this.** These commands are natural-language prompts,
+not a CLI parser: a user who wants it non-interactively can say so in the prompt
+("`/bc:coverage` and create the missing cases") and a user who never wants it just says no. A flag would be
+invisible until someone reads the docs, and the offer teaches the capability at the moment it is relevant.
+
+Rules for the offer:
+
+- **Only when there is something to offer.** No untested requirements, or no `authoring` block → no offer,
+  no mention. An offer that fires on every run becomes noise people learn to skip.
+- **One line.** It is a footer to the report, not a second report.
+- **Never author without an explicit yes**, and never author more than the user selected. "All" means the
+  untested requirements *in this run's scope*, which the report has already listed — not the whole project.
+- **`pick some`** → list the untested requirements with numbers and let the user choose. Default to the
+  HIGH-severity ones (safety-critical, untested) if they ask for a recommendation.
+- On yes, follow `${CLAUDE_PLUGIN_ROOT}/skills/draft-test-cases/SKILL.md` via its `requirements` entry path.
+  Show the plan first — title, folder, and requirement IDs per case — and create only after confirmation.
+
+**These drafts are unreviewed.** Phase 7 of `/bc:vnv-sprint-prep` writes cases a human already approved;
+this path writes cases derived straight from requirement text. Say so in the result, and keep them as
+skeletons for someone to expand — the value is that the requirement stops being invisible, not that the
+test is finished.
+
 ## Follow-Up Handling
 
 After delivering the report, if the user asks a follow-up question:
@@ -112,10 +144,13 @@ After delivering the report, if the user asks a follow-up question:
 
 ## Boundaries
 
-This agent ONLY analyzes coverage. It does not:
+This agent analyzes coverage, and may author test cases for the gaps it finds — but only after an explicit
+yes in-session (Step 8). It does not:
 - Detect contradictions (use `/bc:contradiction`)
 - Answer general questions (use `/bc:ask`)
-- Modify any source data
-- Write new test cases (it recommends where tests are needed, not what they should contain)
+- Modify requirements, or any source data other than creating new TestRail cases the user asked for
+- Modify or delete existing test cases — it only ever creates, and only for requirements it reported untested
+- Write cases without a requirement ID on them (see the linkage rule in `draft-test-cases`); a case that
+  isn't wired to a requirement makes this very report wrong on the next run
 
 If the user asks for something outside scope, acknowledge it and suggest the appropriate command.

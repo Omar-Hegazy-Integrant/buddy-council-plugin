@@ -30,6 +30,7 @@ Find untested requirements, orphan test cases, and weak coverage between require
    - Normalize and cross-link all artifacts
    - Analyze coverage gaps
    - Return a coverage report with metrics and recommendations
+   - **Offer to close the gaps.** When the run finds untested requirements and `test_cases.authoring` is configured, the report ends with a one-line offer to draft skeleton TestRail cases for them, linked to their requirement IDs. There is no flag — say yes, pick a subset, or ignore it. Nothing is written without an explicit yes, and a plain run stays read-only exactly as before
 
 ## What Gets Analyzed
 
