@@ -10,18 +10,24 @@
     "suite_id": null
   },
   "jira": {
-    "base_url": "https://yourorg.atlassian.net",
-    "cloud_id": "00000000-0000-0000-0000-000000000000",
+    "base_url": "https://jira.company.com",
+    "deployment": "server",
     "project_key": "PROJ",
     "default_issue_type": "Story",
     "board": {
-      "url": "https://yourorg.atlassian.net/jira/software/projects/PROJ/boards/42",
+      "url": "https://jira.company.com/secure/RapidBoard.jspa?rapidView=42",
       "id": 42
     },
     "vnv_board": {
-      "url": "https://yourorg.atlassian.net/jira/software/projects/VV/boards/77",
+      "url": "https://jira.company.com/secure/RapidBoard.jspa?rapidView=77",
       "id": 77,
-      "project_key": "VV"
+      "project_key": "PROJ",
+      "discriminator": {
+        "kind": "label",
+        "value": "vnv",
+        "confidence": "sampled",
+        "sampled_at": "2026-09-01T12:00:00Z"
+      }
     },
     "platform": {
       "field_name": "OS",

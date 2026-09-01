@@ -1,6 +1,15 @@
 {
-  "_comment_atlassian": "Jira/Confluence are NOT configured here. The plugin registers Atlassian's official remote MCP server (https://mcp.atlassian.com/v1/mcp/authv2) automatically via .claude-plugin/plugin.json, so Claude Code picks it up the moment the plugin is installed — adding an 'atlassian' entry to this file would create a duplicate server. Authorize it once with /mcp (browser OAuth). Copilot CLI does not read plugin-declared MCP servers reliably, so /bc:setup writes the same entry into ~/.copilot/mcp-config.json instead.",
+  "_comment_atlassian": "Jira/Confluence run on mcp-atlassian (https://github.com/sooperset/mcp-atlassian) via uvx — it supports both Atlassian Cloud and Jira Server/Data Center, and unlike Atlassian's hosted server it exposes real board and sprint tools. Credentials do NOT go here: they live in ~/.buddy-council/atlassian.env (chmod 600), which the server reads via --env-file. Both the uvx path and the --env-file path must be absolute and fully expanded — the spawned server inherits neither your PATH nor tilde expansion. /bc:setup fills both in and writes the same entry to ~/.copilot/mcp-config.json for Copilot CLI.",
   "mcpServers": {
+    "atlassian": {
+      "_comment": "Replace /absolute/path/to/uvx with the output of `command -v uvx`, and the --env-file path with your real home directory. Create the env file with /bc:setup rather than by hand; at minimum it needs JIRA_URL plus JIRA_PERSONAL_TOKEN (Server/Data Center) or JIRA_USERNAME + JIRA_API_TOKEN (Cloud).",
+      "command": "/absolute/path/to/uvx",
+      "args": [
+        "mcp-atlassian@0.23.1",
+        "--env-file", "/Users/<you>/.buddy-council/atlassian.env",
+        "--transport", "stdio"
+      ]
+    },
     "testrail": {
       "_comment": "Credentials (username, api_key) are read from the secrets file at BC_SECRETS_FILE (default ~/.buddy-council/secrets.json), NOT from here. Put only the non-secret base URL in env. The --directory below uses ${CLAUDE_PLUGIN_ROOT}, which resolves under Claude Code; under Copilot CLI that token does NOT resolve, so /bc:setup rewrites --directory to the absolute plugin path. Setting an env var here still takes precedence if you prefer the legacy inline style.",
       "command": "uv",

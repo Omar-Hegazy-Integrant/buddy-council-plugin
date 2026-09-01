@@ -22,8 +22,8 @@ Verification pipeline and keep their state visible in Jira labels.
 This workflow comments on tickets the dev team owns and creates issues in bulk. Getting this wrong is worse
 than getting the analysis wrong.
 
-- **Default is dry run.** Without `--apply`, you perform **zero** writes: no `createJiraIssue`, no
-  `addCommentToJiraIssue`, no `editJiraIssue`. You print the plan and stop.
+- **Default is dry run.** Without `--apply`, you perform **zero** writes: no `jira_create_issue`, no
+  `jira_add_comment`, no `jira_update_issue`. You print the plan and stop.
 - **With `--apply`, confirm each phase once.** Show the full batch for that phase — every ticket key, every
   comment body, every label change — then ask once. Execute only after an explicit yes. A yes for one phase
   is not a yes for the next.
@@ -45,12 +45,13 @@ A V&V ticket's state **is** its pipeline label. Four labels, from `jira.vnv_work
 
 **Exactly one of the four at any time. They are mutually exclusive, never additive.**
 
-Every transition is **remove-then-add**, in one `editJiraIssue` call:
+Every transition is **remove-then-add**, in one `jira_update_issue` call:
 
-1. `getJiraIssue` and read the current `fields.labels`.
+1. `jira_get_issue` and read the current `labels`.
 2. Remove **every** value in `jira.vnv_workflow.labels` from that list — not just the one you expect to find.
 3. Append the new pipeline label.
-4. Write the result.
+4. Write the whole array back as `fields: {"labels": [...]}`. Jira replaces the array wholesale; there is no
+   add-one/remove-one operation, which is exactly why step 2 reads before it writes.
 
 Non-pipeline labels (`src-<DEV-KEY>`, the platform label, and anything a human added) are **always
 preserved**. Only the four pipeline values are stripped. Never write a bare label array that drops them.
@@ -83,16 +84,24 @@ against remembered requirements.
 
 1. Read `.buddy-council/sources.json`. If absent → stop, tell the user to run `/bc:setup`.
 2. Require a usable dev board: `jira.board` present and `jira.pending` not `true`. If pending → stop and
-   tell the user to authorize Atlassian and re-run `/bc:setup`.
+   tell the user the Jira connection was never verified and to re-run `/bc:setup`.
 3. Resolve the V&V board, in order: the `--board` argument → `jira.vnv_board` → ask the user for the URL.
    Parse it with the same rules Step 3b of `/bc:setup` uses (accept `boards/<id>`, `rapidView=<id>`, tab
    suffixes, and `/c/` company-managed paths).
-4. **Refuse a same-project V&V board.** If the parsed project key equals `jira.project_key`, stop:
-   "The V&V board is in the same project as the dev board (`PROJ`). Clones would land back on the dev board.
-   Point `--board` at the V&V team's own project." Do not offer a workaround.
-5. Persist `jira.vnv_board = {url, id, project_key}` when it is new or changed. This is a config write and is
-   allowed in dry run — it records intent, it does not touch Jira.
-6. Load `.buddy-council/vnv-progress.json` if present (see Progress Log below).
+4. **Refuse only a same-*board* V&V board.** If the parsed board id equals `jira.board.id`, stop: "That is the
+   dev board. Clones would land on the board they came from." A shared **project** is fine and common — one
+   project with a dev board and a V&V board is a normal Jira layout, and every read and write here is
+   addressed by board id.
+5. **Resolve the clone discriminator** when `vnv_board.project_key` equals `jira.project_key`. Use
+   `jira.vnv_board.discriminator` if `/bc:setup` already recorded one. If it is absent, derive it the way
+   Step 3c of `/bc:setup` does — `jira_get_board_issues` over both boards (`limit: 50`,
+   `fields: "summary,labels,components,issuetype,status"`), looking for a label, component, or issue type on
+   ≥ 80% of V&V issues and ≤ 5% of dev issues — confirm it with the user, and persist it. If it stays
+   unresolved, **warn loudly and continue**: clones will land in the shared project and may appear on the dev
+   board. Say that in the dry-run plan and again at the apply confirmation.
+6. Persist `jira.vnv_board = {url, id, project_key, discriminator}` when it is new or changed. This is a
+   config write and is allowed in dry run — it records intent, it does not touch Jira.
+7. Load `.buddy-council/vnv-progress.json` if present (see Progress Log below).
 
 ### Phase 1a: Resume — advance what can move
 
@@ -102,7 +111,7 @@ For each story in the progress log not in a terminal state, re-read its current 
 state per **Label Discipline** — the label in Jira wins over the local file; repair the file when they
 disagree, and repair the *ticket* when it carries none or more than one. Then:
 
-- **`pending-questions`** → read the comments on the **original dev story** (`getJiraIssue`; comments arrive
+- **`pending-questions`** → read the comments on the **original dev story** (`jira_get_issue`; comments arrive
   in `fields.comment.comments`). Compare against the concerns you posted, identified by the marker line in
   your own comment. For each concern, decide answered / unanswered / partially answered, quoting the reply
   that resolves it.
@@ -112,7 +121,7 @@ disagree, and repair the *ticket* when it carries none or more than one. Then:
     Leave the label alone.
 - **`pending-scenario-validation`** → read the comments on the **V&V ticket**. Approval requires **both**:
   the comment author matches `jira.vnv_workflow.reviewer` (by `accountId`; resolve a configured email with
-  `lookupJiraAccountId` once and cache it), **and** the body matches one of
+  `jira_search_assignable_users` once and cache it), **and** the body matches one of
   `jira.vnv_workflow.approval_phrases`. A matching phrase from anyone else is not approval — say so rather
   than silently ignoring it.
   - Approved → advance to phase 6 (relabel).
@@ -121,7 +130,7 @@ disagree, and repair the *ticket* when it carries none or more than one. Then:
   passed). Send it into phase 4 with this run's freshly fetched requirements and test cases.
 - **`ready-for-test-case-creation`** → terminal. Count it in the summary; never reprocess.
 
-If `getJiraIssue` does not return comments for this site, **do not guess**. Report that comment-based
+If `jira_get_issue` does not return comments for this site, **do not guess**. Report that comment-based
 approval detection is unavailable here and fall back to: the reviewer applies the approval label in Jira
 themselves, and this workflow only verifies it.
 
@@ -132,7 +141,8 @@ themselves, and this workflow only verifies it.
 2. Narrow to the scope argument if one was given (that story plus its platform counterpart).
 3. Run `${CLAUDE_PLUGIN_ROOT}/skills/check-platform-parity/SKILL.md` over the result.
 4. Print the parity table before anything else happens. Parity problems are **reported, never auto-fixed** —
-   you cannot create issue links, and inventing a counterpart story is not yours to do.
+   inventing a counterpart story is a dev-team decision, not yours. (You *can* create issue links now, but
+   linking two stories does not make a missing one exist.)
 
 ### Phase 3: Clone to the V&V board
 
@@ -159,7 +169,8 @@ For every story now in `cloned` state:
 **If concerns are found:**
 
 - Post ONE comment on the **original dev story** — never on the clone, and never one comment per concern.
-  Use `addCommentToJiraIssue` with `contentFormat: "markdown"`. Structure it:
+  Use `jira_add_comment` with the markdown in `body` — the server converts it to ADF on Cloud and to wiki
+  markup on Server/DC, so pass markdown and do not pre-convert. Structure it:
 
   ```markdown
   **V&V review — questions before test design**
@@ -261,15 +272,19 @@ repair the file. `platform_source` is `os_field` or `title_prefix` so a reader c
 ## Error Handling
 
 - **Config or dev board missing/pending** → stop, direct to `/bc:setup`.
-- **V&V board same project as dev** → stop; configuration error, no workaround.
-- **`createJiraIssue` fails for one story** → record the failure, continue with the rest, and list the
+- **V&V board id equals the dev board id** → stop; configuration error, no workaround. A shared *project* is
+  not an error — resolve the discriminator and continue.
+- **Clone created but not on the V&V board** → the discriminator is wrong. Stop applying, report it, and ask;
+  do not keep cloning with a placement you know is broken.
+- **`jira_create_issue` fails for one story** → record the failure, continue with the rest, and list the
   failures explicitly in the final report. Never fabricate a key.
-- **`editJiraIssue` label write fails** → the ticket keeps its old label. Say so; do not update the log to a
+- **`jira_update_issue` label write fails** → the ticket keeps its old label. Say so; do not update the log to a
   state Jira does not reflect.
-- **401** → re-authorize (`/mcp` → **atlassian** → Authenticate, or restart Copilot CLI).
-- **403** → either the account lacks create/comment permission on that project, or the site admin has not
-  enabled the Rovo MCP server. Name both; you cannot tell them apart from the response.
-- **Comments unavailable from `getJiraIssue`** → report it and fall back to reviewer-applies-label.
+- **401** → the token in `~/.buddy-council/atlassian.env` is wrong or expired. Tell the user to re-run
+  `/bc:setup`. There is no browser re-authorization step.
+- **403** → the account lacks create/comment permission on that project, or an IP allowlist is blocking the
+  request. Name both; you cannot tell them apart from the response.
+- **Comments unavailable from `jira_get_issue`** → report it and fall back to reviewer-applies-label.
 
 ## Boundaries
 

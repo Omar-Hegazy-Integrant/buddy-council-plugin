@@ -26,11 +26,11 @@ The command expects:
 1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
-2. Check the Jira dev board in `.buddy-council/sources.json` (which board/project to file into — there are no Jira credentials to check; Atlassian's MCP server handles auth via browser OAuth):
+2. Check the Jira dev board in `.buddy-council/sources.json` (which board/project to file into — the credential itself lives in `~/.buddy-council/atlassian.env` and is the MCP server's business, not this command's):
    - If the `jira` section or `jira.board` is missing AND `--dry-run` is NOT present, warn:
      > No Jira dev board is configured. Run `/bc:setup` — Step 3 is required — or use `--dry-run` to test without creating a real ticket.
    - If `jira.pending` is `true` AND `--dry-run` is NOT present, warn:
-     > Your Jira board is recorded but not yet verified. Authorize the Atlassian server (`/mcp` → **atlassian** → Authenticate, or restart Copilot CLI), then re-run `/bc:setup`.
+     > Your Jira board is recorded but the connection was never verified. Re-run `/bc:setup` to re-test it — if Jira is self-hosted, check you're on the VPN first.
    - If `--dry-run` flag is present, proceed (dry-run never touches Jira)
 
 3. Invoke the ticket validation agent by following the instructions in `agents/ticket-validation-agent.agent.md`, passing the ticket description and any flags.
@@ -96,7 +96,7 @@ Use `--dry-run` to test the entire workflow without creating a real Jira ticket:
 - All validation steps execute normally (fetch requirements, detect contradictions, fill gaps)
 - Draft is generated and reviewed
 - Draft is saved to a markdown file: `ticket-draft-[timestamp].md`
-- No `createJiraIssue` call is made at all — nothing reaches Jira
+- No `jira_create_issue` call is made at all — nothing reaches Jira
 
 This is useful for:
 - Testing the validation workflow before creating real tickets
@@ -153,8 +153,8 @@ https://yourorg.atlassian.net/browse/PROJ-1234
 - **No ticket description provided**: Prompt user for description
 - **No related requirements found**: Automatically skip contradiction detection and proceed to gap analysis
 - **Jira not configured**: Suggest `/bc:setup` or `--dry-run` mode
-- **Atlassian tools unavailable**: Authorize the server — `/mcp` → **atlassian** → Authenticate (Claude Code), or run `/bc:setup` and fully restart Copilot CLI
-- **Ticket creation fails**: Re-authorize if 401; check the project key and issue type if 400; if 403, ask a Jira site admin to enable the Rovo MCP server
+- **Atlassian tools unavailable**: run `/bc:setup` and fully restart the runtime. There is no authorization step — the first launch downloads `mcp-atlassian` via `uvx`, which takes a few seconds
+- **Ticket creation fails**: if 401, the token in `~/.buddy-council/atlassian.env` is wrong or expired — re-run `/bc:setup`; if 400, check the project key and issue type; if 403, the account lacks "Create Issues" on that project or an IP allowlist is blocking the request
 
 ## Tips
 

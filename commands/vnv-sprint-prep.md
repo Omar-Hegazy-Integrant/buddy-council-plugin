@@ -39,14 +39,14 @@ This workflow writes to tickets other people own. Three rules hold at all times:
 
 1. Verify `.buddy-council/sources.json` exists. If not: tell the user to run `/bc:setup` first.
 2. Verify the dev board is configured and not `pending` (`jira.board`, `jira.pending`). If it is pending, stop — the workflow reads the dev sprint and cannot proceed without a verified board.
-3. Resolve the V&V board: `--board` if given, else `jira.vnv_board`. If neither exists, ask for the URL now, parse it, and record it. **Refuse if it resolves to the same project as the dev board** — clones would land straight back on the dev board.
+3. Resolve the V&V board: `--board` if given, else `jira.vnv_board`. If neither exists, ask for the URL now, parse it, and record it. **Refuse only if it resolves to the same board *id* as the dev board.** A shared project is supported — resolve `vnv_board.discriminator` (what the V&V board's filter keys off) so clones land on the right board.
 4. Follow `${CLAUDE_PLUGIN_ROOT}/agents/vnv-sprint-prep-agent.agent.md`, passing the scope and flags.
 
 ## The Six Phases
 
 | # | Phase | What it does | Writes? |
 |---|---|---|---|
-| 1 | **Board** | Accept or confirm the V&V board link; validate it is a different project from the dev board | config only |
+| 1 | **Board** | Accept or confirm the V&V board link; validate it is a different board from the dev board, and resolve the clone discriminator when they share a project | config only |
 | 2 | **Sprint + parity** | Fetch the dev board's current-sprint stories; group by the `OS` field; flag any story whose platform counterpart is missing or unlinked | no |
 | 3 | **Clone** | Create a matching story on the V&V board for each in-scope dev story, carrying summary, description, a `src-<DEV-KEY>` back-reference, and label `pending-validation` | yes |
 | 4 | **Validate** | Check each clone against requirements and test cases for gaps, conflicts, and contradictions. Concerns → comment on the **original dev story**, label the clone `pending-questions` | yes |
@@ -92,19 +92,21 @@ one found with several is repaired to the furthest-along, and the repair is repo
 
 ## Known Platform Limits
 
-Two things Atlassian's MCP server cannot do, surfaced here so the output is never misleading:
+One thing `mcp-atlassian` cannot do, surfaced here so the output is never misleading:
 
-- **It cannot create issue links.** `update.issuelinks` is silently ignored and there is no `createIssueLink`
-  tool. Clones therefore carry a `src-<DEV-KEY>` label and a back-reference line in the description instead
-  of a real Jira link. The final summary prints the clone↔original pairs so someone can link them in the UI
-  in one pass if the team wants formal links. *Reading* links works fine, so the phase-2 parity check is unaffected.
-- **It cannot attach files.** Scenarios go into the V&V ticket's description rather than an attached `.md`.
+- **It cannot attach files.** `jira_download_attachments` has no upload counterpart, so scenarios go into the
+  V&V ticket's description rather than an attached `.md`.
+
+Issue links **do** work (`jira_create_issue_link`), so each clone is linked to its dev story as well as
+carrying the `src-<DEV-KEY>` label. If a site restricts link creation the clone still succeeds and the run
+reports which pairs are label-only, so someone can link them in the UI in one pass.
 
 ## Error Handling
 
 - **Dev board pending or unconfigured** → stop; run `/bc:setup`.
 - **V&V board missing** → ask for the URL, or accept `--board`.
-- **V&V board in the same project as the dev board** → stop and explain; this is a configuration error, not something to work around.
+- **V&V board id equals the dev board id** → stop and explain; this is a configuration error, not something to work around. A shared *project* is supported — see the discriminator below.
+- **V&V board shares a project with the dev board and no discriminator is known** → derive one by sampling both boards, or ask. If it stays unresolved, warn that clones may surface on the dev board and let the user decide.
 - **No `OS` field on the project** → phase 2 falls back to the title prefix and says so loudly; parity results are marked lower-confidence.
 - **No active sprint** → report it and stop. There is nothing to clone.
-- **401 / 403 from Atlassian** → re-authorize (`/mcp` → **atlassian** → Authenticate, or restart Copilot CLI); a 403 may instead mean the site admin has not enabled the Rovo MCP server.
+- **401 / 403 from Atlassian** → 401 means the token in `~/.buddy-council/atlassian.env` is wrong or expired (re-run `/bc:setup`); 403 means the account lacks permission on that project, or an IP allowlist is blocking the request.

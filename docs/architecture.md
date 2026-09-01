@@ -202,12 +202,19 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 | `testrail-server` | Active | `testrail_get_projects`, `testrail_get_suites`, `testrail_get_sections`, `testrail_get_cases`, `testrail_get_case` |
 | `jama-server` | Placeholder | None yet (auth blocked) |
 
-Jira/Confluence are **not** vendored here. They use Atlassian's official hosted remote server
-(`https://mcp.atlassian.com/v1/mcp/authv2`), which authenticates with browser OAuth and exposes
-`getAccessibleAtlassianResources`, `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
-`getJiraIssue`, `searchJiraIssuesUsingJql`, and `createJiraIssue`. Claude Code registers it from
-`.claude-plugin/plugin.json` at install time; `/bc:setup` writes it into `~/.copilot/mcp-config.json`
-for Copilot CLI.
+Jira/Confluence are **not** vendored here. They use [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian),
+run as a local stdio server via `uvx mcp-atlassian@0.23.1` and authenticated by a token in
+`~/.buddy-council/atlassian.env`. It serves **both Atlassian Cloud and Jira Server/Data Center**, and exposes
+`jira_get_issue`, `jira_search`, `jira_get_agile_boards`, `jira_get_board_issues`,
+`jira_get_sprints_from_board`, `jira_get_link_types`, and the write tools `jira_create_issue`,
+`jira_update_issue`, `jira_add_comment`, `jira_create_issue_link`, and `jira_add_issues_to_sprint`.
+`/bc:setup` writes it into `.mcp.json` for Claude Code and `~/.copilot/mcp-config.json` for Copilot CLI —
+no plugin manifest declares it, because a `uvx` server needs absolute paths a committed manifest cannot hold.
+
+It replaced Atlassian's hosted `mcp.atlassian.com` server in 0.21.1. That server is Cloud-only, so a Jira
+Server/Data Center team could never reach it, and it exposed no board or sprint tools — which is why board
+reads used to be approximated by a project-wide JQL. Boards are now addressed by id, so two boards in one
+project are fully distinguishable.
 
 The vendored MCP servers are configured in `.mcp.json` (gitignored) and read credentials from
 `~/.buddy-council/secrets.json` (via `BC_SECRETS_FILE`), not the `env` block — see Credential Management

@@ -9,8 +9,10 @@ Every user-facing story should exist on each platform the team ships. This skill
 works out which platform each belongs to, pairs them up, and reports the ones that are missing a counterpart
 or have a counterpart nobody linked.
 
-It **reports only**. It never creates a counterpart story and never creates a link — Atlassian's MCP server
-cannot create issue links at all, and inventing a missing story is a dev-team decision.
+It **reports only**. It never creates a counterpart story and never creates a link. `mcp-atlassian` *can*
+create issue links (`jira_create_issue_link`), so this is a deliberate boundary rather than a limitation:
+linking two stories the team never agreed are counterparts, or inventing a missing one, is a dev-team
+decision. Report the gap and let a human close it.
 
 ## Input
 
@@ -39,9 +41,10 @@ The `OS` field is a custom field, so its id differs per site. Resolve once per r
 
 1. **`jira.platform.field_id` in config** — use it directly. Validate it appears in at least one fetched
    issue's `fields`; if it never does, treat it as stale and fall through to discovery.
-2. **`getJiraIssueTypeMetaWithFields`** for the dev project and its story issue type. Find the field whose
-   `name` equals `jira.platform.field_name` (default `"OS"`), case-insensitively. Take its id.
-3. **The issue payload's `names` map**, when `getJiraIssue` returns one.
+2. **`jira_search_fields`** with `keyword` set to `jira.platform.field_name` (default `"OS"`). Match the
+   returned `name` case-insensitively and take its id. `jira_get_project_fields` for the dev project is the
+   fallback when the keyword search is ambiguous — it lists only fields that project actually uses.
+3. **The issue payload's `names` map**, when `jira_get_issue` returns one.
 
 Cache the resolved id back into `jira.platform.field_id` so later runs skip discovery.
 
