@@ -40,7 +40,7 @@ Only walk the steps for the sections the user names; carry every other section o
   rather than trusting the recorded id.
 - **`jira.deployment` is missing entirely** → the config predates deployment detection. Probe once and record
   it, without re-walking Step 3 if everything else still verifies.
-- **`jira.cloud_id` is present, or either MCP config has an `atlassian` entry pointing at `mcp.atlassian.com`** → this config predates 0.19.0, when Jira moved off Atlassian's OAuth server. **Remove the stale `atlassian` entry from both MCP configs and drop `cloud_id` immediately**, as part of the Step 0a automatic repair — a user who answers "nothing" must not be left with a server that 401s on every call. Then walk Step 3 to collect the API token and write the `uvx` entry. Say why in one line.
+- **`jira.cloud_id` is present, or either MCP config has an `atlassian` entry pointing at `mcp.atlassian.com`** → this config predates 0.20.0, when Jira moved off Atlassian's OAuth server. **Remove the stale `atlassian` entry from both MCP configs and drop `cloud_id` immediately**, as part of the Step 0a automatic repair — a user who answers "nothing" must not be left with a server that 401s on every call. Then walk Step 3 to collect the API token and write the `uvx` entry. Say why in one line.
 
 **If it does not exist**, run all steps in order.
 
@@ -617,7 +617,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 }
 ```
 
-The `"jira"` section is **always written** — Step 3 is required. If the preflight or the credentials were not ready, write it with `"pending": true`. Never write `cloud_id` — it was only meaningful to the retired OAuth server; drop it if a pre-0.19.0 config still carries one. `board.id` is an integer, not a string. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
+The `"jira"` section is **always written** — Step 3 is required. If the preflight or the credentials were not ready, write it with `"pending": true`. Never write `cloud_id` — it was only meaningful to the retired OAuth server; drop it if a pre-0.20.0 config still carries one. `board.id` is an integer, not a string. If `github_url` column was not mapped or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the sheet's Item Type sample contains no `Text` rows. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
@@ -743,7 +743,7 @@ Six rules for this file, each of which breaks something specific if ignored:
 Tell the user this file exists, that it holds a real credential, and that revoking the token at
 https://id.atlassian.com/manage-profile/security/api-tokens is how you cut off access.
 
-**Migration from a pre-0.19.0 setup.** Earlier versions used Atlassian's official OAuth server and stored no
+**Migration from a pre-0.20.0 setup.** Earlier versions used Atlassian's official OAuth server and stored no
 Jira credential. If `~/.buddy-council/secrets.json` still has a `jira` section from before 0.17.0, delete it
 and tell the user that old token is unused and should be revoked.
 
@@ -779,7 +779,7 @@ If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.jso
 }
 ```
 
-**Add the `atlassian` entry to `.mcp.json` too.** As of 0.19.0 it is an ordinary stdio server like TestRail,
+**Add the `atlassian` entry to `.mcp.json` too.** As of 0.20.0 it is an ordinary stdio server like TestRail,
 written by setup into both configs — it is no longer declared in the plugin manifest, because the
 `--env-file` path is absolute and per-machine, so it cannot be committed:
 
@@ -951,5 +951,5 @@ If the user's Copilot version predates plugin hooks, tell them to also append th
 - If `.mcp.json` already exists, merge new server configs without overwriting other servers
 - Step 3 (Jira & Confluence) is **required** — never offer to skip it. When the server preflight or the credentials are not ready, record the answers with `"pending": true` and finish the wizard; do not abandon the run and do not omit the `jira` block
 - Ask for the credential that matches the deployment: an **email + API token** on Cloud, a **Personal Access Token** on Server/Data Center. Never send a DC user to `id.atlassian.com`; it only issues Cloud tokens
-- DO ask for a credential at all — that changed in 0.19.0. The `sooperset/mcp-atlassian` server has no browser OAuth, so the credential is required and lives in `~/.buddy-council/atlassian.env`. Never put it in `sources.json` or either MCP config
+- DO ask for a credential at all — that changed in 0.20.0. The `sooperset/mcp-atlassian` server has no browser OAuth, so the credential is required and lives in `~/.buddy-council/atlassian.env`. Never put it in `sources.json` or either MCP config
 - If the user explicitly asks about Jama: explain the API integration is in progress and that the Excel export path is the supported route for now

@@ -15,7 +15,7 @@ If the MCP tools are NOT available, the cause is almost always one of these, in 
 
 - **`command` is not an absolute `uvx` path.** The spawned server does not inherit the shell's `PATH`, so a
   bare `"uvx"` fails to start and the server never registers.
-- **Setup has not been run**, or was run before 0.19.0 — the config may still hold the retired
+- **Setup has not been run**, or was run before 0.20.0 — the config may still hold the retired
   `mcp.atlassian.com` HTTP entry. Tell them to run `/bc:setup`.
 - **The CLI was not restarted** after setup.
 
@@ -31,7 +31,7 @@ to verify credentials before the server is registered; that is the sole exceptio
 - `scope`: Optional — a specific issue key (e.g., "PROJ-123"), a JQL query, or "all"
 
 **There is no `cloudId` to resolve.** The server is bound to one site by `JIRA_URL` in its env file, so no
-tool takes a site identifier. If you find a `cloud_id` in `sources.json`, it is a leftover from a pre-0.19.0
+tool takes a site identifier. If you find a `cloud_id` in `sources.json`, it is a leftover from a pre-0.20.0
 config — ignore it.
 
 ## Fetching Strategy

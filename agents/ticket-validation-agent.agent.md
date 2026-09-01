@@ -245,7 +245,7 @@ Otherwise, retrieve Jira config from `.buddy-council/sources.json`:
 - `base_url`: Used only to build the browse URL in the success message
 
 There is no site identifier to resolve — the MCP server is bound to one Atlassian site by `JIRA_URL` in
-`~/.buddy-council/atlassian.env`. Ignore any `cloud_id` left in the config by a pre-0.19.0 setup.
+`~/.buddy-council/atlassian.env`. Ignore any `cloud_id` left in the config by a pre-0.20.0 setup.
 
 **Resolve the board's active sprint first**, so the ticket lands on the board rather than in the backlog.
 Follow the *Placing a New Ticket in the Active Sprint* section of
