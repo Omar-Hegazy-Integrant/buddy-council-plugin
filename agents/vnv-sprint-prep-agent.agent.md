@@ -73,7 +73,7 @@ state a run interrupted between phase 3 and phase 4 leaves behind.
 Phase 4 is an analysis step and obeys the same contract as every other analysis command:
 
 - **Requirements** and **test cases** — always fetched, via the router skills, before validating anything.
-- **GitHub docs (enrichment)** — whenever the config maps a `github_url` column and
+- **GitHub docs (enrichment)** — whenever the config maps a `github_url` column (Excel) or field (Jama) and
   `requirements.enrichment.enabled` is true.
 - **Dev sprint stories** — the workflow's own subject; fetched in phase 2.
 

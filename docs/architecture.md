@@ -33,13 +33,15 @@ buddy_council_plugin/
 ├── providers/                   # Platform-specific data fetching instructions
 │   ├── excel/fetch.md           # Jama Excel export parser
 │   ├── testrail/fetch.md        # TestRail via MCP tools
-│   └── jama/fetch.md            # Jama API (placeholder, auth blocked)
+│   └── jama/fetch.md            # Jama live via the read-only jama MCP server (features = folders)
 ├── mcp-servers/                 # Standalone MCP servers wrapping external APIs
 │   ├── testrail-server/         # Python MCP server for TestRail REST API
 │   │   ├── server.py            # 10 read tools + 3 write tools (add_case/add_cases/add_section)
 │   │   └── pyproject.toml       # Dependencies: mcp[cli], httpx
-│   └── jama-server/             # Placeholder for future Jama MCP server
-│       └── server.py            # Empty skeleton
+│   └── jama-server/             # Python MCP server for the Jama REST API — read-only by construction
+│       ├── server.py            # 6 jama_get_* tools, GET-only client, folder-based feature scoping
+│       ├── pyproject.toml       # Dependencies: mcp[cli], httpx
+│       └── tests/               # stdlib unittest suite against a fake Jama REST API
 ├── .mcp.example.json            # Template for MCP server config (committed)
 ├── config/
 │   ├── sources.json             # Active provider config (no secrets)
@@ -64,8 +66,8 @@ User runs /bc:contradiction [scope]
   │
   │    Step 3: Fetch requirements
   │    │  └─ skills/fetch-requirements/ → reads config → delegates to provider
-  │    │     ├─ providers/excel/fetch.md (current)
-  │    │     └─ providers/jama/fetch.md (future)
+  │    │     ├─ providers/excel/fetch.md → bundled parser → Excel export
+  │    │     └─ providers/jama/fetch.md → jama MCP tools (GET only) → Jama REST API
   │    │
   │    Step 4: Fetch test cases
   │    │  └─ skills/fetch-test-cases/ → reads config → delegates to provider
@@ -119,9 +121,9 @@ Agent → Router Skill → Provider Skill
 
 | Provider | Type | Status |
 |----------|------|--------|
-| Excel | Requirements | Active — Jama export fallback |
+| Excel | Requirements | Active — Jama export file |
 | TestRail | Test Cases | Active — REST API with pagination |
-| Jama | Requirements | Placeholder — auth blocked |
+| Jama | Requirements | Active — live REST API, read-only, features = folders |
 
 ### Future Providers
 
@@ -209,7 +211,12 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 | Server | Status | Tools |
 |--------|--------|-------|
 | `testrail-server` | Active | `testrail_get_projects`, `testrail_get_suites`, `testrail_get_sections`, `testrail_get_cases`, `testrail_get_case` |
-| `jama-server` | Placeholder | None yet (auth blocked) |
+| `jama-server` | Active, read-only | `jama_get_current_user`, `jama_get_projects`, `jama_get_item_types`, `jama_get_features`, `jama_get_requirements`, `jama_get_item` |
+
+The Jama server is the one MCP server that emits the canonical schema itself, like the Excel parser: feature
+scoping needs the whole project tree (rebuilt from each item's `location.parent`), so the server builds the tree,
+resolves pick lists, flattens rich text, and returns finished requirements. It has no write tools, and its HTTP
+client can only issue GET.
 
 Jira/Confluence are **not** vendored here. They use [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian),
 run as a local stdio server via `uvx mcp-atlassian@0.23.1` and authenticated by a token in

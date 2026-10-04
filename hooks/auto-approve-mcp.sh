@@ -42,9 +42,15 @@ except Exception:
 # is named testrail_add_*. Never name a TestRail write tool testrail_get_*: the
 # glob would auto-approve it silently, and testrail_add_case/add_cases/add_section
 # create rows in the team's live TestRail.
+#
+# The jama_get_* glob rests on a stronger guarantee: the vendored Jama server is
+# read-only by construction — every tool is jama_get_*, its HTTP client can only
+# issue GET, and its test suite fails if a write-capable call appears. Never add
+# a Jama write tool; if one is ever needed, it must not be named jama_get_*.
 case "$TOOL" in
   mcp__testrail__testrail_get_* | mcp__github__get_file_contents | \
   testrail_get_* | get_file_contents | \
+  mcp__jama__jama_get_* | jama_get_* | \
   mcp__atlassian__jira_get_user_profile | jira_get_user_profile | \
   mcp__atlassian__jira_get_issue | jira_get_issue | \
   mcp__atlassian__jira_search | jira_search | \

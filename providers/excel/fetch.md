@@ -1,6 +1,6 @@
 # Excel Requirements Fetch — Provider Skill
 
-Fetch requirements from a Jama-exported Excel file. This is the temporary fallback while Jama API authentication is being resolved.
+Fetch requirements from a Jama-exported Excel file. Use it when the team works from an export rather than live Jama access; the `jama` provider (`providers/jama/fetch.md`) reads the same data live through the plugin's read-only Jama MCP server.
 
 ## Input
 

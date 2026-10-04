@@ -9,9 +9,9 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | Source | Type | Status |
 |--------|------|--------|
 | **TestRail** | Test cases | Supported (via MCP server) |
-| **Excel** (Jama export) | Requirements | Supported (temporary Jama fallback) |
+| **Jama** | Requirements | Supported (live, via the plugin's read-only Jama MCP server — features are Jama folders) |
+| **Excel** (Jama export) | Requirements | Supported (alternative to live Jama) |
 | **GitHub** | Requirement doc enrichment | Supported (`gh` CLI or external GitHub MCP server) |
-| **Jama** | Requirements | Planned (auth in progress) |
 | **Jira** | Dev board (in-flight work) | Supported (required — feeds contradiction and coverage analysis) |
 | **Jira** | Ticket creation | Supported (via `mcp-atlassian` — Cloud **and** Server/Data Center) |
 | **Jira** | Requirements | Planned |
@@ -37,7 +37,7 @@ These descriptions are the `description:` frontmatter in `commands/*.md` — the
 - [Claude Code](https://claude.ai/code) **or** [Copilot CLI](https://docs.github.com/en/copilot)
 - [uv](https://docs.astral.sh/uv/) — runs the MCP servers **and** the Excel parser; it provisions a compatible Python and all dependencies automatically, so no host Python installation or `pip install` is needed
 - A TestRail account with API access (for test cases)
-- An Excel export from Jama (for requirements), or direct Jama API access (when available)
+- Requirements from **either** Jama Connect — a Jama API client ID and secret (Jama → profile menu → **Set API Credentials**), on an account allowed to use the REST API (Admin → REST API → Managed Access Control, when your site restricts it) — **or** an Excel export from Jama. A read-only Jama account is recommended; the plugin never writes to Jama either way
 - Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your sheet links GitHub docs
 - A Jira account with access to your team's dev board, on **either Atlassian Cloud or Jira Server/Data Center** — plus a token: an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) on Cloud, or a Personal Access Token (profile menu → **Personal Access Tokens**) on Server/DC. `/bc:setup` requires the board — it feeds in-flight work into contradiction and coverage analysis, and is where `/bc:validate` files tickets. Nothing needs enabling by a site admin. If the connection test fails (a self-hosted Jira usually needs your corporate VPN), setup records the board as *pending* and finishes — the requirements-vs-test-cases commands work without it
 
@@ -113,6 +113,7 @@ Append the read-only tools for any other sources you configured:
 
 - **Jira** (board reads, ticket validation, V&V sprint prep): `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)`
 - **GitHub MCP** (doc enrichment): `github(get_file_contents)`
+- **Jama** (requirements): `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item)` — the server's whole tool list, since it has no write tools
 
 **Never add the Jira write tools** — `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, `jira_add_issues_to_sprint`. They are left out on purpose so ticket creation, label changes, links, and comments on the dev team's stories always prompt.
 
@@ -149,7 +150,7 @@ Three layers of visibility, in order of reach:
 2. **Tool log (both platforms).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran. Under Copilot each line additionally carries a `result` status (`success` or a failure kind), and failed calls are logged too.
 3. **Native session logs (Copilot CLI).** For deeper Copilot internals beyond the tool log, launch with `copilot --log-level debug` (logs land in `~/.copilot/logs/`, or set `--log-dir`).
 
-#### TestRail (or Jira) tools missing under Copilot CLI
+#### TestRail, Jama, or Jira tools missing under Copilot CLI
 
 The two CLIs read **different MCP config files**, and Copilot ignores the project `.mcp.json` completely:
 
@@ -183,7 +184,11 @@ After installation, run the setup command to configure your data sources:
 
 The wizard runs in four steps with a single review-and-save confirmation at the end:
 
-1. **Requirements (Excel)** — point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs); GitHub doc enrichment is auto-configured when the sheet has a GitHub URL column (`gh` CLI preferred, MCP fallback).
+1. **Requirements (Jama or Excel)** — one question picks the source.
+   - **Jama**: the base URL and an API client ID/secret. The connection is tested before moving on (by the Jama server's own `--check` mode, since the server isn't registered yet), then you pick the project. Setup reads the project tree once to report its folders — **features are Jama folders** — excludes `Text` and test-case item types automatically, and confirms the Status / Rationale / GitHub-link field mapping in one question.
+   - **Excel**: point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs).
+
+   Either way, GitHub doc enrichment is auto-configured when a GitHub-link column or field is mapped (`gh` CLI preferred, MCP fallback).
 2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on.
 3. **Jira (required)** — the base URL, a token, and your team's board URL. Cloud vs Server/Data Center is detected from the host, so you're only asked for the credential that deployment actually uses. **The connection is tested before moving on**, exactly like TestRail: by MCP tool if the server is already loaded, otherwise by a direct REST call. The board URL is parsed for the board id and project key — and when a classic RapidBoard URL carries no key, it's derived from the board's own issues rather than asked for. If the test fails (usually a self-hosted Jira needing the VPN), the answers are saved as *pending*, setup finishes, and it re-tests on the next run — `/bc:contradiction` and `/bc:coverage` keep working meanwhile, only `/bc:validate` waits.
    The same step then offers the **V&V board** plus its platform field and scenario reviewer, for `/bc:vnv-sprint-prep`. That part *is* skippable — the command can collect it itself on first run. **The V&V board may live in the same project as the dev board**; only a duplicate board *id* is refused. When they share a project, setup samples both boards to work out what the V&V board's filter keys off — a label, component, or issue type — confirms it in one question, and stamps it on every clone.
@@ -257,6 +262,52 @@ chmod 600 ~/.buddy-council/secrets.json
 ```
 
 The `atlassian` entry belongs here too — see the `mcp-atlassian` block further down; its token stays in `~/.buddy-council/atlassian.env`, never in this file.
+
+**Jama instead of Excel.** To read requirements live from Jama, the `requirements` block becomes:
+
+```json
+{
+  "requirements": {
+    "provider": "jama",
+    "base_url": "https://company.jamacloud.com",
+    "project_id": 42,
+    "feature_inference": { "strategy": "hierarchical_folder", "folder_item_type": "Folder" },
+    "item_type_exclude": ["Text", "Test Case"],
+    "field_mapping": { "status": "Status", "rationale": "Rationale", "github_url": "Linked to Github" }
+  }
+}
+```
+
+`field_mapping` values are Jama field **labels**; `folder_item_type` is the item type that marks a feature. The
+credential goes in `~/.buddy-council/secrets.json` — `client_id` + `client_secret` from Jama → profile menu →
+**Set API Credentials** (`username` + `password` only on instances without API credentials):
+
+```json
+{
+  "jama": {
+    "client_id": "your-jama-api-client-id",
+    "client_secret": "your-jama-api-client-secret"
+  }
+}
+```
+
+and `.mcp.json` gets a `jama` entry beside `testrail` — base URL and secrets-file pointer only. On Copilot CLI,
+add the same entry to `~/.copilot/mcp-config.json` with `"type": "local"`, `"tools": ["*"]`, and absolute paths:
+
+```json
+{
+  "mcpServers": {
+    "jama": {
+      "command": "uv",
+      "args": ["run", "--directory", "mcp-servers/jama-server", "mcp", "run", "server.py"],
+      "env": {
+        "JAMA_BASE_URL": "https://company.jamacloud.com",
+        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
+      }
+    }
+  }
+}
+```
 
 **4. Jira dev board (required).** Add a `jira` block to `.buddy-council/sources.json` — no credentials there either, just which board to read and file into:
 
@@ -350,6 +401,8 @@ TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
 /bc:contradiction CWA-REQ-85             # Analyze a specific requirement
 /bc:contradiction "Patient Monitoring"   # Analyze a specific feature
 ```
+
+With Jama as the requirements source, a feature is a **Jama folder**: the scope covers everything under it, sub-folders included, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`.
 
 The agent fetches requirements, test cases, and the in-flight issues on your Jira dev board, normalizes and cross-links them, then analyzes for 7 types of contradictions:
 
@@ -509,7 +562,9 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
 - Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
-- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section` — reached only through the one `draft-test-cases` skill, from `/bc:vnv-sprint-prep` phase 7, the `/bc:coverage` gap-fill offer, and `/bc:ask` scenario mapping. The Jama server remains read-only (a placeholder)
+- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section` — reached only through the one `draft-test-cases` skill, from `/bc:vnv-sprint-prep` phase 7, the `/bc:coverage` gap-fill offer, and `/bc:ask` scenario mapping
+- **Jama is read-only by construction.** The vendored Jama server has no write tools at all: every tool is `jama_get_*`, its HTTP client can only issue GET requests, and its test suite fails if that ever changes. That is why the hook can auto-approve the `jama_get_*` glob. Jama's own hosted MCP server is deliberately not used — it exposes create/edit/move tools and has no bulk reads
+- The Jama credential lives in the `jama` section of `~/.buddy-council/secrets.json` and nowhere else — the server reads it only from that file, never from environment variables, so it cannot leak into an MCP config. Prefer an API client ID/secret on a read-only Jama account; it is revocable without touching the account password
 - The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*`. Never name a write tool `testrail_get_*`
 - **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes no test cases; `--apply` executes after one batch confirmation per phase
 - The Jira token lives in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `sources.json`, not in `secrets.json`, not in either MCP config, which reference it only by absolute path. That file is the single place to rotate or revoke it

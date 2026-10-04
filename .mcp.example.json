@@ -19,6 +19,15 @@
         "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
       }
     },
+    "jama": {
+      "_comment": "ONLY when requirements come from Jama (requirements.provider = \"jama\"); otherwise delete this entry. The vendored server is read-only by construction — every tool is jama_get_* and it can only issue GET requests. Credentials (client_id + client_secret, or username + password) are read from the jama section of the secrets file at BC_SECRETS_FILE, NEVER from here; JAMA_BASE_URL is the only Jama value in this file. /bc:setup rewrites --directory to the absolute plugin path and fully expands BC_SECRETS_FILE, exactly as for testrail.",
+      "command": "uv",
+      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-servers/jama-server", "mcp", "run", "server.py"],
+      "env": {
+        "JAMA_BASE_URL": "",
+        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
+      }
+    },
     "github": {
       "_comment": "OPTIONAL: only needed if you chose the 'mcp' GitHub enrichment strategy in /bc:setup. Otherwise delete this entry. Requires `github-mcp-server` installed externally — see https://github.com/github/github-mcp-server. Unlike the testrail server, this external server reads GITHUB_TOKEN from its env and cannot read the secrets file, so the token must live here. If you chose the 'cli' strategy, gh CLI handles auth via its own keychain and this entry is not used.",
       "command": "github-mcp-server",

@@ -22,7 +22,7 @@ Check which MCP tools are available in your current session. Provider skills wil
 The mandatory data set is **every source the config provides** — not a fixed pair:
 
 - **Requirements** and **test cases** — always configured, always fetched.
-- **GitHub docs (enrichment)** — mandatory whenever the config maps a `github_url` column AND `requirements.enrichment.enabled` is true. The fetch-requirements router runs it and reports `Enrichment: fetched K of N GitHub-linked requirement docs`; a wholesale enrichment failure counts as a failed source.
+- **GitHub docs (enrichment)** — mandatory whenever the config maps a `github_url` column (Excel) or field (Jama) AND `requirements.enrichment.enabled` is true. The fetch-requirements router runs it and reports `Enrichment: fetched K of N GitHub-linked requirement docs`; a wholesale enrichment failure counts as a failed source.
 
 Every configured source must be fetched via the router skills, each attempt surfaced with a visible `Fetch:`/`Readiness:`/`Enrichment:` line. Scope narrows a fetch; it never skips one. Never analyze or answer from memory, prior context, or `linked_ids` inference instead of fetching. If any configured source fails to fetch or returns nothing where data is expected: STOP, name exactly which source could not be fetched and why, and ask the user whether to continue with partial data or abort. Continue only after explicit confirmation, and mark the final output **PARTIAL** with the missing source named.
 
