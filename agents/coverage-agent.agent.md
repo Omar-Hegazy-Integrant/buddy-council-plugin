@@ -97,7 +97,7 @@ Present the findings as a human-readable report following the format specified i
 ### Step 8: Offer to close the gaps — no flag, no extra command
 
 After the report, when **both** are true — the run found at least one untested requirement, and
-`test_cases.authoring` is configured — end with a single offer:
+`test_cases.authoring` is configured with a non-empty `requirement_field` — end with a single offer:
 
 ```
 12 requirements have no test case. I can draft skeleton cases for them in TestRail,

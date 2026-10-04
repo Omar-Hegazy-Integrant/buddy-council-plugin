@@ -233,7 +233,8 @@ async def _resolve_section(
     section_id: int | None,
     section_path: str | None,
     create_missing: bool,
-) -> tuple[int, str, list[str]]:
+    dry_run: bool = False,
+) -> tuple[int | None, str, list[str]]:
     """Resolve the target folder to a section id.
 
     Returns (section_id, human-readable path, notes about folders created).
@@ -241,6 +242,9 @@ async def _resolve_section(
     A numeric section_id is *validated* against the suite rather than trusted:
     a wrong id writes cases into someone else's folder, which is the failure
     mode worth one extra GET to prevent.
+
+    In a dry run, folders that would be created are reported but not POSTed,
+    and the returned section_id is None: the folder does not exist yet.
     """
     if section_id is None and not section_path:
         raise TestRailError("Provide either section_id or section_path — a case must land in a folder.")
@@ -261,6 +265,7 @@ async def _resolve_section(
     notes: list[str] = []
     parent_id: int | None = None
     current: dict[str, Any] | None = None
+    existing_depth = 0
 
     for depth, name in enumerate(segments):
         found = _find_child(sections, parent_id, name)
@@ -275,6 +280,16 @@ async def _resolve_section(
                     f"Existing folders there: {siblings}. "
                     "Pass create_missing_sections=true to create it."
                 )
+            if dry_run:
+                # Nothing below a missing folder can exist either, so every remaining
+                # segment would be created too.
+                prefix = [_section_path(sections, current)] if current is not None else []
+                would_be = _SECTION_PATH_SEPARATOR.join([*prefix, *segments[existing_depth:]])
+                for end in range(depth + 1, len(segments) + 1):
+                    notes.append(
+                        f'would create folder "{_SECTION_PATH_SEPARATOR.join(segments[:end])}"'
+                    )
+                return None, would_be, notes
             payload: dict[str, Any] = {"name": name}
             if suite_id is not None:
                 payload["suite_id"] = suite_id
@@ -285,6 +300,7 @@ async def _resolve_section(
             notes.append(f'created folder "{_SECTION_PATH_SEPARATOR.join(segments[: depth + 1])}"')
         parent_id = found.get("id")
         current = found
+        existing_depth = depth + 1
 
     if current is None or current.get("id") is None:
         raise TestRailError(f'Could not resolve section path "{section_path}".')
@@ -664,7 +680,10 @@ async def testrail_add_cases(
             exists in its target folder is skipped rather than duplicated, so
             re-running a batch is safe. Comparison is trimmed and case-insensitive.
         dry_run: When true, resolve folders and duplicate-check but create
-            nothing. Use it to preview a batch before committing.
+            nothing. Use it to preview a batch before committing. A folder that
+            would be created is reported in sections_created as
+            'would create folder "…"', and its cases come back with
+            section_id null.
 
     Returns JSON:
         {"dry_run": bool,
@@ -685,9 +704,10 @@ async def testrail_add_cases(
     sections_created: list[str] = []
 
     # Resolved once per distinct target, so a 40-case batch into one folder costs
-    # one section lookup and one duplicate-check, not forty.
-    resolved: dict[tuple[int | None, str | None], tuple[int, str]] = {}
-    seen_titles: dict[int, set[str]] = {}
+    # one section lookup and one duplicate-check, not forty. A dry-run folder that
+    # does not exist yet has no id, so its titles are tracked under its path.
+    resolved: dict[tuple[int | None, str | None], tuple[int | None, str]] = {}
+    seen_titles: dict[int | str, set[str]] = {}
 
     for index, spec in enumerate(cases):
         if not isinstance(spec, dict):
@@ -705,22 +725,27 @@ async def testrail_add_cases(
                     suite_id=suite_id,
                     section_id=target_id,
                     section_path=target_path,
-                    create_missing=create_missing_sections and not dry_run,
+                    create_missing=create_missing_sections,
+                    dry_run=dry_run,
                 )
                 resolved[key] = (resolved_id, resolved_path)
-                sections_created.extend(notes)
-                if skip_if_title_exists and resolved_id not in seen_titles:
-                    seen_titles[resolved_id] = await _existing_titles(
-                        project_id, suite_id, resolved_id
+                sections_created.extend(n for n in notes if n not in sections_created)
+                titles_key = resolved_id if resolved_id is not None else f"new:{resolved_path.casefold()}"
+                if skip_if_title_exists and titles_key not in seen_titles:
+                    seen_titles[titles_key] = (
+                        await _existing_titles(project_id, suite_id, resolved_id)
+                        if resolved_id is not None
+                        else set()
                     )
             dest_id, dest_path = resolved[key]
+            titles_key = dest_id if dest_id is not None else f"new:{dest_path.casefold()}"
             payload = _build_case_payload(spec)
         except TestRailError as exc:
             failed.append({"index": index, "title": spec.get("title"), "error": str(exc)})
             continue
 
         normalized = payload["title"].strip().casefold()
-        if skip_if_title_exists and normalized in seen_titles.get(dest_id, set()):
+        if skip_if_title_exists and normalized in seen_titles.get(titles_key, set()):
             skipped.append(
                 {
                     "index": index,
@@ -742,7 +767,7 @@ async def testrail_add_cases(
                     "url": None,
                 }
             )
-            seen_titles.setdefault(dest_id, set()).add(normalized)
+            seen_titles.setdefault(titles_key, set()).add(normalized)
             continue
 
         try:
@@ -762,7 +787,7 @@ async def testrail_add_cases(
                 "url": f"{BASE_URL}/index.php?/cases/view/{case_id}" if case_id else None,
             }
         )
-        seen_titles.setdefault(dest_id, set()).add(normalized)
+        seen_titles.setdefault(titles_key, set()).add(normalized)
 
     return json.dumps(
         {

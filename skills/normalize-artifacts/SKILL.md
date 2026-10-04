@@ -49,7 +49,7 @@ For `title`, `description`, `rationale`, and any text in `raw_fields`:
 
 ### 3. Parse Linked IDs
 
-For test cases, parse the `custom_jama_req_id` or equivalent field:
+For test cases, parse the requirement field — `test_cases.authoring.requirement_field` when set, else `custom_jama_req_id` (see the *Linking* section of `providers/testrail/fetch.md`):
 - Split on commas, semicolons, or newlines
 - Trim each ID
 - Normalize to the standard requirement ID format

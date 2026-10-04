@@ -78,7 +78,7 @@ For each test case returned, extract and map fields:
 - `title` → test case title
 - `custom_desc` or `custom_preconds` → combine into description
 - `custom_steps_separated` → structured test steps (array of `{content, expected}`)
-- `custom_jama_req_id` → parse into `linked_ids` (see Linking section below)
+- the requirement field → parse into `linked_ids` (see Linking section below)
 - `section_id` → resolve to section name using the section lookup
 
 ## Output
@@ -115,7 +115,11 @@ Return a JSON array of test case objects in the canonical schema:
 
 ## Linking
 
-The `custom_jama_req_id` field contains Jama requirement references. Parse this field to extract requirement IDs (e.g., "CWA-REQ-85") and store them in `linked_ids`. This field may contain:
+The requirement field is `test_cases.authoring.requirement_field` from `.buddy-council/sources.json` when it
+is set, and `custom_jama_req_id` otherwise (configs from before `authoring` existed, or a `null` field). Read
+the **same** field the authoring path writes — `/bc:setup` resolves it per instance, and reading a different
+one makes every created case come back an orphan. Parse it to extract requirement IDs (e.g., "CWA-REQ-85")
+and store them in `linked_ids`. This field may contain:
 - A single ID: "CWA-REQ-85"
 - Multiple IDs: "CWA-REQ-85, CWA-REQ-86"
 - IDs with prefixes or formatting variations — normalize to consistent format
@@ -158,7 +162,7 @@ Use the readable aliases; the server maps them onto TestRail's field names:
 
 **Requirement IDs go in two fields, always.** `refs` is the built-in References field, which
 `testrail_get_cases_by_refs` searches (Strategy 3 above). But this plugin builds a case's `linked_ids` from
-`custom_jama_req_id` — the *Linking* section above — so a case written with `refs` alone comes back with no
+the requirement field — the *Linking* section above — so a case written with `refs` alone comes back with no
 `linked_ids` and is counted an **orphan**, while the requirement it covers still reads **untested**. Write
 both: `refs` gets the requirement IDs plus any originating Jira key,
 `test_cases.authoring.requirement_field` (default `custom_jama_req_id`) gets the requirement IDs only, in
@@ -172,7 +176,8 @@ not set is the usual cause of a 400, and the error names the field.
 ### Before writing anything
 
 1. **Dry-run first** when creating more than a couple of cases: `dry_run: true` resolves folders and
-   duplicate-checks without creating anything, so you can show the user the plan.
+   duplicate-checks without creating anything, so you can show the user the plan. Folders it would create
+   are listed as `would create folder "…"` under `sections_created`, with `section_id: null` on their cases.
 2. **Leave `skip_if_title_exists` on** (the default). It skips a case whose title already exists in the
    target folder, which makes a re-run safe. Turn it off only when the team genuinely wants duplicate
    titles.

@@ -1,10 +1,11 @@
 ---
-description: Ask a natural-language question about requirements and test cases — routes to the right analysis or answers directly.
+description: Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, or maps scenarios you already have into TestRail test cases.
 ---
 
 # /bc:ask — Buddy-Council Natural Language Query
 
-Route a natural language question to the appropriate analysis or answer it directly.
+Route a natural language question to the appropriate analysis or answer it directly — or, when the user
+brings their own test scenarios, map them into TestRail.
 
 ## Arguments: $ARGUMENTS
 
@@ -32,6 +33,18 @@ Analyze the user's question and classify it into one of these intents:
 
 **Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/coverage-agent.agent.md`, using the user's question to determine scope.
 
+**Asking for test cases without supplying scenarios** ("create test cases for the untested requirements in Login", "write cases for CWA-REQ-85") is this intent too: the coverage agent finds which requirements truly lack a case, and its gap-fill offer drafts them from the requirement text. Treat the request as the user's yes to that offer — the agent still shows the plan before anything is written. If the requirement turns out to be covered already, say so rather than writing a duplicate.
+
+### Intent: AUTHOR (map the user's scenarios into TestRail)
+**Trigger**: the user **supplies** scenarios — pasted, a file path, or a Jira key whose description holds them — and wants them as TestRail test cases. Phrases: "map these scenarios to TestRail", "turn these into test cases", "import login.feature into TestRail", "post these scenarios to TestRail", "create TestRail cases from the scenarios in PROJ-123"
+**Examples**:
+- "Map the scenarios in docs/sync-scenarios.md into TestRail"
+- "Turn these into TestRail test cases: 1. Sync retries on network loss 2. Banner clears on reconnect"
+- "Create TestRail cases from the scenarios in PROJ-123"
+- "Preview how login.feature would map to TestRail"
+
+**Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/scenario-mapping-agent.agent.md`, passing the scenarios (or the file path / Jira key) plus anything the user specified — requirement IDs, a feature, a TestRail folder, a platform, and whether they asked only for a preview.
+
 ### Intent: QA (General Question)
 **Trigger phrases**: "what does", "tell me about", "which test cases", "list", "summarize", "describe", "how many", "what is", "show me", "explain"
 **Examples**:
@@ -49,6 +62,7 @@ If the intent is unclear from the question, ask the user a brief clarifying ques
 > 1. **Contradictions** between requirements and test cases
 > 2. **Coverage gaps** (untested requirements, orphan tests)
 > 3. **General information** about specific requirements or test cases
+> 4. **Mapping scenarios** you already have into TestRail test cases
 
 Do not guess — ask.
 

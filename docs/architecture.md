@@ -18,7 +18,8 @@ buddy_council_plugin/
 │   └── setup.md                 # /bc:setup — onboarding and configuration
 ├── agents/                      # Reasoning engines
 │   ├── contradiction-agent.agent.md   # Orchestrates the contradiction workflow
-│   └── coverage-agent.agent.md        # Orchestrates the coverage workflow
+│   ├── coverage-agent.agent.md        # Orchestrates the coverage workflow
+│   └── scenario-mapping-agent.agent.md # User scenarios → requirement traces → TestRail cases
 ├── skills/                      # Reusable capabilities (SKILL.md with frontmatter)
 │   ├── fetch-requirements/      # Router: delegates to configured provider
 │   ├── fetch-test-cases/        # Router: delegates to configured provider
@@ -28,7 +29,7 @@ buddy_council_plugin/
 │   ├── check-platform-parity/   # V&V phase 2: iOS ↔ Android counterparts
 │   ├── clone-to-vnv-board/      # V&V phase 3: sprint stories → V&V board
 │   ├── draft-vnv-scenarios/     # V&V phase 5: high-level scenarios → ticket
-│   └── draft-test-cases/        # V&V phase 7: approved scenarios → TestRail cases
+│   └── draft-test-cases/        # The one TestRail writer: V&V scenarios, coverage gaps, user scenarios
 ├── providers/                   # Platform-specific data fetching instructions
 │   ├── excel/fetch.md           # Jama Excel export parser
 │   ├── testrail/fetch.md        # TestRail via MCP tools
@@ -160,6 +161,7 @@ The agent detects 7 types of issues:
 | Contradiction | `/bc:contradiction` | Detect conflicts between artifacts |
 | Coverage | `/bc:coverage` | Find untested requirements and coverage gaps |
 | QA (via orchestration) | `/bc:ask` | Answer general questions about artifacts |
+| Scenario mapping | `/bc:ask` | Trace the user's own scenarios to requirements, check them against existing cases, write them into TestRail |
 
 ## Orchestration (`/bc:ask`)
 
@@ -174,6 +176,9 @@ The `/bc:ask` command classifies intent and routes to the right agent:
 
 /bc:ask "What does CWA-REQ-85 do?"
   └─ ask.md → QA intent → fetches data, answers directly
+
+/bc:ask "Map the scenarios in sync.feature into TestRail"
+  └─ ask.md → AUTHOR intent → follows scenario-mapping-agent.agent.md → draft-test-cases
 ```
 
 Intent classification uses Claude's native reasoning with trigger phrases and examples — no regex or external classifier. When intent is ambiguous, the command asks a clarifying question.

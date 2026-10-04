@@ -25,7 +25,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | `/bc:contradiction` | Detect contradictions, inconsistencies, and alignment gaps between requirements and test cases |
 | `/bc:coverage` | Find untested requirements, orphan test cases, and coverage gaps |
 | `/bc:validate` | Validate a ticket description against requirements and test cases, then draft and create a Jira ticket |
-| `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis or answers directly |
+| `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, or maps scenarios you already have into TestRail test cases |
 | `/bc:onboarding` | Walk a new team member through the product feature-by-feature with paced demos, optional code mapping, and an assessment. Resumes across sessions |
 | `/bc:codemap "<feature>"` | Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations |
 | `/bc:vnv-sprint-prep` | V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, drive them through scenario review, and write the approved scenarios into TestRail as test cases |
@@ -372,6 +372,8 @@ The agent fetches requirements, test cases, and the in-flight issues on your Jir
 
 Alongside the usual untested-requirements and orphan-test-case findings, the report carries a **Delivery risk** section built from your dev board: work in flight whose requirement has no test case, and board issues that match no requirement at all. These are listed separately and deliberately kept out of the headline coverage percentage, which stays requirements-vs-tests so it remains comparable across runs.
 
+When the run finds untested requirements and `test_cases.authoring` is configured, the report ends with a one-line offer to draft skeleton TestRail cases for them, linked to their requirement IDs. Answer `all`, `pick some`, or `no` — nothing is written without a yes, and you see the plan before anything is created.
+
 ### Validate and Create Tickets
 
 ```
@@ -436,6 +438,34 @@ issue type, or the active sprint) and then verifies the clone actually landed on
 
 Routes automatically to the right agent based on intent.
 
+### Map Your Own Scenarios into TestRail
+
+```
+/bc:ask "Map the scenarios in docs/sync-scenarios.md into TestRail"
+/bc:ask "Turn these into TestRail test cases: 1. Sync retries on network loss 2. Banner clears on reconnect"
+/bc:ask "Create TestRail cases from the scenarios in PROJ-123"
+/bc:ask "Preview how login.feature would map to TestRail"
+```
+
+Already have high-level scenarios? Hand them over as a file (markdown, Gherkin `.feature`, CSV, JSON), pasted
+text, or a Jira key whose description holds them. The agent:
+
+1. **Traces each scenario to requirements.** It uses the IDs you wrote (`@CWA-REQ-85`, `Traces to: …`) and
+   checks them against the live requirement set, or suggests matches for scenarios that have none.
+2. **Checks for existing cases.** A scenario an existing case already tests is marked `covered by TC-…` and
+   skipped. Partial overlaps and scenarios that contradict their own requirement are flagged for you to
+   decide.
+3. **Shows one confirmation table**: trace (explicit or matched), existing coverage, and target folder for
+   every scenario. You can re-trace, drop, force-create, or change folders before anything is written.
+4. **Writes after a second confirmation**, through the same writer as `/bc:vnv-sprint-prep` and the coverage
+   gap-fill, so every case carries its requirement IDs and counts as coverage on the next `/bc:coverage`.
+
+A scenario that cannot be traced to any requirement is **never written**. It is reported as a possible
+requirement gap, because a case with no requirement would show up as an orphan in the next coverage report.
+Say "preview" to stop after the plan. Needs `test_cases.authoring` in your config (`/bc:setup`). Stories in
+the V&V pipeline are redirected to `/bc:vnv-sprint-prep`, which writes their scenarios in phase 7, whether you
+pass the V&V ticket or the dev story it was cloned from.
+
 ### Onboard a New Team Member
 
 ```
@@ -479,7 +509,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
 - Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
-- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section`. The Jama server remains read-only (a placeholder)
+- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section` — reached only through the one `draft-test-cases` skill, from `/bc:vnv-sprint-prep` phase 7, the `/bc:coverage` gap-fill offer, and `/bc:ask` scenario mapping. The Jama server remains read-only (a placeholder)
 - The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*`. Never name a write tool `testrail_get_*`
 - **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes no test cases; `--apply` executes after one batch confirmation per phase
 - The Jira token lives in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `sources.json`, not in `secrets.json`, not in either MCP config, which reference it only by absolute path. That file is the single place to rotate or revoke it

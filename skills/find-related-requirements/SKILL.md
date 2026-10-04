@@ -1,5 +1,5 @@
 ---
-description: Internal (used by /bc:validate) — Find requirements related to a ticket description using feature extraction and keyword matching strategies.
+description: Internal (used by /bc:validate and /bc:ask) — Find requirements related to a ticket description or a test scenario using feature extraction and keyword matching strategies.
 user-invocable: false
 ---
 
@@ -10,6 +10,8 @@ Find requirements related to a ticket description by analyzing the description t
 ## When to Use
 
 In the ticket validation workflow, after fetching and normalizing requirements and before checking for contradictions or gaps. This skill determines which requirements to validate the ticket description against.
+
+The scenario-mapping workflow (`/bc:ask`) also uses it, once per scenario, passing the scenario's title and Given/When/Then as the description to propose which requirements a scenario verifies.
 
 ## Input
 

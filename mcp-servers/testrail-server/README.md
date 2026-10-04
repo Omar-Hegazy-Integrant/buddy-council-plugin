@@ -91,7 +91,9 @@ folder costs one section read and one duplicate read, not forty.
 - `skip_if_title_exists` (default true) reads the target folder's existing titles and skips any incoming
   case that matches, trimmed and case-insensitive. Re-running a batch is therefore safe.
 - `dry_run: true` resolves folders and duplicate-checks but creates nothing — the response shows exactly
-  what would be written.
+  what would be written. A folder that does not exist yet is not an error in a dry run (unless
+  `create_missing_sections` is false): it is listed as `would create folder "…"` under `sections_created`,
+  and its cases come back with `section_id: null`.
 - TestRail has **no bulk-create endpoint**, so the server loops `add_case`. A case that fails is recorded in
   `failed` and the rest still run; a `429` from TestRail Cloud is retried using its `Retry-After` header.
   Always surface `failed` — a silently dropped case is a test that never gets written.
