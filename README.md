@@ -25,7 +25,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | `/bc:contradiction` | Detect contradictions, inconsistencies, and alignment gaps between requirements and test cases |
 | `/bc:coverage` | Find untested requirements, orphan test cases, and coverage gaps |
 | `/bc:validate` | Validate a ticket description against requirements and test cases, then draft and create a Jira ticket |
-| `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, or maps scenarios you already have into TestRail test cases |
+| `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, maps scenarios you already have into TestRail test cases, or edits the test cases you name |
 | `/bc:onboarding` | Walk a new team member through the product feature-by-feature with paced demos, optional code mapping, and an assessment. Resumes across sessions |
 | `/bc:codemap "<feature>"` | Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations |
 | `/bc:vnv-sprint-prep` | V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, drive them through scenario review, and write the approved scenarios into TestRail as test cases |
@@ -106,16 +106,16 @@ The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/ho
 If your Copilot version still prompts for MCP reads (MCP tool naming in hooks varies by version), pre-approve them at launch with `--allow-tool`:
 
 ```bash
-copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates)'
+copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates),testrail(testrail_get_requirement_ids),testrail(testrail_get_linked_cases)'
 ```
 
 Append the read-only tools for any other sources you configured:
 
 - **Jira** (board reads, ticket validation, V&V sprint prep): `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)`
 - **GitHub MCP** (doc enrichment): `github(get_file_contents)`
-- **Jama** (requirements): `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item)` — the server's whole tool list, since it has no write tools
+- **Jama** (requirements): `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — the server's whole tool list, since it has no write tools
 
-**Never add the Jira write tools** — `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, `jira_add_issues_to_sprint`. They are left out on purpose so ticket creation, label changes, links, and comments on the dev team's stories always prompt.
+**Never add the Jira write tools** — `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, `jira_add_issues_to_sprint`. They are left out on purpose so ticket creation, label changes, links, and comments on the dev team's stories always prompt. The same goes for the TestRail write tools — `testrail_add_case`, `testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, `testrail_update_cases` — which create and change cases in the team's suite.
 
 On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when the Excel parser or the TestRail connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
 
@@ -149,6 +149,13 @@ Three layers of visibility, in order of reach:
 1. **In-transcript trace (both platforms).** Every analysis command follows a mandatory Data Contract: it prints `Fetch: requirements → N` / `Fetch: test cases → M` (plus `Enrichment: fetched K of N` when GitHub enrichment is configured) before analyzing, and stops to ask before continuing if any configured source failed. If you don't see these lines in a run, the run violated the contract — that itself is the bug to report. The Excel parser additionally prints a one-line `Summary:` to stderr on every invocation.
 2. **Tool log (both platforms).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran. Under Copilot each line additionally carries a `result` status (`success` or a failure kind), and failed calls are logged too.
 3. **Native session logs (Copilot CLI).** For deeper Copilot internals beyond the tool log, launch with `copilot --log-level debug` (logs land in `~/.copilot/logs/`, or set `--log-dir`).
+
+#### Jama on a large project
+
+Jama Cloud takes about a second per request, and a 5,000-item project tree about a minute to send. The plugin's Jama server runs up to 8 requests in parallel and caches what it reads for 10 minutes, so:
+
+- The first whole-project or feature-scoped read in a session may show a progress line such as `Fetch: Jama project 42 — reading, 85 of 99 pages` before the requirements arrive. The server answers early with progress and the agent asks again; that is expected, not a failure.
+- Questions about specific requirement IDs — a bug's or a ticket's — never read the whole project. The IDs are read by key in one batched call: about 45 s for 50 requirements with their traceability when nothing is cached, and instant when repeated within 10 minutes.
 
 #### TestRail, Jama, or Jira tools missing under Copilot CLI
 
@@ -189,7 +196,7 @@ The wizard runs in four steps with a single review-and-save confirmation at the 
    - **Excel**: point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs).
 
    Either way, GitHub doc enrichment is auto-configured when a GitHub-link column or field is mapped (`gh` CLI preferred, MCP fallback).
-2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on.
+2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on. With Jama as the requirements source, setup then **anchors Jama on your test suite**: it reads which requirement IDs your cases link to, finds where they live in Jama, and proposes that part as the requirements **root** — with its top-level folders as the features and only the item types the tests link to. A large project's other documents and archives never reach a report. You confirm once, and can go a level deeper, exclude a folder (such as an archive), or pick another root. The same step asks where generated test cases should go; when your cases already carry requirement IDs, the recommended answer files each new case **beside the existing cases for the same requirement or feature**, so no parallel folder tree appears.
 3. **Jira (required)** — the base URL, a token, and your team's board URL. Cloud vs Server/Data Center is detected from the host, so you're only asked for the credential that deployment actually uses. **The connection is tested before moving on**, exactly like TestRail: by MCP tool if the server is already loaded, otherwise by a direct REST call. The board URL is parsed for the board id and project key — and when a classic RapidBoard URL carries no key, it's derived from the board's own issues rather than asked for. If the test fails (usually a self-hosted Jira needing the VPN), the answers are saved as *pending*, setup finishes, and it re-tests on the next run — `/bc:contradiction` and `/bc:coverage` keep working meanwhile, only `/bc:validate` waits.
    The same step then offers the **V&V board** plus its platform field and scenario reviewer, for `/bc:vnv-sprint-prep`. That part *is* skippable — the command can collect it itself on first run. **The V&V board may live in the same project as the dev board**; only a duplicate board *id* is refused. When they share a project, setup samples both boards to work out what the V&V board's filter keys off — a label, component, or issue type — confirms it in one question, and stamps it on every clone.
 4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
@@ -271,14 +278,20 @@ The `atlassian` entry belongs here too — see the `mcp-atlassian` block further
     "provider": "jama",
     "base_url": "https://company.jamacloud.com",
     "project_id": 42,
-    "feature_inference": { "strategy": "hierarchical_folder", "folder_item_type": "Folder" },
+    "roots": [{ "id": 1001, "path": "Product / Software Requirements" }],
+    "feature_inference": { "strategy": "hierarchical_folder", "folder_item_type": "Folder", "depth": 1 },
+    "item_type_filter": ["Mobile SRS"],
     "item_type_exclude": ["Text", "Test Case"],
     "field_mapping": { "status": "Status", "rationale": "Rationale", "github_url": "Linked to Github" }
   }
 }
 ```
 
-`field_mapping` values are Jama field **labels**; `folder_item_type` is the item type that marks a feature. The
+`roots` limits everything to those Jama containers (sets or folders), and a feature is then a folder `depth`
+levels below a root — leave `roots` out to use the whole project, where every folder is a feature, and add
+`"exclude": [{ "id": …, "path": … }]` to leave a subtree out. `/bc:setup` proposes all of this from your test
+suite's requirement links. `field_mapping` values are Jama field **labels**; `folder_item_type` is the item
+type that marks a feature when there are no roots. The
 credential goes in `~/.buddy-council/secrets.json` — `client_id` + `client_secret` from Jama → profile menu →
 **Set API Credentials** (`username` + `password` only on instances without API credentials):
 
@@ -402,7 +415,7 @@ TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
 /bc:contradiction "Patient Monitoring"   # Analyze a specific feature
 ```
 
-With Jama as the requirements source, a feature is a **Jama folder**: the scope covers everything under it, sub-folders included, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`.
+With Jama as the requirements source, a feature is a **Jama folder** — by default a top-level folder of the requirements root `/bc:setup` anchored on your test suite, with deeper folders rolled into it. The scope covers everything under it; a sub-folder name narrows to just that part, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`. Test cases are found by their requirement links, whatever their TestRail folders are called.
 
 The agent fetches requirements, test cases, and the in-flight issues on your Jira dev board, normalizes and cross-links them, then analyzes for 7 types of contradictions:
 
@@ -416,6 +429,8 @@ The agent fetches requirements, test cases, and the in-flight issues on your Jir
 | Temporal/state conflicts | MEDIUM |
 | Missing alignment | LOW |
 
+Every requirement-versus-test finding names the side to fix. When at least one says **the test case** is wrong, the report ends with a one-line offer to update those cases so they match the requirement — only the conflicting precondition, step, or expected result, never the requirement links. Answer `all`, `pick some`, or `no`; you see every before → after change before anything is written. Findings where the requirement looks wrong, or that need a decision, are never offered: requirements live in Jama or the Excel export, and the plugin never writes them.
+
 ### Check Coverage
 
 ```
@@ -425,7 +440,12 @@ The agent fetches requirements, test cases, and the in-flight issues on your Jir
 
 Alongside the usual untested-requirements and orphan-test-case findings, the report carries a **Delivery risk** section built from your dev board: work in flight whose requirement has no test case, and board issues that match no requirement at all. These are listed separately and deliberately kept out of the headline coverage percentage, which stays requirements-vs-tests so it remains comparable across runs.
 
-When the run finds untested requirements and `test_cases.authoring` is configured, the report ends with a one-line offer to draft skeleton TestRail cases for them, linked to their requirement IDs. Answer `all`, `pick some`, or `no` — nothing is written without a yes, and you see the plan before anything is created.
+The report ends with up to two one-line offers, and nothing is written without a yes — you see the plan first:
+
+1. **Re-link orphan cases.** A case whose requirement ID sits only in TestRail's References field (not the requirement field this plugin reads) shows up twice — as an orphan *and* as an untested requirement. The repair copies the ID across. Cases with no requirement ID at all get suggested links, each confirmed by you. Needs `test_cases.authoring.requirement_field`.
+2. **Draft missing cases** — skeleton TestRail cases for requirements that are genuinely untested, linked to their requirement IDs. A requirement whose only problem is a stranded link is left out, so no duplicate case is ever drafted. Needs `test_cases.authoring`.
+
+Answer `all`, `pick some`, or `no` to each.
 
 ### Validate and Create Tickets
 
@@ -460,6 +480,13 @@ requirement as covered on its next run — a case created without them would lea
 the V&V team to expand, not finished tests. It needs `test_cases.authoring` in your config; without it the
 phase skips itself with a visible line rather than guessing which TestRail template to use.
 
+When approved scenarios are **revised** later — the ticket sent back to `pending-validation` for re-review and
+re-approved, or the scenario block on the approved ticket edited by hand — the next run refreshes the cases: a
+case still exactly as the plugin generated it is updated to match, a new scenario gets a new case, and a case
+the V&V team has edited by hand is **never overwritten** — it is listed for manual review instead. Nothing is
+deleted, and a requirement link a revised scenario dropped is flagged, not removed. A re-review needs a fresh
+approval: the reviewer's comment on the earlier draft does not count.
+
 It is **resumable and that's the normal way to use it**. Re-run it and it re-reads the dev team's replies to
 questions it raised, folds in the answers, re-validates, and advances any ticket whose blocker has cleared —
 plus checks the V&V tickets for reviewer approval. State is tracked by Jira labels
@@ -490,6 +517,21 @@ issue type, or the active sprint) and then verifies the clone actually landed on
 ```
 
 Routes automatically to the right agent based on intent.
+
+### Edit Test Cases
+
+```
+/bc:ask "Change step 2 of C1234 to expect a 3-second refresh"
+/bc:ask "Add CWA-REQ-90 to TC-55's requirements"
+/bc:ask "Set every case in Sync/Offline handling to High priority"
+```
+
+Name the cases (`C1234`, `TC-1234`) or a folder, and say what to change. Each case is read fresh from TestRail,
+and you see a before → after plan before anything is written. The update is refused for a case someone edits
+between the plan and your yes, and for a change that would drop a requirement link you did not explicitly ask to
+remove. Requirement IDs you add are checked against the live requirement set and written to both References
+and the requirement field, so the case counts as coverage. The report lists each field's previous value; ask to
+undo in the same session to put them back.
 
 ### Map Your Own Scenarios into TestRail
 
@@ -562,11 +604,12 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
 - Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
-- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section` — reached only through the one `draft-test-cases` skill, from `/bc:vnv-sprint-prep` phase 7, the `/bc:coverage` gap-fill offer, and `/bc:ask` scenario mapping
+- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section` — reached only through the one `draft-test-cases` skill, from `/bc:vnv-sprint-prep` phase 7, the `/bc:coverage` gap-fill offer, and `/bc:ask` scenario mapping — and `testrail_update_case` and `testrail_update_cases`, reached only through the one `update-test-cases` skill, from `/bc:ask` edits, the `/bc:coverage` orphan repair, the `/bc:contradiction` fix offer, and phase 7's refresh
 - **Jama is read-only by construction.** The vendored Jama server has no write tools at all: every tool is `jama_get_*`, its HTTP client can only issue GET requests, and its test suite fails if that ever changes. That is why the hook can auto-approve the `jama_get_*` glob. Jama's own hosted MCP server is deliberately not used — it exposes create/edit/move tools and has no bulk reads
 - The Jama credential lives in the `jama` section of `~/.buddy-council/secrets.json` and nowhere else — the server reads it only from that file, never from environment variables, so it cannot leak into an MCP config. Prefer an API client ID/secret on a read-only Jama account; it is revocable without touching the account password
-- The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*`. Never name a write tool `testrail_get_*`
-- **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes no test cases; `--apply` executes after one batch confirmation per phase
+- The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*` or `testrail_update_*`. Never name a write tool `testrail_get_*` — the server's test suite fails if one is
+- **Updates guard what was there.** The update tools read every case first and send only what differs, refuse to remove a requirement link unless the user asked for that explicitly, refuse to overwrite a case edited since it was read, verify every field against what TestRail stored (it silently discards unknown custom fields), and never move a case or change its template. No path deletes a test case
+- **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes or updates no test cases; `--apply` executes after one batch confirmation per phase
 - The Jira token lives in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `sources.json`, not in `secrets.json`, not in either MCP config, which reference it only by absolute path. That file is the single place to rotate or revoke it
 - Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)

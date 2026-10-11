@@ -29,17 +29,19 @@ buddy_council_plugin/
 │   ├── check-platform-parity/   # V&V phase 2: iOS ↔ Android counterparts
 │   ├── clone-to-vnv-board/      # V&V phase 3: sprint stories → V&V board
 │   ├── draft-vnv-scenarios/     # V&V phase 5: high-level scenarios → ticket
-│   └── draft-test-cases/        # The one TestRail writer: V&V scenarios, coverage gaps, user scenarios
+│   ├── draft-test-cases/        # The one TestRail writer: V&V scenarios, coverage gaps, user scenarios
+│   └── update-test-cases/       # The one TestRail updater: edits, orphan re-links, contradiction fixes, V&V refresh
 ├── providers/                   # Platform-specific data fetching instructions
 │   ├── excel/fetch.md           # Jama Excel export parser
 │   ├── testrail/fetch.md        # TestRail via MCP tools
 │   └── jama/fetch.md            # Jama live via the read-only jama MCP server (features = folders)
 ├── mcp-servers/                 # Standalone MCP servers wrapping external APIs
 │   ├── testrail-server/         # Python MCP server for TestRail REST API
-│   │   ├── server.py            # 10 read tools + 3 write tools (add_case/add_cases/add_section)
-│   │   └── pyproject.toml       # Dependencies: mcp[cli], httpx
+│   │   ├── server.py            # 12 read tools (incl. a cached requirement-link index) + 5 write tools (add_case/add_cases/add_section/update_case/update_cases)
+│   │   ├── pyproject.toml       # Dependencies: mcp[cli], httpx
+│   │   └── tests/               # stdlib unittest suite against a fake TestRail API
 │   └── jama-server/             # Python MCP server for the Jama REST API — read-only by construction
-│       ├── server.py            # 6 jama_get_* tools, GET-only client, folder-based feature scoping
+│       ├── server.py            # 8 jama_get_* tools, GET-only client, requirements roots + folder-based features
 │       ├── pyproject.toml       # Dependencies: mcp[cli], httpx
 │       └── tests/               # stdlib unittest suite against a fake Jama REST API
 ├── .mcp.example.json            # Template for MCP server config (committed)
@@ -181,6 +183,9 @@ The `/bc:ask` command classifies intent and routes to the right agent:
 
 /bc:ask "Map the scenarios in sync.feature into TestRail"
   └─ ask.md → AUTHOR intent → follows scenario-mapping-agent.agent.md → draft-test-cases
+
+/bc:ask "Change step 2 of C1234 to expect a 3-second refresh"
+  └─ ask.md → EDIT intent → update-test-cases (edits path)
 ```
 
 Intent classification uses Claude's native reasoning with trigger phrases and examples — no regex or external classifier. When intent is ambiguous, the command asks a clarifying question.
@@ -210,13 +215,16 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 
 | Server | Status | Tools |
 |--------|--------|-------|
-| `testrail-server` | Active | `testrail_get_projects`, `testrail_get_suites`, `testrail_get_sections`, `testrail_get_cases`, `testrail_get_case` |
-| `jama-server` | Active, read-only | `jama_get_current_user`, `jama_get_projects`, `jama_get_item_types`, `jama_get_features`, `jama_get_requirements`, `jama_get_item` |
+| `testrail-server` | Active | 12 `testrail_get_*` reads (projects, suites, sections, cases, cases by refs, case, case fields, case types, priorities, templates, requirement IDs, linked cases); writes `testrail_add_case`, `testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, `testrail_update_cases` — always prompted |
+| `jama-server` | Active, read-only | `jama_get_current_user`, `jama_get_projects`, `jama_get_item_types`, `jama_get_features`, `jama_get_requirements`, `jama_get_item`, `jama_get_items`, `jama_get_scope_proposal` |
 
 The Jama server is the one MCP server that emits the canonical schema itself, like the Excel parser: feature
 scoping needs the whole project tree (rebuilt from each item's `location.parent`), so the server builds the tree,
 resolves pick lists, flattens rich text, and returns finished requirements. It has no write tools, and its HTTP
-client can only issue GET.
+client can only issue GET. Because Jama answers each request in about a second however small it is, the server
+runs up to 8 requests at once, reads a large project tree in the background (a call that would outlast the
+client answers `loading: true`, and repeating it joins the same read), and reads lists of known keys with the
+batched `jama_get_items` — which never touches the project tree — rather than one call per key.
 
 Jira/Confluence are **not** vendored here. They use [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian),
 run as a local stdio server via `uvx mcp-atlassian@0.23.1` and authenticated by a token in

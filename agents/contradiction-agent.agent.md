@@ -70,7 +70,7 @@ Build a compact **board index**: `{ id, title, feature, status, linked_ids }` pe
 
 Process **one feature at a time**, in `feature_order`. Do not hold more than one feature's test cases in context at once. For each feature:
 
-1. **Fetch only this feature's test cases (MANDATORY)** — call `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md` narrowed to this feature's section/name. Never fetch all features' test cases together; never infer from `linked_ids`.
+1. **Fetch only this feature's test cases (MANDATORY)** — call `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md` narrowed to this feature — pass its requirement IDs and its name, so the provider finds the cases by their requirement links whatever their TestRail folders are called. Never fetch all features' test cases together; never infer from `linked_ids`.
 2. **Per-feature readiness:** note `<feature>: <R> requirements, <T> test cases`. If one feature returns 0 test cases, record it as a missing-alignment gap for that feature and continue. If **every** feature returns 0, STOP — that is a fetch/MCP error, not a real result; report it (with the `.mcp.json` / `/mcp` remedy) and ask the user whether to continue with requirements only (report becomes **PARTIAL**) or abort.
 3. **Normalize + link** this feature's requirements and test cases (`normalize-artifacts`).
 4. **Detect intra-feature contradictions** for this feature via `detect-contradictions` — types 1–4, 6, 7. Emit this feature's findings into the running report, classified by severity.
@@ -94,6 +94,25 @@ Present the findings as a human-readable report following the format specified i
 - Carry a distinct **In-flight work** section when the board index was non-empty: contradictions between board issues and requirements, each with its issue key and browse link, plus a one-line count of how many board issues were checked. State the board scope you actually queried (active sprint vs. whole project fallback) so the reader knows what "in flight" covered
 - End with the missing alignment section
 
+### Step 8: Offer to fix the test cases — no flag, no extra command
+
+After the report, when at least one finding's **Fix** line names a test case, end with one line:
+
+```
+3 findings are test cases that contradict their requirement. I can update those cases to match —
+you'll see every change before it's written. Want me to? (all / pick some / no)
+```
+
+- **Only test-case fixes.** Findings whose fix is the requirement, or that need a decision, are not offered:
+  requirements live in Jama or the Excel export, and this plugin never writes them. Board-issue findings and
+  requirement-versus-requirement findings (types 3 and 5) are never offered either.
+- **Never write without an explicit yes**, and never change more than the user selected. `pick some` → list
+  the offered findings with numbers and let the user choose.
+- On yes, follow `${CLAUDE_PLUGIN_ROOT}/skills/update-test-cases/SKILL.md` via its `contradictions` entry
+  path, passing the selected findings with the requirement text each conflicts with. It reads every case
+  fresh, changes only the conflicting text, and shows the plan before writing.
+- **No offer when nothing qualifies.** An offer that fires on every run becomes noise people learn to skip.
+
 ## Follow-Up Handling
 
 After delivering the report, if the user asks a follow-up question:
@@ -112,9 +131,11 @@ After delivering the report, if the user asks a follow-up question:
 
 ## Boundaries
 
-This agent ONLY detects contradictions. It does not:
+This agent detects contradictions, and may update the test cases behind them — only after an explicit yes
+in-session (Step 8). It does not:
 - Suggest new test cases (use `/bc:coverage`)
 - Answer general questions (use `/bc:ask`)
-- Modify any source data
+- Modify requirements — it never writes to Jama or the Excel export
+- Change a test case's requirement links, or anything beyond the conflicting text the user chose to fix
 
 If the user asks for something outside scope, acknowledge it and suggest the appropriate command.

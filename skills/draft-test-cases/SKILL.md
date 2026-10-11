@@ -37,7 +37,8 @@ Everything below the mapping step is shared. Only the source of the cases differ
 
 All three paths obey the same linkage rule, platform rule, and folder rule. **Never write a second authoring
 path**: the moment two code paths can create cases, one of them forgets the requirement field and quietly
-degrades coverage reporting.
+degrades coverage reporting. Changing a case that already exists is not this skill's job — that is
+`update-test-cases`, its counterpart for edits, which applies the same linkage rule.
 
 The unreviewed path carries one extra obligation: say so. Cases drafted from a requirement have had no human
 judgement applied to whether they are the *right* tests, only that the requirement had none. Mark them in the
@@ -67,6 +68,8 @@ report so it stays visible.
   block (`template_id`, `type_id`, `priority_id`, `requirement_field`, `section_strategy`, `section_root`,
   `create_missing_sections`).
 - `apply` — when false, produce the plan and create nothing.
+- `refresh` — `stories` path only, set by phase 7 when an already-authored story's approved scenarios were
+  revised. The caller passes just the scenarios that have no case yet; see step 5.
 
 If `test_cases.authoring` is missing, **stop and say so**: the template alone decides which body fields a
 case even has, and guessing it writes content into a field nobody reads. Point the user at `/bc:setup`.
@@ -201,6 +204,21 @@ the user's source states one; when it is absent, there is no prefix.
 
 Build `section_path` from `test_cases.authoring`:
 
+- `section_strategy: "linked"` → file each case **beside the cases already testing the same thing**, so a
+  generated case lands among its siblings and no parallel folder tree appears. Look in this order, and take
+  the first that has cases:
+  1. **Its own requirements** — `testrail_get_linked_cases` with `include_cases: false` and the case's
+     `traces_to` IDs.
+  2. **Its feature** — the same call with the requirement IDs of the case's whole feature. One call per
+     feature, reused for that feature's other cases. Take the IDs from the requirements the caller already
+     fetched; when they are not in hand — a phase-7 run that fetched none — fetch them through
+     `fetch-requirements` scoped to the feature.
+  3. **Nothing linked yet** → fall back to the `feature` strategy's path below, with `section_root` if one is
+     set. Say so in the plan: a fallback opens a folder nobody has filed into before.
+
+  In 1 and 2, use the section holding the most of those cases — the first entry of `sections` — and pass its
+  `id` as the case's `section_id`: an id is exact where two folders share a name. `section_root` never
+  applies to a linked placement; an existing section is used where it is.
 - `section_strategy: "feature"` → the scenario's feature, e.g. `Sync/Offline handling`: the story's
   `feature` on the `stories` path, the requirement's `feature` on the `requirements` path, and the `feature`
   the agent took from the scenario's first traced requirement on the `scenarios` path.
@@ -232,6 +250,12 @@ Guards 1 and 2 belong to the `stories` path — the other paths have no story to
 already done the equivalent from fresh TestRail data: on the `requirements` path, the requirement was
 reported untested by the run that just fetched its cases; on the `scenarios` path, each `coverage` verdict
 came from the cases linked to the scenario's traced requirements. Guard 3 applies to every path.
+
+**Refresh mode** (`refresh: true`) is the one exception to guard 1. Phase 7 has already found the story's
+cases, mapped them to scenarios, and is updating the existing ones through `update-test-cases`; it hands this
+skill only the revised scenarios that have no case. Guard 1 then confirms the story is authored instead of
+skipping it, and guard 3 still stops a duplicate title. Skip the step-6 comment in this mode — phase 7 posts
+one comment covering the new and the refreshed cases together.
 
 ## Step 6: Write
 
@@ -269,8 +293,10 @@ Adding one would change a mutually-exclusive state machine the whole workflow is
 
 **`stories` path only.** Per story, write `testrail_case_ids` (the ids TestRail returned) and
 `cases_created_at` (ISO 8601 UTC). Record only ids TestRail actually returned — never invent one to keep the
-loop tidy. The other paths keep no log: TestRail itself, via the requirement field, is what the next run
-reads.
+loop tidy. Also add one `testrail_cases` entry per created case — `{"scenario": "S1", "case_id": 1234,
+"written_on": <the updated_on TestRail returned for it>}` — so a later refresh can tell a skeleton nobody
+touched from one the V&V team expanded. In refresh mode, append to both lists and leave `cases_created_at`
+alone. The other paths keep no log: TestRail itself, via the requirement field, is what the next run reads.
 
 ## Dry run
 
@@ -308,6 +334,14 @@ Would create 2 cases in project 45, suite 9277 (Master) from scenarios.md
   S4  skipped — covered by TC-1234
 
   Untraced (not created): S3 — "Rate limiting behaviour"
+```
+
+With `section_strategy: "linked"`, each case also says why it lands where it does:
+
+```
+  S1  Sync retries on transient network failure   → Sync/Retry   beside 4 cases for CWA-REQ-85
+  S2  Offline banner clears on reconnect          → Sync         beside 11 cases for its feature
+  S5  Export audit log                            → Audit        new folder — nothing in TestRail links to this feature yet
 ```
 
 ## Output

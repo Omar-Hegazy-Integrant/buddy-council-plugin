@@ -1,7 +1,7 @@
 # TestRail MCP Server
 
 MCP server wrapping the TestRail REST API: read access to projects, suites, sections and cases, plus
-guarded creation of test cases and the folders they live in.
+guarded creation and updating of test cases and the folders they live in.
 
 ## Configuration
 
@@ -59,6 +59,8 @@ mcp dev server.py
 | `testrail_get_case_types` | Case types, for `type_id` |
 | `testrail_get_priorities` | Priorities, for `priority_id` |
 | `testrail_get_templates` | Case templates for a project, for `template_id` |
+| `testrail_get_requirement_ids` | Which requirement IDs the suite's cases link to: counts, prefixes, and a spread sample |
+| `testrail_get_linked_cases` | The cases linked to given requirement IDs, and the sections they sit in; `unlinked=true` lists the orphans |
 
 ### Write
 
@@ -67,10 +69,26 @@ mcp dev server.py
 | `testrail_add_cases` | Create one or more cases in suite folders |
 | `testrail_add_case` | Convenience wrapper for a single case |
 | `testrail_add_section` | Create one folder |
+| `testrail_update_cases` | Update existing cases, each with its own changes |
+| `testrail_update_case` | Convenience wrapper for a single case update |
 
 **The write tools always prompt.** They are excluded from the plugin's auto-approve hook and from
 `settings.json` by design — the hook allowlist only globs `testrail_get_*`. If you ever add a write tool
-whose name begins `testrail_get_`, that glob will auto-approve it silently; don't.
+whose name begins `testrail_get_`, that glob will auto-approve it silently; don't. `tests/` fails if one
+does.
+
+## Requirement links
+
+TestRail cannot filter cases on a custom field, yet the requirement field (`custom_jama_req_id` or whatever
+`/bc:setup` resolved) is the link this plugin reads. So `testrail_get_requirement_ids` and
+`testrail_get_linked_cases` read the suite once — every case, paged — and match locally. The index is cached
+for 10 minutes per project, suite, and field, and **any write through this server clears it**, so a lookup
+right after creating or updating cases sees them.
+
+`testrail_get_linked_cases` is how a feature's cases are fetched when the TestRail folders are not named after
+the requirements' features, and how a new case is filed beside the cases already testing the same
+requirement (`section_strategy: "linked"`). `testrail_get_requirement_ids` feeds the Jama scope proposal in
+`/bc:setup`: the IDs the suite links to show which part of a Jama project matters.
 
 ## Choosing the target folder
 
@@ -105,6 +123,40 @@ Anything else goes in `custom_fields`, where a missing `custom_` prefix is added
 `testrail_get_case_fields` first against an unfamiliar instance — a required custom field you didn't set is
 the usual cause of a 400.
 
+## Updating cases
+
+An update can destroy what a create never could — a hand-written step, or the requirement link that makes a
+case count as coverage — so `testrail_update_cases` guards every case it touches:
+
+- **Diff first.** Each case is read and only the fields that actually differ are sent. A case with nothing to
+  change is not written, so re-running a batch adds nothing to TestRail's history.
+- **Link protection.** An update that would remove an ID from `refs`, or from `requirement_field` (pass it on
+  every call), is blocked unless that entry sets `allow_unlink`.
+- **Conflict check.** `expected_updated_on` — the `updated_on` a dry run returned — blocks a case someone
+  edited in between, instead of overwriting their change.
+- **Read-back.** Every sent field is compared with the case TestRail returns. TestRail accepts an unknown
+  custom field and silently discards it; such a field is listed in `dropped_fields`, and by default the rest
+  of the batch is not attempted, since the cause is usually the same for every case.
+- **No moves.** `template_id` and `section_id` are refused, as is any unknown key — a typo in an update
+  would otherwise change nothing without a word.
+
+TestRail's own bulk `update_cases` endpoint can only set the same values on every case, so the server loops
+`update_case`, retrying a `429`. Every updated entry returns each field's `before` and `after`, so the
+previous values are at hand to undo a change. `steps_separated` replaces the whole step list: send every step.
+
+## Tests
+
+The tests run against an in-process fake of TestRail's API, standard library only:
+
+```bash
+uv run --directory mcp-servers/testrail-server python -m unittest discover -s tests -v
+```
+
+They also pin the safety contract: every `testrail_get_*` tool is exercised and must never POST, and the tool
+list must match the known read and write sets exactly. And they check that every tool sets
+`structured_output=False`, so each result is sent once, as text — otherwise FastMCP adds a structured copy of
+the same JSON, Copilot CLI hands the model both, and every response doubles.
+
 ## Pagination
 
-`testrail_get_cases` returns max 250 cases per call. Check if `size == limit` and increment `offset` to get the next page.
+`testrail_get_cases` returns max 250 cases per call. Check if `size == limit` and increment `offset` to get the next page. Those `offset`, `limit`, and `size` fields are TestRail's own paging envelope, passed through as-is.

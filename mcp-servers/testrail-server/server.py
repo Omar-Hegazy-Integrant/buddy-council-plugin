@@ -1,15 +1,21 @@
-"""TestRail MCP Server — read access to TestRail's REST API, plus guarded case creation.
+"""TestRail MCP Server — read access to TestRail's REST API, plus guarded case creation and updates.
 
 Every `testrail_get_*` tool is read-only. The write tools — `testrail_add_case`,
-`testrail_add_cases`, and `testrail_add_section` — mutate the team's TestRail
-instance and are deliberately excluded from the plugin's auto-approve hook and
-from `settings.json`, so they always reach a permission prompt.
+`testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, and
+`testrail_update_cases` — mutate the team's TestRail instance and are
+deliberately excluded from the plugin's auto-approve hook and from
+`settings.json`, so they always reach a permission prompt. No write tool may
+ever be named `testrail_get_*`: the hook auto-approves that glob.
 """
 
 import asyncio
 import os
+import re
 import sys
 import json
+import time
+from collections import Counter
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -170,8 +176,10 @@ async def _get(endpoint: str, params: dict[str, Any] | None = None) -> Any:
 
 
 async def _post(endpoint: str, payload: dict[str, Any]) -> Any:
-    """POST JSON to a TestRail endpoint and return parsed JSON."""
-    return await _request("POST", endpoint, payload=payload)
+    """POST JSON to a TestRail endpoint and return parsed JSON. Every write clears the link index."""
+    result = await _request("POST", endpoint, payload=payload)
+    _INDEX.clear()
+    return result
 
 
 async def _get_paged(endpoint: str, params: dict[str, Any], collection: str) -> list[dict[str, Any]]:
@@ -359,13 +367,236 @@ def _build_case_payload(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Case updates — diffing, link protection, read-back verification
+# ---------------------------------------------------------------------------
+
+_UPDATE_CONTROL_KEYS = {"case_id", "expected_updated_on", "allow_unlink"}
+_UPDATE_FIELD_KEYS = {
+    "title",
+    "type_id",
+    "priority_id",
+    "milestone_id",
+    "estimate",
+    "refs",
+    "custom_fields",
+    *_FIELD_ALIASES,
+}
+# Moving a case or switching its template changes where it lives or which fields it has at all —
+# a decision for a person in TestRail, not something to slip into a content edit.
+_UPDATE_REFUSED_KEYS = {"template_id", "section_id", "section_path", "suite_id", "project_id"}
+_STEPS_FIELD = "custom_steps_separated"
+_TOKEN_SPLIT = re.compile(r"[,;\n]")
+
+
+def _parse_case_id(value: Any) -> int:
+    """Accept 1234, "1234", "C1234", or "TC-1234" — the forms users and reports use."""
+    match = re.fullmatch(r"(?:TC-?|C)?(\d+)", str(value if value is not None else "").strip(), re.IGNORECASE)
+    if not match:
+        raise TestRailError(f"'{value}' is not a test case id — expected 1234, C1234, or TC-1234.")
+    return int(match.group(1))
+
+
+def _custom_key(name: Any) -> str:
+    key = str(name).strip()
+    return key if key.startswith("custom_") else f"custom_{key}"
+
+
+def _build_update_payload(spec: dict[str, Any]) -> dict[str, Any]:
+    """Turn a friendly update entry into update_case's body — only the fields it names.
+
+    Stricter than the create path on purpose: an unknown key fails the entry rather
+    than being ignored, because a typo in an update silently changes nothing.
+    """
+    refused = sorted(key for key in spec if key in _UPDATE_REFUSED_KEYS)
+    if refused:
+        raise TestRailError(
+            f"Refusing to change {', '.join(refused)}: moving a case or switching its template "
+            "is done in TestRail itself."
+        )
+    unknown = sorted(key for key in spec if key not in _UPDATE_CONTROL_KEYS | _UPDATE_FIELD_KEYS)
+    if unknown:
+        raise TestRailError(f"Unknown update keys {unknown}. Accepted: {sorted(_UPDATE_FIELD_KEYS)}.")
+
+    payload: dict[str, Any] = {}
+    if spec.get("title") is not None:
+        title = str(spec["title"]).strip()
+        if not title:
+            raise TestRailError("A case title cannot be blank.")
+        payload["title"] = title
+    for key in ("type_id", "priority_id", "milestone_id", "estimate", "refs"):
+        if spec.get(key) is not None:
+            payload[key] = spec[key]
+    for alias, field in _FIELD_ALIASES.items():
+        if spec.get(alias) is not None:
+            payload[field] = spec[alias]
+    extra = spec.get("custom_fields") or {}
+    if not isinstance(extra, dict):
+        raise TestRailError("custom_fields must be an object mapping field names to values.")
+    for key, value in extra.items():
+        payload[_custom_key(key)] = value
+    if not payload:
+        raise TestRailError("Nothing to change — the entry names no fields.")
+    return payload
+
+
+def _norm_text(value: Any) -> str:
+    return "" if value is None else str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _canon(value: Any) -> Any:
+    """A comparable form: line endings and outer whitespace ignored, "2" equal to 2, None equal to ""."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return str(int(value)) if float(value).is_integer() else str(value)
+    if isinstance(value, str):
+        return _norm_text(value)
+    if isinstance(value, list):
+        return [_canon(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _canon(item) for key, item in value.items()}
+    return str(value)
+
+
+def _tokens(value: Any) -> list[str]:
+    """IDs in a reference-style field — "A, B;C" or a multi-select list — in order."""
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else _TOKEN_SPLIT.split(str(value))
+    return [token for token in (str(item).strip() for item in items) if token]
+
+
+def _step_keys(steps: Any) -> tuple[str, ...]:
+    """Compare only the step keys the caller sent; TestRail adds its own (shared_step_id, …)."""
+    keys = {"content", "expected"}
+    for step in steps if isinstance(steps, list) else []:
+        if isinstance(step, dict):
+            keys.update(step)
+    return tuple(sorted(keys))
+
+
+def _steps_view(value: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
+    return [
+        {key: _canon(step.get(key)) for key in keys}
+        for step in (value if isinstance(value, list) else [])
+        if isinstance(step, dict)
+    ]
+
+
+def _same(field: str, current: Any, new: Any, token_fields: set[str]) -> bool:
+    if field in token_fields:
+        return [t.casefold() for t in _tokens(current)] == [t.casefold() for t in _tokens(new)]
+    if field == _STEPS_FIELD:
+        keys = _step_keys(new)
+        return _steps_view(current, keys) == _steps_view(new, keys)
+    return _canon(current) == _canon(new)
+
+
+def _removed_links(current: dict[str, Any], body: dict[str, Any], token_fields: set[str]) -> dict[str, list[str]]:
+    """IDs this update would take out of refs or the requirement field."""
+    removed: dict[str, list[str]] = {}
+    for field in token_fields & set(body):
+        kept = {token.casefold() for token in _tokens(body[field])}
+        gone = [token for token in _tokens(current.get(field)) if token.casefold() not in kept]
+        if gone:
+            removed[field] = gone
+    return removed
+
+
+def _update_warnings(current: dict[str, Any], body: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    if _STEPS_FIELD in body:
+        before = len(current.get(_STEPS_FIELD) or [])
+        after = len(body[_STEPS_FIELD] or [])
+        if after < before:
+            warnings.append(
+                f"{_STEPS_FIELD} goes from {before} steps to {after}: steps are replaced as a whole list, "
+                "so every step not sent is deleted."
+            )
+    return warnings
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Requirement-link index — which cases link to which requirements, and where they sit
+# ---------------------------------------------------------------------------
+
+_INDEX_TTL_SECONDS = 600.0
+_DEFAULT_ID_SAMPLE = 500
+_MAX_ID_SAMPLE = 2000
+_CASES_CHAR_BUDGET = 60_000  # per testrail_get_linked_cases response, so it fits MCP output caps
+
+
+@dataclass
+class _LinkIndex:
+    loaded_at: float
+    cases: list[dict[str, Any]]
+    ids_by_case: dict[int, list[str]]
+    section_paths: dict[int, str]
+
+
+_INDEX: dict[tuple[int, int | None, str], _LinkIndex] = {}
+
+
+async def _link_index(project_id: int, suite_id: int | None, field: str, refresh: bool = False) -> _LinkIndex:
+    """Every case in the suite with the requirement IDs its requirement field holds, cached.
+
+    TestRail cannot filter on a custom field, so the suite is read once and matched locally.
+    Any case or folder write through this server clears the cache.
+    """
+    key = (project_id, suite_id, field)
+    cached = _INDEX.get(key)
+    if cached and not refresh and time.monotonic() - cached.loaded_at < _INDEX_TTL_SECONDS:
+        return cached
+    cases = await _get_paged(f"get_cases/{project_id}", {"suite_id": suite_id}, "cases")
+    sections = await _get_paged(f"get_sections/{project_id}", {"suite_id": suite_id}, "sections")
+    index = _LinkIndex(
+        loaded_at=time.monotonic(),
+        cases=cases,
+        ids_by_case={case["id"]: _tokens(case.get(field)) for case in cases if case.get("id") is not None},
+        section_paths={s["id"]: _section_path(sections, s) for s in sections if s.get("id") is not None},
+    )
+    _INDEX[key] = index
+    return index
+
+
+def _natural_key(token: str) -> tuple:
+    """Sort REQ-2 before REQ-10."""
+    return tuple((0, int(part), "") if part.isdigit() else (1, 0, part.casefold()) for part in re.split(r"(\d+)", token) if part)
+
+
+def _id_prefix(token: str) -> str:
+    return re.sub(r"[-_ ]?\d+$", "", token) or token
+
+
+def _spread(values: list[str], size: int) -> list[str]:
+    """``size`` values evenly spaced through a sorted list, first and last included."""
+    if len(values) <= size:
+        return list(values)
+    if size == 1:
+        return [values[0]]
+    return list(dict.fromkeys(values[round(i * (len(values) - 1) / (size - 1))] for i in range(size)))
+
+
+# ---------------------------------------------------------------------------
 # MCP Server
 # ---------------------------------------------------------------------------
 
+# Every tool returns one JSON string, sent once as text. structured_output=False stops FastMCP from adding a
+# structured copy of it ({"result": "<the same JSON, escaped>"}): Copilot CLI hands the model both, which
+# doubles every response and pushes results past its ~20 KB inline limit at half their real size.
 mcp = FastMCP("testrail")
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_projects() -> str:
     """List all projects in the TestRail instance.
 
@@ -377,7 +608,7 @@ async def testrail_get_projects() -> str:
     return json.dumps(projects, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_suites(project_id: int) -> str:
     """List all test suites for a given project.
 
@@ -390,7 +621,7 @@ async def testrail_get_suites(project_id: int) -> str:
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_sections(
     project_id: int, suite_id: int | None = None
 ) -> str:
@@ -409,7 +640,7 @@ async def testrail_get_sections(
     return json.dumps(enriched, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_cases(
     project_id: int,
     suite_id: int | None = None,
@@ -443,7 +674,7 @@ async def testrail_get_cases(
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_cases_by_refs(
     project_id: int,
     refs: str,
@@ -471,7 +702,7 @@ async def testrail_get_cases_by_refs(
     return json.dumps({"cases": all_cases, "size": len(all_cases)}, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_case(case_id: int) -> str:
     """Fetch a single test case by its ID.
 
@@ -484,7 +715,7 @@ async def testrail_get_case(case_id: int) -> str:
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_case_fields() -> str:
     """List every case field defined on this TestRail instance, including custom ones.
 
@@ -500,7 +731,7 @@ async def testrail_get_case_fields() -> str:
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_case_types() -> str:
     """List the available case types (Functional, Regression, Smoke, ...).
 
@@ -511,7 +742,7 @@ async def testrail_get_case_types() -> str:
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_priorities() -> str:
     """List the available case priorities (Low, Medium, High, Critical, ...).
 
@@ -522,7 +753,7 @@ async def testrail_get_priorities() -> str:
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_get_templates(project_id: int) -> str:
     """List the case templates available in a project.
 
@@ -537,7 +768,156 @@ async def testrail_get_templates(project_id: int) -> str:
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
+async def testrail_get_requirement_ids(
+    project_id: int,
+    requirement_field: str,
+    suite_id: int | None = None,
+    sample_size: int = _DEFAULT_ID_SAMPLE,
+    refresh: bool = False,
+) -> str:
+    """Summarize which requirement IDs a suite's cases link to through the requirement field.
+
+    Reads every case once (cached for 10 minutes) and returns counts, the ID
+    prefixes in use, and an evenly spread sample of distinct IDs — compact enough to
+    hand to jama_get_scope_proposal. Read-only.
+
+    Args:
+        project_id: The TestRail project ID.
+        requirement_field: The custom field holding requirement IDs
+            (test_cases.authoring.requirement_field); custom_ prefix optional.
+        suite_id: The suite to read. Required on multi-suite projects.
+        sample_size: How many distinct IDs to return, spread across the sorted list
+            (default 500, max 2000).
+        refresh: Ignore the cache and re-read the suite.
+
+    Returns JSON {"requirement_field", "field_found", "cases_scanned",
+    "cases_with_ids", "distinct_ids", "prefixes": {prefix: count}, "sample": [...],
+    "warnings"}.
+    """
+    field = _custom_key(requirement_field)
+    index = await _link_index(project_id, suite_id, field, refresh)
+    distinct: dict[str, str] = {}
+    with_ids = 0
+    for tokens in index.ids_by_case.values():
+        if tokens:
+            with_ids += 1
+        for token in tokens:
+            distinct.setdefault(token.casefold(), token)
+    ordered = sorted(distinct.values(), key=_natural_key)
+    size = max(1, min(int(sample_size or _DEFAULT_ID_SAMPLE), _MAX_ID_SAMPLE))
+    field_found = any(field in case for case in index.cases)
+    warnings: list[str] = []
+    if index.cases and not field_found:
+        warnings.append(f"No case carries a field named {field} — check test_cases.authoring.requirement_field.")
+    return json.dumps(
+        {
+            "requirement_field": field,
+            "field_found": field_found,
+            "cases_scanned": len(index.cases),
+            "cases_with_ids": with_ids,
+            "distinct_ids": len(ordered),
+            "prefixes": dict(Counter(_id_prefix(token) for token in ordered).most_common()),
+            "sample": _spread(ordered, size),
+            "warnings": warnings,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool(structured_output=False)
+async def testrail_get_linked_cases(
+    project_id: int,
+    requirement_field: str,
+    requirement_ids: list[str],
+    suite_id: int | None = None,
+    include_cases: bool = True,
+    unlinked: bool = False,
+    offset: int = 0,
+    refresh: bool = False,
+) -> str:
+    """Find the cases linked to given requirement IDs through the requirement field, and where they sit.
+
+    TestRail cannot filter on a custom field, so the suite is read once (cached for
+    10 minutes; any write through this server clears it) and matched locally. Use it
+    to fetch a feature's cases by their requirement links — whatever their folders
+    are called — and to file a new case beside the cases already testing the same
+    requirements. With unlinked=true it lists the orphans instead: every case whose
+    requirement field holds no ID. Read-only.
+
+    Large results page: while `next_offset` is set, call again with the same
+    arguments and offset=next_offset, and concatenate `cases`.
+
+    Args:
+        project_id: The TestRail project ID.
+        requirement_field: The custom field holding requirement IDs; custom_ prefix optional.
+        requirement_ids: The requirement IDs to look for, e.g. a feature's requirements.
+            Ignored with unlinked=true.
+        suite_id: The suite to read. Required on multi-suite projects.
+        include_cases: Return the matching cases themselves; false returns only the summary.
+        unlinked: Return the cases with no requirement ID at all instead.
+        offset: Position to resume `cases` from — the previous page's `next_offset`.
+        refresh: Ignore the cache and re-read the suite.
+
+    Returns JSON {"requirement_field", "cases_scanned", "matched_cases",
+    "sections": [{"id", "path", "cases"}] (most cases first),
+    "by_requirement": {id: [case ids]}, "unlinked_ids": [...], "cases": [...],
+    "offset", "next_offset"}.
+    """
+    field = _custom_key(requirement_field)
+    wanted: dict[str, str] = {}
+    for raw in [] if unlinked else requirement_ids or []:
+        token = str(raw).strip()
+        if token:
+            wanted.setdefault(token.casefold(), token)
+    index = await _link_index(project_id, suite_id, field, refresh)
+    by_requirement: dict[str, list[int]] = {original: [] for original in wanted.values()}
+    matched: list[dict[str, Any]] = []
+    for case in index.cases:
+        tokens = index.ids_by_case.get(case.get("id"), [])
+        if unlinked:
+            if not tokens:
+                matched.append(case)
+            continue
+        hits = [wanted[t.casefold()] for t in tokens if t.casefold() in wanted]
+        if not hits:
+            continue
+        matched.append(case)
+        for requirement in dict.fromkeys(hits):
+            by_requirement[requirement].append(case["id"])
+
+    page: list[dict[str, Any]] = []
+    start = min(max(offset, 0), len(matched))
+    if include_cases:
+        used = 0
+        for case in matched[start:]:
+            size = len(json.dumps(case))
+            if page and used + size > _CASES_CHAR_BUDGET:
+                break
+            page.append(case)
+            used += size
+    end = start + len(page)
+    sections = Counter(case.get("section_id") for case in matched)
+    return json.dumps(
+        {
+            "requirement_field": field,
+            "cases_scanned": len(index.cases),
+            "matched_cases": len(matched),
+            "sections": [
+                {"id": section_id, "path": index.section_paths.get(section_id, ""), "cases": count}
+                for section_id, count in sections.most_common()
+            ],
+            "by_requirement": {requirement: ids for requirement, ids in by_requirement.items() if ids},
+            "unlinked_ids": [requirement for requirement, ids in by_requirement.items() if not ids],
+            "cases": page,
+            "offset": start,
+            "next_offset": end if include_cases and end < len(matched) else None,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool(structured_output=False)
 async def testrail_add_section(
     project_id: int,
     name: str,
@@ -569,7 +949,7 @@ async def testrail_add_section(
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_add_case(
     project_id: int,
     title: str,
@@ -645,7 +1025,7 @@ async def testrail_add_case(
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def testrail_add_cases(
     project_id: int,
     cases: list[dict[str, Any]],
@@ -687,7 +1067,7 @@ async def testrail_add_cases(
 
     Returns JSON:
         {"dry_run": bool,
-         "created": [{"index", "id", "title", "section_id", "section_path", "url"}],
+         "created": [{"index", "id", "title", "section_id", "section_path", "url", "updated_on"}],
          "skipped": [{"index", "title", "reason", "section_path"}],
          "failed":  [{"index", "title", "error"}],
          "sections_created": ["Login/Negative cases"]}
@@ -765,6 +1145,7 @@ async def testrail_add_cases(
                     "section_id": dest_id,
                     "section_path": dest_path,
                     "url": None,
+                    "updated_on": None,
                 }
             )
             seen_titles.setdefault(titles_key, set()).add(normalized)
@@ -785,6 +1166,7 @@ async def testrail_add_cases(
                 "section_id": dest_id,
                 "section_path": dest_path,
                 "url": f"{BASE_URL}/index.php?/cases/view/{case_id}" if case_id else None,
+                "updated_on": result.get("updated_on"),
             }
         )
         seen_titles.setdefault(titles_key, set()).add(normalized)
@@ -796,6 +1178,239 @@ async def testrail_add_cases(
             "skipped": skipped,
             "failed": failed,
             "sections_created": sections_created,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool(structured_output=False)
+async def testrail_update_case(
+    case_id: int | str,
+    title: str | None = None,
+    type_id: int | None = None,
+    priority_id: int | None = None,
+    estimate: str | None = None,
+    milestone_id: int | None = None,
+    refs: str | None = None,
+    preconditions: str | None = None,
+    steps: str | None = None,
+    expected: str | None = None,
+    steps_separated: list[dict[str, Any]] | None = None,
+    custom_fields: dict[str, Any] | None = None,
+    requirement_field: str | None = None,
+    expected_updated_on: int | None = None,
+    allow_unlink: bool = False,
+    dry_run: bool = False,
+) -> str:
+    """Update ONE existing test case, changing only the fields you pass. WRITES to TestRail.
+
+    The single-case wrapper around testrail_update_cases — same guards, same
+    response shape. Omit a field to leave it alone; pass "" to clear it.
+
+    Args:
+        case_id: 1234, "C1234", or "TC-1234".
+        title, type_id, priority_id, estimate, milestone_id, refs: as in testrail_add_case.
+        preconditions, steps, expected: map to custom_preconds, custom_steps, custom_expected.
+        steps_separated: REPLACES the whole step list — send every step, not just the changed one.
+        custom_fields: any other custom fields, {"my_field": value}; custom_ prefix optional.
+        requirement_field: the custom field holding requirement IDs (test_cases.authoring.requirement_field).
+            Pass it whenever you have it: IDs in it are then protected like refs.
+        expected_updated_on: the case's updated_on from when you read it. If TestRail's value
+            differs, someone edited the case since, and the update is refused.
+        allow_unlink: set only when the user explicitly asked to remove a requirement link.
+        dry_run: diff against the live case and report what would change, writing nothing.
+    """
+    spec: dict[str, Any] = {
+        "title": title,
+        "type_id": type_id,
+        "priority_id": priority_id,
+        "estimate": estimate,
+        "milestone_id": milestone_id,
+        "refs": refs,
+        "preconditions": preconditions,
+        "steps": steps,
+        "expected": expected,
+        "steps_separated": steps_separated,
+        "custom_fields": custom_fields,
+    }
+    entry: dict[str, Any] = {key: value for key, value in spec.items() if value is not None}
+    entry["case_id"] = case_id
+    if expected_updated_on is not None:
+        entry["expected_updated_on"] = expected_updated_on
+    if allow_unlink:
+        entry["allow_unlink"] = True
+    return await testrail_update_cases(cases=[entry], requirement_field=requirement_field, dry_run=dry_run)
+
+
+@mcp.tool(structured_output=False)
+async def testrail_update_cases(
+    cases: list[dict[str, Any]],
+    requirement_field: str | None = None,
+    dry_run: bool = False,
+    stop_on_dropped_field: bool = True,
+) -> str:
+    """Update existing test cases, each with its own changes. WRITES to TestRail.
+
+    TestRail's bulk update_cases endpoint can only set the SAME values on every
+    case, so this loops update_case. Each case is read first and only the fields
+    that actually differ are sent; a case with nothing to change is left alone,
+    so re-running a batch adds no history noise. A 429 is retried with Retry-After.
+
+    Guards, per case:
+      - Requirement links: an update that would remove an ID from `refs`, or from
+        `requirement_field` when given, is BLOCKED unless that entry sets
+        allow_unlink. Losing a link turns the case into an orphan and leaves its
+        requirement reading untested.
+      - Conflicts: with expected_updated_on, a case edited in TestRail since it was
+        read is BLOCKED rather than overwritten.
+      - Read-back: every sent field is compared with the case TestRail returns.
+        TestRail accepts unknown custom fields and silently drops them, so a field
+        that did not stick is listed in dropped_fields — and, with
+        stop_on_dropped_field (default), the rest of the batch is not attempted,
+        because the cause (a wrong field name, a field not on the template) is
+        usually the same for every case.
+      - Template and folder changes are refused: do those in TestRail itself.
+
+    Args:
+        cases: one entry per case — `case_id` (1234, "C1234", or "TC-1234") plus the
+            fields to change, using the same keys as testrail_add_case (title,
+            type_id, priority_id, estimate, milestone_id, refs, preconditions,
+            steps, expected, steps_separated, custom_fields), and optionally
+            `expected_updated_on` and `allow_unlink`. Omit a field to leave it
+            alone; pass "" to clear it. steps_separated replaces the whole list.
+        requirement_field: the custom field holding requirement IDs
+            (test_cases.authoring.requirement_field), protected like refs.
+        dry_run: read and diff every case, write nothing. Each planned entry
+            carries the case's current updated_on — pass it back as
+            expected_updated_on when applying the plan.
+        stop_on_dropped_field: stop after the first case whose write did not stick.
+
+    Returns JSON:
+        {"dry_run": bool,
+         "updated":   [{"index", "case_id", "title", "url", "changes": {field: {"before", "after"}},
+                        "warnings", "updated_on", "dropped_fields"}],
+         "unchanged": [{"index", "case_id", "title", "url", "updated_on"}],
+         "blocked":   [{"index", "case_id", "title", "url", "reason", ...}],
+         "failed":    [{"index", "case_id", "error"}],
+         "not_attempted": [{"index", "case_id"}],
+         "stopped": null | "why the batch stopped"}
+
+    `changes[*].before` is the value each field had — what to send back to undo.
+    Always surface blocked, failed, dropped_fields, and not_attempted to the user.
+    """
+    if not cases:
+        return json.dumps({"error": "No cases supplied — `cases` is empty."}, indent=2)
+
+    token_fields = {"refs"}
+    if requirement_field and str(requirement_field).strip():
+        token_fields.add(_custom_key(requirement_field))
+
+    updated: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    not_attempted: list[dict[str, Any]] = []
+    stopped: str | None = None
+    seen: set[int] = set()
+
+    for index, spec in enumerate(cases):
+        raw_id = spec.get("case_id") if isinstance(spec, dict) else None
+        if stopped:
+            not_attempted.append({"index": index, "case_id": raw_id})
+            continue
+        if not isinstance(spec, dict):
+            failed.append({"index": index, "case_id": None, "error": "Case entry is not an object."})
+            continue
+        try:
+            case_id = _parse_case_id(raw_id)
+            payload = _build_update_payload(spec)
+        except TestRailError as exc:
+            failed.append({"index": index, "case_id": raw_id, "error": str(exc)})
+            continue
+        if case_id in seen:
+            failed.append(
+                {
+                    "index": index,
+                    "case_id": case_id,
+                    "error": f"Case {case_id} appears twice in this batch; merge its changes into one entry.",
+                }
+            )
+            continue
+        seen.add(case_id)
+
+        try:
+            current = await _get(f"get_case/{case_id}")
+        except TestRailError as exc:
+            failed.append({"index": index, "case_id": case_id, "error": str(exc)})
+            continue
+
+        base = {
+            "index": index,
+            "case_id": case_id,
+            "title": current.get("title"),
+            "url": f"{BASE_URL}/index.php?/cases/view/{case_id}",
+        }
+
+        expected_on = spec.get("expected_updated_on")
+        if expected_on is not None and _as_int(current.get("updated_on")) != _as_int(expected_on):
+            blocked.append(
+                {
+                    **base,
+                    "reason": "changed in TestRail since it was read — re-read it and re-plan",
+                    "expected_updated_on": expected_on,
+                    "updated_on": current.get("updated_on"),
+                }
+            )
+            continue
+
+        body = {field: value for field, value in payload.items() if not _same(field, current.get(field), value, token_fields)}
+        if not body:
+            unchanged.append({**base, "updated_on": current.get("updated_on")})
+            continue
+
+        removed = _removed_links(current, body, token_fields)
+        if removed and not spec.get("allow_unlink"):
+            blocked.append(
+                {
+                    **base,
+                    "reason": "would remove requirement links — pass allow_unlink only if the user asked for that",
+                    "removed": removed,
+                }
+            )
+            continue
+
+        changes = {field: {"before": current.get(field), "after": value} for field, value in body.items()}
+        entry = {**base, "changes": changes, "warnings": _update_warnings(current, body)}
+        if dry_run:
+            updated.append({**entry, "updated_on": current.get("updated_on"), "dropped_fields": []})
+            continue
+
+        try:
+            result = await _post(f"update_case/{case_id}", body)
+            if not isinstance(result, dict) or result.get("id") is None:
+                result = await _get(f"get_case/{case_id}")
+        except TestRailError as exc:
+            failed.append({"index": index, "case_id": case_id, "title": base["title"], "error": str(exc)})
+            continue
+
+        dropped = [field for field, value in body.items() if not _same(field, result.get(field), value, token_fields)]
+        updated.append({**entry, "updated_on": result.get("updated_on"), "dropped_fields": dropped})
+        if dropped and stop_on_dropped_field:
+            stopped = (
+                f"Case {case_id} accepted the update but did not store {', '.join(dropped)} — usually a wrong "
+                "field name or a field not on the case's template. Check testrail_get_case_fields; the "
+                "remaining cases were not attempted."
+            )
+
+    return json.dumps(
+        {
+            "dry_run": dry_run,
+            "updated": updated,
+            "unchanged": unchanged,
+            "blocked": blocked,
+            "failed": failed,
+            "not_attempted": not_attempted,
+            "stopped": stopped,
         },
         indent=2,
     )

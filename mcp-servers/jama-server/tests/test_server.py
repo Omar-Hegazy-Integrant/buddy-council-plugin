@@ -6,6 +6,7 @@ Standard library only (unittest + httpx.MockTransport, which ships with httpx),
 so the server gains no test dependency.
 """
 
+import asyncio
 import base64
 import io
 import json
@@ -128,9 +129,10 @@ PROJECTS = [
 USER = {"id": 5, "username": "jdoe", "firstName": "Jane", "lastName": "Doe", "licenseType": "NAMED", "active": True, "email": "jane@example.com"}
 
 
-def _abstract(item):
-    """/abstractitems carries no location — mirror that, so the server can't lean on it."""
-    return {k: v for k, v in item.items() if k not in ("location", "lock", "childItemType")}
+def _abstract(item, keep_location=False):
+    """Jama's docs show /abstractitems without a location — mirror that unless a test asks otherwise."""
+    dropped = ("lock", "childItemType") if keep_location else ("location", "lock", "childItemType")
+    return {k: v for k, v in item.items() if k not in dropped}
 
 
 class FakeJama:
@@ -148,24 +150,49 @@ class FakeJama:
         self.throttle: dict[str, int] = {}
         self.reject_include = False
         self.sleeps: list[float] = []
+        self.search_location = False  # Jama Cloud's /abstractitems does return location
+        self.omit_totals = False
+        self.latency = 0.0
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.dropped: dict[str, int] = {}  # resource -> connections to drop before answering
+        self.broken: set[str] = set()  # resources that answer 500
+        self.page_cap = 50  # most results Jama returns per page, whatever maxResults asks for
+        self.hold: asyncio.Event | None = None  # while set and not yet open, project pages wait for it
+        self.hold_from = 1  # startAt from which project pages wait: 1 lets the first page through
 
     async def sleep(self, seconds):
         self.sleeps.append(seconds)
 
     def transport(self):
-        return httpx.MockTransport(self.handle)
+        return httpx.MockTransport(self.handle_async)
+
+    async def handle_async(self, request: httpx.Request) -> httpx.Response:
+        """Every request takes `latency` seconds, so concurrent ones overlap and can be counted."""
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(self.latency)
+            start = int(request.url.params.get("startAt", 0) or 0)
+            if self.hold is not None and request.url.path == "/rest/v1/items" and start >= self.hold_from:
+                await self.hold.wait()
+            return self.handle(request)
+        finally:
+            self.in_flight -= 1
 
     @staticmethod
     def _error(status, message):
         return httpx.Response(status, json={"meta": {"status": "Error", "message": message}})
 
-    @staticmethod
-    def _page(data, params, linked=None):
+    def _page(self, data, params, linked=None):
         start = int(params.get("startAt", 0))
-        size = min(int(params.get("maxResults", 20)), 50)
+        size = min(int(params.get("maxResults", 20)), self.page_cap)
         chunk = data[start : start + size]
+        page_info = {"startIndex": start, "resultCount": len(chunk), "totalResults": len(data)}
+        if self.omit_totals:
+            del page_info["totalResults"]
         body = {
-            "meta": {"status": "OK", "pageInfo": {"startIndex": start, "resultCount": len(chunk), "totalResults": len(data)}},
+            "meta": {"status": "OK", "pageInfo": page_info},
             "links": {},
             "data": chunk,
         }
@@ -198,6 +225,11 @@ class FakeJama:
         if not self._authorized(request):
             return self._error(401, "Unauthorized")
         resource = path[len("/rest/v1/") :]
+        if self.dropped.get(resource):
+            self.dropped[resource] -= 1
+            raise httpx.ConnectTimeout("connection timed out", request=request)
+        if resource in self.broken:
+            return self._error(500, "internal error")
         if self.throttle.get(resource):
             self.throttle[resource] -= 1
             return httpx.Response(429, headers={"Retry-After": "2"}, json={"meta": {"message": "slow down"}})
@@ -232,8 +264,15 @@ class FakeJama:
                 linked = {"items": {str(i): _abstract(self.items[i]) for i in ids}}
             return self._page(data, params, linked)
         if resource == "abstractitems":
-            key = params.get("documentKey")
-            data = [_abstract(i) for i in self.items.values() if i["documentKey"] == key]
+            keys = request.url.params.get_list("documentKey")
+            type_ids = {int(t) for t in request.url.params.get_list("itemType")}
+            data = [
+                _abstract(i, self.search_location)
+                for i in self.items.values()
+                if (not keys or i["documentKey"] in keys)
+                and (not type_ids or i["itemType"] in type_ids)
+                and str(i["project"]) == params.get("project", str(i["project"]))
+            ]
             return self._page(data, params)
         if parts[0] == "abstractitems" and len(parts) == 2:
             match = self.items.get(int(parts[1]))
@@ -260,7 +299,10 @@ TOOL_NAMES = {
     "jama_get_features",
     "jama_get_requirements",
     "jama_get_item",
+    "jama_get_items",
+    "jama_get_scope_proposal",
 }
+ROOT = 1001  # the "Software Requirements" set
 
 
 class ServerTestCase(unittest.IsolatedAsyncioTestCase):
@@ -300,6 +342,9 @@ class ReadOnlyContract(ServerTestCase):
         await self.call("jama_get_features", project_id=PROJECT)
         await self.requirements(scope="Patient Monitoring", field_mapping={"github_url": "Linked to Github"})
         await self.call("jama_get_item", item="CWA-REQ-1")
+        await self.call("jama_get_items", items=["CWA-REQ-2", "2005", "cwa-req-4"], root_ids=[ROOT])
+        await self.call("jama_get_scope_proposal", project_id=PROJECT, document_keys=["CWA-REQ-1", "CWA-REQ-5"])
+        await self.requirements(root_ids=[ROOT], feature_depth=2, exclude_ids=[1110])
         self.assertGreater(len(self.fake.requests), 10)
         for method, path, _ in self.fake.requests:
             if path.startswith("/rest/v1/"):
@@ -313,6 +358,14 @@ class ReadOnlyContract(ServerTestCase):
         for tool in tools:
             self.assertTrue(tool.annotations.readOnlyHint, tool.name)
             self.assertFalse(tool.annotations.destructiveHint, tool.name)
+
+    async def test_results_are_sent_once_as_text(self):
+        tools = await server.mcp.list_tools()
+        self.assertEqual([t.name for t in tools if t.outputSchema is not None], [], "set structured_output=False")
+        result = await server.mcp.call_tool("jama_get_current_user", {})
+        self.assertNotIsInstance(result, tuple, "a (text, structured copy) pair doubles every response")
+        [block] = result
+        self.assertEqual(json.loads(block.text)["user"]["name"], "Jane Doe")
 
     def test_source_has_no_write_capable_http_call(self):
         source = Path(server.__file__).read_text()
@@ -480,6 +533,134 @@ class Features(ServerTestCase):
         self.assertIn({"label": "Status", "name": "status$89", "type": "LOOKUP"}, requirement["fields"])
 
 
+class RequirementRoots(ServerTestCase):
+    async def test_a_root_keeps_only_what_is_inside_it(self):
+        payload = await self.requirements(root_ids=[ROOT])
+        self.assertEqual(self.ids(payload), [f"CWA-REQ-{n}" for n in range(1, 7)])
+        self.assertIn("2 items outside the requirements root ignored", payload["summary"])
+
+    async def test_features_are_top_level_folders_and_deeper_ones_roll_up(self):
+        by_id = {r["id"]: r for r in (await self.requirements(root_ids=[ROOT]))["requirements"]}
+        self.assertEqual(by_id["CWA-REQ-1"]["feature"], "Patient Monitoring")
+        self.assertEqual(by_id["CWA-REQ-4"]["feature"], "Patient Monitoring")
+        self.assertEqual(
+            by_id["CWA-REQ-4"]["raw_fields"]["folder_path"],
+            "Product / Software Requirements / Patient Monitoring / Vitals",
+        )
+        self.assertEqual(by_id["CWA-REQ-5"]["feature"], "Alarms")
+        self.assertEqual(by_id["CWA-REQ-6"]["feature"], "Software Requirements")
+
+    async def test_depth_two_splits_sub_folders_out(self):
+        payload = await self.requirements(root_ids=[ROOT], feature_depth=2)
+        by_id = {r["id"]: r["feature"] for r in payload["requirements"]}
+        self.assertEqual((by_id["CWA-REQ-1"], by_id["CWA-REQ-3"], by_id["CWA-REQ-4"]), ("Patient Monitoring", "Vitals", "Vitals"))
+
+    async def test_a_requirement_scope_returns_its_whole_top_level_feature(self):
+        payload = await self.requirements(root_ids=[ROOT], scope="CWA-REQ-4")
+        self.assertEqual(self.ids(payload), [f"CWA-REQ-{n}" for n in range(1, 5)])
+
+    async def test_a_sub_folder_can_still_be_targeted(self):
+        self.assertEqual(self.ids(await self.requirements(root_ids=[ROOT], scope="Vitals")), ["CWA-REQ-3", "CWA-REQ-4"])
+
+    async def test_a_same_named_folder_outside_the_root_never_matches(self):
+        payload = await self.requirements(root_ids=[ROOT], scope="Alarms")
+        self.assertEqual(self.ids(payload), ["CWA-REQ-5"])
+        self.assertEqual(payload["warnings"], [])
+
+    async def test_an_excluded_folder_is_left_out(self):
+        ids = self.ids(await self.requirements(root_ids=[ROOT], exclude_ids=[1110]))
+        self.assertEqual(ids, ["CWA-REQ-1", "CWA-REQ-2", "CWA-REQ-5", "CWA-REQ-6"])
+
+    async def test_features_sharing_a_name_get_their_paths(self):
+        features = {r["id"]: r["feature"] for r in (await self.requirements(root_ids=[ROOT, 1300]))["requirements"]}
+        self.assertEqual(features["CWA-REQ-5"], "Product / Software Requirements / Alarms")
+        self.assertEqual(features["CWA-REQ-7"], "Product / Alarms")
+        self.assertEqual(features["CWA-REQ-1"], "Patient Monitoring")
+
+    async def test_a_missing_root_is_loud(self):
+        payload = await self.requirements(root_ids=[9999])
+        self.assertEqual(payload["requirements"], [])
+        self.assertTrue(any("re-anchor" in w for w in payload["warnings"]))
+
+    async def test_the_feature_list_shows_only_what_holds_requirements(self):
+        payload = await self.call(
+            "jama_get_features", project_id=PROJECT, root_ids=[ROOT], item_type_exclude=NON_REQUIREMENT_TYPES
+        )
+        self.assertEqual(payload["mode"], "roots")
+        self.assertEqual(payload["roots"], [{"id": ROOT, "path": "Product / Software Requirements"}])
+        self.assertEqual(
+            [(f["name"], f["requirements"], f["folders"]) for f in payload["features"]],
+            [("Software Requirements", 1, 1), ("Patient Monitoring", 4, 2), ("Alarms", 1, 1)],
+        )
+
+    async def test_a_single_item_follows_the_same_features(self):
+        inside = await self.call("jama_get_item", item="CWA-REQ-4", root_ids=[ROOT])
+        self.assertEqual(inside["requirement"]["feature"], "Patient Monitoring")
+        outside = await self.call("jama_get_item", item="CWA-REQ-8", root_ids=[ROOT])
+        self.assertTrue(any("outside the configured requirements root" in w for w in outside["warnings"]))
+
+
+class ScopeProposal(ServerTestCase):
+    async def propose(self, keys, **kwargs):
+        return await self.call("jama_get_scope_proposal", project_id=PROJECT, document_keys=keys, **kwargs)
+
+    async def test_links_inside_one_set_propose_that_set(self):
+        payload = await self.propose([f"CWA-REQ-{n}" for n in range(1, 7)])
+        self.assertEqual([r["path"] for r in payload["roots"]], ["Product / Software Requirements"])
+        self.assertEqual(payload["coverage"], 1.0)
+        self.assertEqual(payload["proposed_item_types"], ["Requirement"])
+        self.assertEqual(
+            [f["name"] for f in payload["features"]["list"]], ["Software Requirements", "Patient Monitoring", "Alarms"]
+        )
+        self.assertEqual(payload["requirements"], {"in_roots": 6, "of_type_outside_roots": 2})
+
+    async def test_links_inside_one_folder_descend_into_it(self):
+        payload = await self.propose(["CWA-REQ-1", "CWA-REQ-2", "CWA-REQ-3", "CWA-REQ-4"])
+        self.assertEqual([r["path"] for r in payload["roots"]], ["Product / Software Requirements / Patient Monitoring"])
+        self.assertEqual(
+            [(f["name"], f["requirements"], f["linked"]) for f in payload["features"]["list"]],
+            [("Patient Monitoring", 2, 2), ("Vitals", 2, 2)],
+        )
+
+    async def test_links_split_across_a_component_become_two_roots(self):
+        payload = await self.propose(["CWA-REQ-5", "CWA-REQ-7"])
+        self.assertEqual(
+            [r["path"] for r in payload["roots"]], ["Product / Software Requirements / Alarms", "Product / Alarms"]
+        )
+        self.assertEqual(
+            [f["name"] for f in payload["features"]["list"]],
+            ["Product / Software Requirements / Alarms", "Product / Alarms"],
+        )
+
+    async def test_stray_links_are_outliers_not_a_wider_root(self):
+        for n in range(20):
+            self.fake.items[2100 + n] = _item(2100 + n, 89, f"Extra {n}", 1100, f"1.1.1.9.{n}", f"CWA-REQ-{100 + n}")
+        keys = [f"CWA-REQ-{n}" for n in range(1, 7)] + [f"CWA-REQ-{100 + n}" for n in range(20)] + ["CWA-REQ-8"]
+        payload = await self.propose(keys)
+        self.assertEqual([r["path"] for r in payload["roots"]], ["Product / Software Requirements"])
+        self.assertEqual(payload["outliers"], {"count": 1, "sample": [{"key": "CWA-REQ-8", "path": ""}]})
+        self.assertEqual(payload["coverage"], round(26 / 27, 3))
+
+    async def test_features_without_links_are_called_out(self):
+        payload = await self.propose(["CWA-REQ-1", "CWA-REQ-2", "CWA-REQ-3", "CWA-REQ-4", "CWA-REQ-6"])
+        self.assertEqual(payload["features"]["without_links"], ["Alarms"])
+        self.assertIn("1 of the 3 features have no linked case", payload["summary"])
+
+    async def test_unknown_keys_are_counted(self):
+        payload = await self.propose("CWA-REQ-1, NOPE-1\nOLD-SRS-12")
+        self.assertEqual(payload["anchors"], {"given": 3, "resolved": 1, "not_found": 2, "not_found_sample": ["NOPE-1", "OLD-SRS-12"]})
+
+    async def test_keys_from_another_project_warn(self):
+        payload = await self.propose(["OLD-SRS-1", "OLD-SRS-2"])
+        self.assertEqual(payload["roots"], [])
+        self.assertTrue(any("None of the 2 linked IDs" in w for w in payload["warnings"]))
+
+    async def test_an_adjusted_root_can_be_previewed(self):
+        payload = await self.propose([f"CWA-REQ-{n}" for n in range(1, 7)], root_ids=[1100])
+        self.assertEqual([r["id"] for r in payload["roots"]], [1100])
+        self.assertEqual(payload["outliers"]["count"], 2)
+
+
 class Caching(ServerTestCase):
     async def test_the_project_is_read_once_then_cached(self):
         pages = math.ceil(len(ITEMS) / 4)
@@ -498,6 +679,12 @@ class Caching(ServerTestCase):
         await self.requirements(scope="CWA-REQ-1")
         for pick_list in (500, 501, 502):
             self.assertEqual(self.fake.count("GET", f"/rest/v1/picklists/{pick_list}/options"), 1)
+        self.assertFalse([p for _, p, _ in self.fake.requests if p.startswith("/rest/v1/picklistoptions/")])
+
+    async def test_concurrent_calls_share_a_pick_list_read(self):
+        self.fake.latency = 0.01
+        await asyncio.gather(*(self.call("jama_get_item", item="CWA-REQ-1") for _ in range(3)))
+        self.assertEqual(self.fake.count("GET", "/rest/v1/picklists/500/options"), 1)
         self.assertFalse([p for _, p, _ in self.fake.requests if p.startswith("/rest/v1/picklistoptions/")])
 
     async def test_truncation_is_reported(self):
@@ -552,6 +739,19 @@ class Transport(ServerTestCase):
             await self.call("jama_get_current_user")
         self.assertEqual(ctx.exception.status, 429)
         self.assertEqual(len(self.fake.sleeps), server._MAX_RATE_LIMIT_RETRIES)
+
+    async def test_a_dropped_connection_is_retried(self):
+        self.fake.dropped["users/current"] = 2
+        payload = await self.call("jama_get_current_user")
+        self.assertEqual(payload["user"]["name"], "Jane Doe")
+        self.assertEqual(self.fake.sleeps, [1.0, 2.0])
+
+    async def test_a_connection_that_keeps_failing_is_an_error(self):
+        self.fake.dropped["users/current"] = 10
+        with self.assertRaises(server.JamaError) as ctx:
+            await self.call("jama_get_current_user")
+        self.assertIn("Could not reach", str(ctx.exception))
+        self.assertEqual(len(self.fake.sleeps), server._MAX_NETWORK_RETRIES)
 
     async def test_an_expired_token_is_refreshed_once(self):
         await self.call("jama_get_current_user")
@@ -634,10 +834,289 @@ class SingleItem(ServerTestCase):
         paths = [p for _, p, _ in self.fake.requests[before:]]
         self.assertNotIn("/rest/v1/items/1110", paths)
 
+    async def test_a_repeat_lookup_is_served_from_the_cache(self):
+        await self.call("jama_get_item", item="CWA-REQ-3")
+        before = len(self.fake.requests)
+        await self.call("jama_get_item", item="CWA-REQ-3")
+        self.assertEqual(len(self.fake.requests), before)
+
     async def test_an_unknown_document_key_is_a_404(self):
         with self.assertRaises(server.JamaError) as ctx:
             await self.call("jama_get_item", item="CWA-REQ-999", project_id=PROJECT)
         self.assertEqual(ctx.exception.status, 404)
+
+
+class ManyItems(ServerTestCase):
+    async def items(self, keys, **kwargs):
+        return await self.call("jama_get_items", items=keys, **kwargs)
+
+    def reads(self, *item_ids):
+        return {i: self.fake.count("GET", f"/rest/v1/items/{i}") for i in item_ids}
+
+    @staticmethod
+    def keys_of(payload):
+        return [entry["requirement"]["id"] for entry in payload["items"]]
+
+    async def test_items_come_back_in_request_order_with_traceability(self):
+        payload = await self.items(["CWA-REQ-5", "cwa-req-1", "2003", "CWA-REQ-999", "77777"])
+        self.assertEqual(self.keys_of(payload), ["CWA-REQ-5", "CWA-REQ-1", "CWA-REQ-3"])
+        requirements = [entry["requirement"] for entry in payload["items"]]
+        self.assertEqual([r["feature"] for r in requirements], ["Alarms", "Patient Monitoring", "Vitals"])
+        self.assertEqual(requirements[1]["linked_ids"], ["CWA-REQ-8", "CWA-TC-1"])
+        self.assertEqual(requirements[1]["status"], "Approved")
+        self.assertEqual(payload["not_found"], ["CWA-REQ-999", "77777"])
+        self.assertEqual(payload["failed"], [])
+        self.assertIsNone(payload["next_offset"])
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 0, "a batch must not read the whole project")
+
+    async def test_each_entry_matches_jama_get_item(self):
+        single = await self.call("jama_get_item", item="CWA-REQ-1")
+        server.reset_state(self.client)
+        [entry] = (await self.items(["CWA-REQ-1"]))["items"]
+        self.assertEqual(entry["requirement"], single["requirement"])
+        self.assertEqual(entry["relationships"], single["relationships"])
+
+    async def test_keys_are_searched_several_to_a_request(self):
+        keys = [f"CWA-REQ-{n}" for n in range(1, 9)] + ["CWA-FLD-1", "CWA-SET-1", "CWA-CMP-1", "CWA-TXT-1"]
+        with mock.patch.object(server, "_KEYS_PER_LOOKUP", 5):
+            payload = await self.items(keys, include_relationships=False)
+        self.assertEqual(self.keys_of(payload), keys)
+        searches = [q for _, p, q in self.fake.requests if p == "/rest/v1/abstractitems" and "documentKey" in q]
+        self.assertEqual(len(searches), 3)
+
+    async def test_shared_parents_are_read_once(self):
+        await self.items(["CWA-REQ-1", "CWA-REQ-2", "CWA-REQ-3", "CWA-REQ-4", "CWA-REQ-5"])
+        self.assertEqual(self.reads(1000, 1001, 1100, 1110, 1200, 2003), dict.fromkeys((1000, 1001, 1100, 1110, 1200, 2003), 1))
+
+    async def test_search_results_with_a_location_spare_every_item_read(self):
+        self.fake.search_location = True  # as on Jama Cloud: one container search places every item
+        payload = await self.items(["CWA-REQ-1", "CWA-REQ-4", "CWA-REQ-5"], include_relationships=False)
+        self.assertEqual([e["requirement"]["feature"] for e in payload["items"]], ["Patient Monitoring", "Vitals", "Alarms"])
+        self.assertEqual(payload["items"][1]["requirement"]["raw_fields"]["feature_path"], "Product / Software Requirements / Patient Monitoring / Vitals")
+        item_reads = [p for _, p, _ in self.fake.requests if p.startswith("/rest/v1/items/")]
+        self.assertEqual(item_reads, ["/rest/v1/items/2003"], "only the requirement a requirement is nested under")
+        await self.items(["CWA-REQ-2", "CWA-REQ-7"], include_relationships=False, project_id=PROJECT)
+        container_searches = [q for _, p, q in self.fake.requests if p == "/rest/v1/abstractitems" and "itemType" in q]
+        self.assertEqual(len(container_searches), 1, "the containers are cached per project")
+
+    async def test_without_locations_in_search_results_the_tree_is_walked(self):
+        payload = await self.items(["CWA-REQ-4"], include_relationships=False)
+        self.assertEqual(payload["items"][0]["requirement"]["raw_fields"]["feature_path"], "Product / Software Requirements / Patient Monitoring / Vitals")
+        await self.items(["CWA-REQ-5"], include_relationships=False)
+        container_searches = [q for _, p, q in self.fake.requests if p == "/rest/v1/abstractitems" and "itemType" in q]
+        self.assertEqual(len(container_searches), 1, "an instance without locations is not searched again")
+
+    async def test_a_repeat_call_is_served_from_the_cache(self):
+        keys = ["CWA-REQ-1", "CWA-REQ-3", "CWA-REQ-999"]
+        first = await self.items(keys)
+        before = len(self.fake.requests)
+        second = await self.items(keys)
+        self.assertEqual(len(self.fake.requests), before)
+        self.assertEqual(second["items"], first["items"])
+        self.assertEqual(second["not_found"], ["CWA-REQ-999"])
+        await self.items(keys, refresh=True)
+        self.assertGreater(len(self.fake.requests), before)
+
+    async def test_a_large_batch_pages_without_reading_anything_twice(self):
+        keys = [f"CWA-REQ-{n}" for n in range(1, 9)]
+        with mock.patch.object(server, "_PAGE_CHAR_BUDGET", 2500), mock.patch.object(server, "_BATCH_WINDOW", 3):
+            page = await self.items(keys)
+            collected, pages = self.keys_of(page), 1
+            while page["next_offset"] is not None:
+                offset = page["next_offset"]
+                page = await self.items(keys, offset=offset)
+                self.assertEqual(page["offset"], offset)
+                collected += self.keys_of(page)
+                pages += 1
+        self.assertGreater(pages, 1)
+        self.assertEqual(collected, keys)
+        self.assertIn("last page", page["summary"])
+        for item_id in range(2001, 2009):
+            self.assertLessEqual(self.fake.count("GET", f"/rest/v1/items/{item_id}"), 1, item_id)
+            self.assertLessEqual(self.fake.count("GET", f"/rest/v1/items/{item_id}/upstreamrelationships"), 1, item_id)
+
+    async def test_an_oversized_entry_still_makes_progress(self):
+        with mock.patch.object(server, "_PAGE_CHAR_BUDGET", 10):
+            payload = await self.items(["CWA-REQ-1", "CWA-REQ-2"])
+        self.assertEqual((self.keys_of(payload), payload["next_offset"]), (["CWA-REQ-1"], 1))
+
+    async def test_a_slow_instance_still_answers_in_time(self):
+        keys = [f"CWA-REQ-{n}" for n in range(1, 9)]
+        with mock.patch.object(server, "_BATCH_WINDOW", 2), mock.patch.object(server, "_BATCH_TIME_BUDGET_SECONDS", 0):
+            payload = await self.items(keys)
+        self.assertEqual((self.keys_of(payload), payload["next_offset"]), (["CWA-REQ-1", "CWA-REQ-2"], 2))
+
+    async def test_one_unreadable_item_does_not_sink_the_batch(self):
+        self.fake.broken.add("items/2005")
+        payload = await self.items(["CWA-REQ-1", "2005", "CWA-REQ-2"])
+        self.assertEqual(self.keys_of(payload), ["CWA-REQ-1", "CWA-REQ-2"])
+        self.assertEqual([f["item"] for f in payload["failed"]], ["2005"])
+        self.assertIn("HTTP 500", payload["failed"][0]["error"])
+
+    async def test_traceability_can_be_skipped(self):
+        payload = await self.items(["CWA-REQ-1"], include_relationships=False)
+        [entry] = payload["items"]
+        self.assertNotIn("relationships", entry)
+        self.assertEqual(entry["requirement"]["linked_ids"], [])
+        self.assertIn("linked_ids is empty", payload["summary"])
+        self.assertFalse([p for _, p, _ in self.fake.requests if p.endswith("relationships")])
+
+    async def test_custom_fields_can_be_left_out(self):
+        full = await self.items(["CWA-REQ-1"])
+        lean = await self.items(["CWA-REQ-1"], include_custom_fields=False)
+        self.assertIn("Priority", full["items"][0]["requirement"]["raw_fields"])
+        self.assertNotIn("Priority", lean["items"][0]["requirement"]["raw_fields"])
+
+    async def test_features_follow_the_requirements_root(self):
+        listed = await self.requirements(root_ids=[ROOT])
+        expected = {r["id"]: r["feature"] for r in listed["requirements"]}
+        server.reset_state(self.client)
+        payload = await self.items(["CWA-REQ-4", "CWA-REQ-5", "CWA-REQ-7"], root_ids=[ROOT])
+        features = {e["requirement"]["id"]: e["requirement"]["feature"] for e in payload["items"]}
+        self.assertEqual(features["CWA-REQ-4"], expected["CWA-REQ-4"])
+        self.assertEqual(features["CWA-REQ-5"], expected["CWA-REQ-5"])
+        outside = next(e for e in payload["items"] if e["requirement"]["id"] == "CWA-REQ-7")
+        self.assertTrue(any("outside the configured requirements root" in w for w in outside["warnings"]))
+
+    async def test_a_string_of_keys_is_accepted_and_deduplicated(self):
+        payload = await self.items("CWA-REQ-1, cwa-req-1 CWA-REQ-2")
+        self.assertEqual((payload["requested"], self.keys_of(payload)), (2, ["CWA-REQ-1", "CWA-REQ-2"]))
+
+    async def test_an_oversized_request_is_refused(self):
+        with mock.patch.object(server, "_MAX_BATCH_ITEMS", 3), self.assertRaises(server.JamaError):
+            await self.items("CWA-REQ-1, CWA-REQ-2 CWA-REQ-3;CWA-REQ-4")
+
+    async def test_an_instance_that_rejects_include_is_not_asked_again(self):
+        self.fake.reject_include = True
+        await self.call("jama_get_item", item="CWA-REQ-1")
+        before = len(self.fake.requests)
+        payload = await self.items(["CWA-REQ-2", "CWA-REQ-5"])
+        self.assertEqual(len(payload["items"]), 2)
+        later = [q for _, p, q in self.fake.requests[before:] if p.endswith("relationships")]
+        self.assertEqual(len(later), 4)
+        self.assertFalse([q for q in later if "include" in q])
+
+
+class Concurrency(ServerTestCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.fake.latency = 0.01
+
+    async def test_pages_are_read_together_within_the_cap_and_kept_in_order(self):
+        with mock.patch.object(server, "_PAGE_SIZE", 1):
+            listing = await self.client.get_all("items", {"project": PROJECT})
+        self.assertEqual([i["id"] for i in listing.data], [i["id"] for i in ITEMS])
+        self.assertEqual(listing.pages, len(ITEMS))
+        self.assertEqual(self.fake.max_in_flight, server._MAX_CONCURRENT_REQUESTS)
+
+    async def test_progress_is_reported_as_pages_arrive(self):
+        seen = []
+        with mock.patch.object(server, "_PAGE_SIZE", 4):
+            await self.client.get_all("items", {"project": PROJECT}, on_page=lambda done, total: seen.append((done, total)))
+        self.assertEqual(seen, [(1, 4), (2, 4), (3, 4), (4, 4)])
+
+    async def test_a_listing_without_totals_is_read_page_by_page(self):
+        self.fake.omit_totals = True
+        with mock.patch.object(server, "_PAGE_SIZE", 5):
+            listing = await self.client.get_all("items", {"project": PROJECT})
+        self.assertEqual([i["id"] for i in listing.data], [i["id"] for i in ITEMS])
+        self.assertEqual((listing.pages, self.fake.max_in_flight), (5, 1))
+
+    async def test_an_instance_with_smaller_pages_is_still_read_in_full(self):
+        self.fake.page_cap = 3
+        listing = await self.client.get_all("items", {"project": PROJECT})
+        self.assertEqual([i["id"] for i in listing.data], [i["id"] for i in ITEMS])
+        self.assertEqual(listing.pages, math.ceil(len(ITEMS) / 3))
+
+    async def test_the_project_summary_counts_its_requests(self):
+        with mock.patch.object(server, "_PAGE_SIZE", 2):
+            payload = await self.requirements()
+        self.assertIn(f"read live ({len(ITEMS)} items, {len(ITEMS) // 2} requests)", payload["summary"])
+
+
+class BackgroundRead(ServerTestCase):
+    """A project read the client would time out on carries on in the background."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.fake.hold = asyncio.Event()
+        self.patches = [mock.patch.object(server, "_PAGE_SIZE", 2), mock.patch.object(server, "_SNAPSHOT_WAIT_SECONDS", 0.01)]
+        for patch in self.patches:
+            patch.start()
+
+    async def asyncTearDown(self):
+        for patch in reversed(self.patches):
+            patch.stop()
+        await super().asyncTearDown()
+
+    async def finish_reads(self):
+        loads = [load.task for load in server._STATE.loads.values()]
+        self.fake.hold.set()
+        if loads:
+            await asyncio.wait(loads)
+
+    async def test_a_slow_read_reports_progress_then_answers(self):
+        first = await self.requirements()
+        self.assertTrue(first["loading"])
+        self.assertEqual((first["project_id"], first["pages_read"], first["pages_total"]), (PROJECT, 1, 8))
+        self.assertIn("call this tool again with the same arguments", first["summary"])
+        await self.finish_reads()
+        second = await self.requirements()
+        self.assertEqual(self.ids(second), [f"CWA-REQ-{n}" for n in range(1, 9)])
+        self.assertIn("read live", second["summary"])
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 8, "the retry must reuse the first read")
+
+    async def test_every_project_tool_reports_progress_and_shares_the_read(self):
+        for tool, kwargs in (
+            ("jama_get_features", {}),
+            ("jama_get_item_types", {}),
+            ("jama_get_scope_proposal", {"document_keys": ["CWA-REQ-1"]}),
+        ):
+            payload = await self.call(tool, project_id=PROJECT, **kwargs)
+            self.assertTrue(payload.get("loading"), tool)
+        await self.finish_reads()
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 8)
+
+    async def test_a_refresh_retry_gets_the_read_it_started(self):
+        self.assertTrue((await self.requirements(refresh=True))["loading"])
+        self.assertTrue((await self.requirements(refresh=True))["loading"])
+        await self.finish_reads()
+        self.assertEqual(len((await self.requirements(refresh=True))["requirements"]), 8)
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 8, "one read for all three calls")
+        with mock.patch.object(server, "_SNAPSHOT_WAIT_SECONDS", 5):
+            await self.requirements(refresh=True)
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 16, "a deliberate refresh still re-reads")
+
+    async def test_later_pages_ignore_refresh(self):
+        await self.finish_reads()
+        with mock.patch.object(server, "_SNAPSHOT_WAIT_SECONDS", 5), mock.patch.object(server, "_PAGE_CHAR_BUDGET", 900):
+            page = await self.requirements(refresh=True)
+            while page["next_offset"] is not None:
+                page = await self.requirements(refresh=True, offset=page["next_offset"])
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 8)
+
+    async def test_a_failed_background_read_is_reported_once_then_retried(self):
+        self.fake.hold_from = 0
+        self.fake.broken.add("items")
+        self.assertTrue((await self.requirements())["loading"])
+        await self.finish_reads()
+        with self.assertRaises(server.JamaError) as ctx:
+            await self.requirements()
+        self.assertIn(f"Reading project {PROJECT} from Jama failed", str(ctx.exception))
+        self.fake.broken.clear()
+        with mock.patch.object(server, "_SNAPSHOT_WAIT_SECONDS", 5):
+            self.assertEqual(len((await self.requirements())["requirements"]), 8)
+
+    async def test_a_cancelled_call_leaves_the_read_running(self):
+        with mock.patch.object(server, "_SNAPSHOT_WAIT_SECONDS", 5):
+            call = asyncio.ensure_future(self.requirements())
+            await asyncio.sleep(0.01)
+            call.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await call
+        await self.finish_reads()
+        self.assertEqual(len((await self.requirements())["requirements"]), 8)
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 8)
 
 
 class SetupCheck(unittest.IsolatedAsyncioTestCase):
@@ -685,6 +1164,16 @@ class SetupCheck(unittest.IsolatedAsyncioTestCase):
             [{"field": "Linked to Github", "first_url": "https://github.com/org/repo/blob/main/docs/sds.md"}],
         )
 
+    async def test_anchors_add_a_scope_proposal(self):
+        report = await server._check(PROJECT, transport=self.fake.transport(), anchors=["CWA-REQ-1", "CWA-REQ-5"])
+        self.assertEqual([r["path"] for r in report["scope_proposal"]["roots"]], ["Product / Software Requirements"])
+
+    async def test_the_check_waits_for_a_slow_project_read(self):
+        self.fake.latency = 0.01
+        with mock.patch.object(server, "_SNAPSHOT_WAIT_SECONDS", 0), mock.patch.object(server, "_PAGE_SIZE", 2):
+            report = await server._check(PROJECT, transport=self.fake.transport())
+        self.assertEqual(report["items"], len(ITEMS))
+
     async def test_bad_credentials_raise(self):
         self.fake.client_secret = "rotated"
         with self.assertRaises(server.JamaError):
@@ -729,6 +1218,10 @@ class Configuration(unittest.TestCase):
                     server.load_config()
         self.assertIn("Set API Credentials", str(ctx.exception))
         self.assertIn("/bc:setup", str(ctx.exception))
+
+    def test_anchors_file_needs_a_project(self):
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr", new_callable=io.StringIO):
+            server.main(["--check", "--anchors-file", "keys.txt"])
 
     def test_cli_check_failure_prints_json_and_exits_non_zero(self):
         with tempfile.TemporaryDirectory() as tmp, self._secrets(tmp, {}):

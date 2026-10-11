@@ -29,6 +29,7 @@ Fetch requirements from the configured source. This skill reads the user's confi
 ## Input
 
 - `scope`: Optional — requirement ID, feature name (for Jama, a folder name or path such as `Software/Patient Monitoring`), or "all". Passed via $ARGUMENTS.
+- For Jama, a known list of requirement IDs (a bug's or a ticket's, say) is read by key in one batched call — the provider's "Specific requirements by key" section — rather than one call per ID or a whole feature per ID.
 
 ## Error Handling
 

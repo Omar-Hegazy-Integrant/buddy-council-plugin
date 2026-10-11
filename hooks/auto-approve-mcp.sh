@@ -39,9 +39,10 @@ except Exception:
 " 2>/dev/null)
 
 # The testrail_get_* glob is safe ONLY because every write tool on that server
-# is named testrail_add_*. Never name a TestRail write tool testrail_get_*: the
-# glob would auto-approve it silently, and testrail_add_case/add_cases/add_section
-# create rows in the team's live TestRail.
+# is named testrail_add_* or testrail_update_*. Never name a TestRail write tool
+# testrail_get_*: the glob would auto-approve it silently, and the add/update
+# tools create and overwrite cases in the team's live TestRail. The server's
+# test suite fails if a write tool ever lands under that prefix.
 #
 # The jama_get_* glob rests on a stronger guarantee: the vendored Jama server is
 # read-only by construction — every tool is jama_get_*, its HTTP client can only

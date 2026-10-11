@@ -25,8 +25,8 @@ This workflow comments on tickets the dev team owns and creates issues in bulk. 
 than getting the analysis wrong.
 
 - **Default is dry run.** Without `--apply`, you perform **zero** writes: no `jira_create_issue`, no
-  `jira_add_comment`, no `jira_update_issue`, and no `testrail_add_cases`/`testrail_add_section`. You print
-  the plan and stop.
+  `jira_add_comment`, no `jira_update_issue`, and no `testrail_add_cases`/`testrail_add_section`/
+  `testrail_update_cases`. You print the plan and stop.
 - **With `--apply`, confirm each phase once.** Show the full batch for that phase — every ticket key, every
   comment body, every label change — then ask once. Execute only after an explicit yes. A yes for one phase
   is not a yes for the next.
@@ -126,15 +126,19 @@ disagree, and repair the *ticket* when it carries none or more than one. Then:
   the comment author matches `jira.vnv_workflow.reviewer` (by `accountId`; resolve a configured email with
   `jira_search_assignable_users` once and cache it), **and** the body matches one of
   `jira.vnv_workflow.approval_phrases`. A matching phrase from anyone else is not approval — say so rather
-  than silently ignoring it.
+  than silently ignoring it. **The approval must also be newer than `scenarios_written_at`.** A ticket sent
+  back for re-review still carries the reviewer's approval of the previous draft; that comment approved
+  different scenarios, so it does not count. Say `VV-45: approval from <date> predates the current scenarios
+  (written <date>) — waiting for a fresh approval`. An entry with no `scenarios_written_at` (written before
+  the field existed) has nothing to compare against — count a qualifying approval as before.
   - Approved → advance to phase 6 (relabel).
   - Not yet → report waiting time and move on.
 - **`pending-validation`** → cloned but never reviewed (a previous run stopped, or `--apply` was never
   passed). Send it into phase 4 with this run's freshly fetched requirements and test cases.
 - **`ready-for-test-case-creation`** → terminal **for the label pipeline**: never relabel it, and never send
   it back through phases 4–6. It is, however, phase 7's input — the approved scenarios still have to become
-  TestRail cases. Phase 7 decides for itself whether a story has already been authored by asking TestRail,
-  not by reading this label.
+  TestRail cases, and when they are revised later, the cases have to follow. Phase 7 decides for itself what
+  has already been authored by asking TestRail, not by reading this label.
 
 If `jira_get_issue` does not return comments for this site, **do not guess**. Report that comment-based
 approval detection is unavailable here and fall back to: the reviewer applies the approval label in Jira
@@ -213,29 +217,79 @@ strips every other pipeline label — including a `pending-questions` left over 
 preserving `src-<DEV-KEY>`, the platform label, and anything a human added. Record the approving comment's
 author and timestamp in the log so the audit trail survives.
 
-### Phase 7: Write the test cases
-
-Follow `${CLAUDE_PLUGIN_ROOT}/skills/draft-test-cases/SKILL.md`.
+### Phase 7: Write — and refresh — the test cases
 
 This is the only phase that writes outside Jira. It takes every story at `ready-for-test-case-creation` —
-including ones phase 6 moved there on an earlier run — and turns its approved scenarios into TestRail cases
-in the suite folder the config points at.
+including ones phase 6 moved there on an earlier run — and keeps its TestRail cases in step with its approved
+scenarios: it creates them the first time, and refreshes them when the approved scenarios are revised later.
 
-Three things to hold onto:
+**7a. Pick up hand edits of the approved block.** For each story at `ready-for-test-case-creation`, read the
+V&V ticket (`jira_get_issue`) and parse its scenario block the way `draft-test-cases` step 1 parses a
+description — markers or heading, markdown or wiki markup. Compare each scenario with the log's copy after
+normalizing both: strip markup (`*`, `_`, `{{`, `}}`, heading and bullet prefixes), collapse whitespace, and
+ignore case. A difference that survives normalization is a real edit: someone changed the approved scenarios
+in Jira, and the ticket still carries the approved label, so **Jira wins** — replace the log's `scenarios`
+with the parsed ones, set `scenarios_source: "ticket_edit"`, and stamp `scenarios_written_at` now. Report it:
+`VV-45: approved scenarios edited in Jira (S2 changed, S5 added) — cases will follow`. This rewrites only the
+local cache, so it happens in a dry run too. If the block cannot be parsed, keep the log as it is and say so —
+never refresh from a half-read block.
 
-- **It reads the scenarios from the progress log**, not by re-parsing the Jira description. Phase 5 stores
-  them structurally for exactly this reason: descriptions round-trip through wiki markup on Server/DC and
-  come back reshaped. Parsing the ticket is a fallback for pre-existing entries only.
-- **TestRail decides what has already been authored**, via `testrail_get_cases_by_refs` on the dev key. The
-  label stays `ready-for-test-case-creation` afterwards — there is no fifth pipeline state, and adding one
-  would break the mutual exclusivity the whole state machine depends on.
+**7b. Decide per story.** Ask TestRail first — `testrail_get_cases_by_refs` on the dev key, confirmed by
+reading `refs` off the returned cases:
+
+| TestRail has cases for the story? | Scenarios revised after them? | Action |
+|---|---|---|
+| No | — | **Create** — follow `${CLAUDE_PLUGIN_ROOT}/skills/draft-test-cases/SKILL.md` |
+| Yes | No | **Up to date** — skip |
+| Yes | Yes | **Refresh** — follow `${CLAUDE_PLUGIN_ROOT}/skills/update-test-cases/SKILL.md` via its `scenarios` path; scenarios with no case go to `draft-test-cases` in refresh mode |
+
+"Revised after them" means `scenarios_written_at` is later than `cases_updated_at` — or than
+`cases_created_at` when the cases were never refreshed. A story missing those timestamps (an entry from before
+they existed) counts as up to date: there is no evidence of a revision, and a refresh rewrites TestRail.
+
+**A refresh never overwrites the V&V team's work.** The team expands these skeletons by hand. Only a case still
+exactly as the plugin wrote it — its TestRail `updated_on` unchanged since — is regenerated; a case someone
+edited is reported for manual review with the revised scenario beside it. A case whose scenario disappeared is
+reported, never deleted, and a requirement link the revised scenario dropped is flagged, never removed.
+
+Three more things to hold onto:
+
+- **It reads the scenarios from the progress log**, not by re-parsing the Jira description — 7a re-parses only
+  to *detect* a hand edit, then works from the log like everything else. Phase 5 stores the scenarios
+  structurally because descriptions round-trip through wiki markup on Server/DC and come back reshaped.
+- **TestRail decides what has already been authored**, not the label. The label stays
+  `ready-for-test-case-creation` afterwards — there is no fifth pipeline state, and adding one would break the
+  mutual exclusivity the whole state machine depends on.
 - **Skip the phase entirely, with a visible line, when `test_cases.authoring` is unconfigured.** Do not
   guess a template: it decides which body fields a case has, so a wrong guess writes the steps into a field
   nobody reads. Say `Phase 7: skipped — test_cases.authoring not configured (run /bc:setup)` and finish the
   run normally. An unconfigured TestRail does not make the V&V run a failure.
 
-Confirm once for the whole batch under `--apply`, like every other write phase, showing every case title,
-its folder, and its refs before anything is created.
+Confirm once for the whole batch under `--apply`, like every other write phase, showing every case to create
+(title, folder, refs) and every case to update (before → after) before anything is written. Then post one
+comment per story whose cases changed — the `draft-test-cases` comment for a first creation, or for a refresh:
+
+```markdown
+**Test cases refreshed** — Buddy-Council `/bc:vnv-sprint-prep`
+
+The approved scenarios changed on 2026-09-02, so these cases now follow them:
+
+| Scenario | Case | Change |
+|---|---|---|
+| S2 — Sync gives up after the retry limit | [C1235](https://company.testrail.io/index.php?/cases/view/1235) | updated |
+| S5 — Banner clears on reconnect | [C1290](https://company.testrail.io/index.php?/cases/view/1290) | new |
+| S3 — Data is encrypted in transit during retry | [C1236](https://company.testrail.io/index.php?/cases/view/1236) | **not changed — edited by hand since it was generated; review it against the revised scenario** |
+```
+
+### Revising approved scenarios
+
+Approved scenarios change in one of two ways, and phase 7 follows both:
+
+- **Re-review.** Someone moves the V&V ticket back to `pending-validation` in Jira. The next run re-validates
+  it, phase 5 redrafts the scenarios, and the reviewer must approve the new draft — an approval left on the
+  old draft does not count (phase 1a). Once it is ready again, phase 7 refreshes its cases.
+- **Hand edit.** Someone edits the scenario block on the approved ticket, keeping its `### S1 — Title` and
+  bullet structure. Phase 7a picks the edit up on the next run.
 
 ### Final report
 
@@ -256,16 +310,18 @@ Pipeline
   would clone                    4   PROJ-150, PROJ-151, PROJ-152, PROJ-153
 
 Test cases (TestRail project 45, suite 9277)
-  VV-40  PROJ-118 [iOS]      already authored — 3 cases (found by refs)
+  VV-40  PROJ-118 [iOS]      already authored — 3 cases (found by refs), up to date
   VV-41  PROJ-119 [Android]  would create 2 → V&V/Sync/Offline handling
   VV-42  PROJ-120 [iOS]      would create 3 → V&V/Checkout   (folder would be created)
+  VV-39  PROJ-117 [iOS]      scenarios revised 2026-09-02 — would update 2, create 1;
+                             C1236 edited by hand since generated (review S3 manually)
   untraced, not created      VV-42 S4 "Rate limiting behaviour"
 
 Clone ↔ original pairs
   VV-45 → PROJ-123   linked (Relates)
   VV-46 → PROJ-124   label-only (site refused link creation)
 
-Run with --apply to perform the 4 clones, 1 comment, 3 label changes, and 5 test cases above.
+Run with --apply to perform the 4 clones, 1 comment, 3 label changes, 6 new test cases, and 2 case updates above.
 ```
 
 When phase 7 was skipped, say why on its own line rather than omitting the section —
@@ -298,6 +354,7 @@ the repo-local `.git/info/exclude` exactly as `manage-progress-log` Operation 1 
       "concern_comment_id": "10501",
       "concern_posted_at": "2026-08-15T11:02:00Z",
       "scenarios_written_at": "2026-08-18T14:30:00Z",
+      "scenarios_source": "phase5",
       "scenarios": [
         {
           "id": "S1",
@@ -312,7 +369,12 @@ the repo-local `.git/info/exclude` exactly as `manage-progress-log` Operation 1 
         }
       ],
       "testrail_case_ids": [1234, 1235],
+      "testrail_cases": [
+        { "scenario": "S1", "case_id": 1234, "written_on": 1755594000 },
+        { "scenario": "S3", "case_id": 1235, "written_on": 1755594060 }
+      ],
       "cases_created_at": "2026-08-19T09:20:00Z",
+      "cases_updated_at": null,
       "approved_by": null,
       "approved_at": null,
       "last_checked_at": "2026-08-19T09:14:22Z"
@@ -333,6 +395,12 @@ still comes from Jira.
 `testrail_case_ids` and `cases_created_at` record what phase 7 wrote. They are a **secondary** guard only:
 phase 7 asks TestRail first (`testrail_get_cases_by_refs` on the dev key), because the external system is
 the truth and this file only remembers *why*.
+
+`testrail_cases` maps each scenario to its case, with `written_on` — the case's TestRail `updated_on` as the
+plugin last wrote it (a UNIX timestamp, straight from the TestRail response). It is what lets a refresh tell a
+skeleton nobody has touched from one the V&V team expanded: the first still has that `updated_on`, the second
+does not. `cases_updated_at` is when phase 7 last refreshed the story's cases, and `scenarios_source` says
+where the current scenarios came from — `phase5` for a draft, `ticket_edit` when 7a picked up a hand edit.
 
 ## Error Handling
 
@@ -357,6 +425,10 @@ the truth and this file only remembers *why*.
 - **`testrail_add_cases` fails for one case** → the others still run (the tool loops `add_case`; TestRail has
   no bulk-create endpoint). Record it and list it in the report. A required custom field is the usual cause
   and TestRail names it in the error — pass that through verbatim.
+- **A refresh update is `blocked`** → on a conflict, the case was edited since the plugin wrote it: report it
+  for manual review, never retry without the guard. On an unlink, the change was dropped and the link stays —
+  flag it. A `dropped_fields` or `stopped` result means TestRail discarded a field: stop the phase and report
+  which cases were and were not updated.
 - **TestRail unreachable while Jira is fine** → phases 1–6 still stand. Report phase 7 as failed, not the
   whole run, and say the tickets remain at `ready-for-test-case-creation` for the next attempt.
 
@@ -368,8 +440,9 @@ This agent runs the V&V sprint pipeline. It does **not**:
   dev-team decision)
 - Write *finished* TestRail test cases. Phase 7 writes **skeletons** from the approved high-level scenarios —
   title, preconditions, one step per Given/When/Then — for the V&V team to expand. It never invents coverage
-  beyond what a reviewer approved, never authors a case from a scenario that traces to no requirement, and
-  never touches cases it did not create
+  beyond what a reviewer approved, never authors a case from a scenario that traces to no requirement, never
+  touches cases it did not create, never overwrites a case someone edited after it was generated, and never
+  deletes one
 - Transition tickets through workflow statuses (labels only, unless the user explicitly asks)
 - Edit the dev story's description or fields — it only ever adds a comment there
 

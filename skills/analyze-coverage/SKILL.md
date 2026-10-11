@@ -23,6 +23,12 @@ Requirements where `linked_ids` is empty — no test cases are linked to them.
 ### 2. Orphan Test Cases
 Test cases where `linked_ids` is empty — no requirements are linked to them.
 
+Check each orphan's `raw_fields.refs` too. When it names a requirement in scope, the case is a **stranded
+link**: it was linked in TestRail's References field but not in the requirement field this plugin reads, so
+it counts as an orphan *and* its requirement counts as untested. Keep both in the metrics — that is what the
+plugin actually reads — but label the pair in the report (below), so nobody drafts a duplicate case for a
+requirement that already has one. The fix is re-linking, not new tests.
+
 ### 3. Weak Coverage
 Requirements that have linked test cases, but the test cases do not meaningfully exercise the requirement's acceptance criteria. Examples:
 - Test only covers the happy path but requirement specifies error handling
@@ -90,9 +96,11 @@ Produce a human-readable report:
 
 ### [Feature Name]
 - **CWA-REQ-XX**: "[title]" — [brief note on what is untested]
+- **CWA-REQ-YY**: "[title]" — link stranded on TC-YYYY (named in its References only)
 
 ## Orphan Test Cases
 - **TC-XXXX**: "[title]" — no linked requirement found
+- **TC-YYYY**: "[title]" — stranded link: References names CWA-REQ-YY, the requirement field is empty
 
 ## Weak Coverage
 - **CWA-REQ-XX**: "[title]" — linked to TC-XXXX but test only covers [aspect]; requirement also specifies [missing aspect]

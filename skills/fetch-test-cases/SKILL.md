@@ -19,8 +19,10 @@ Fetch test cases from the configured source. This skill reads the user's configu
 
 4. **IMPORTANT**: The provider skill will instruct you to use specific MCP tools. Use those MCP tools directly — do NOT use curl or Bash to call APIs.
 5. **Pass narrowing context** to the provider to avoid fetching all test cases:
-   - If you know the **feature name** (from requirements or user scope), pass it so the provider fetches only that section
-   - If you know **specific requirement IDs**, pass them so the provider can search by reference
+   - If you know the **requirement IDs** in scope — the feature's requirements you just fetched — pass them.
+     The provider finds the cases linked to them through the requirement field, which works whatever the
+     TestRail folders are called. This is the preferred narrowing.
+   - Pass the **feature name** too, so the provider also catches unlinked cases filed in a same-named folder
    - The provider skill explains which fetch strategy to use based on available context
 6. Return the results in canonical schema format
 

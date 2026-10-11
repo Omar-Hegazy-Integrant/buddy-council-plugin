@@ -33,7 +33,7 @@ only the tickets whose blocking condition has cleared.
 This workflow writes to tickets other people own. Three rules hold at all times:
 
 1. **Dry run is the default.** A plain `/bc:vnv-sprint-prep` performs reads only. Every intended write is printed as a plan line.
-2. **`--apply` still confirms.** Each phase (clone / comment / label / description) shows its batch and asks once before executing. Never execute a phase the user has not confirmed in this session.
+2. **`--apply` still confirms.** Each phase (clone / comment / label / description / test cases) shows its batch and asks once before executing. Never execute a phase the user has not confirmed in this session.
 3. **Reads are always allowed.** Re-reading dev-story comments to see whether your questions were answered happens on every run, dry or not — that is how the workflow knows a ticket can advance.
 
 ## Execution
@@ -53,13 +53,29 @@ This workflow writes to tickets other people own. Three rules hold at all times:
 | 4 | **Validate** | Check each clone against requirements and test cases for gaps, conflicts, and contradictions. Concerns → comment on the **original dev story**, label the clone `pending-questions` | yes |
 | 5 | **Scenarios** | Write high-level scenarios into the V&V ticket's description; label `pending-scenario-validation` | yes |
 | 6 | **Ready** | Once the designated reviewer approves in a comment, relabel `ready-for-test-case-creation` | yes |
-| 7 | **Test cases** | Turn each approved ticket's scenarios into TestRail cases in the configured suite folder, with `refs` pointing back at the requirements and the dev story, then comment the case links onto the V&V ticket | yes |
+| 7 | **Test cases** | Turn each approved ticket's scenarios into TestRail cases in the configured suite folder, with `refs` pointing back at the requirements and the dev story, then comment the case links onto the V&V ticket. When approved scenarios are revised later, refresh the cases that nobody has edited since | yes |
 
 Phase 7 writes **skeleton** cases — title, preconditions, one step per Given/When/Then — for the V&V team to
 expand. It creates nothing from a scenario that traces to no requirement, and nothing from a scenario phase 5
 already marked as covered by an existing case. It skips itself with a visible line when
 `test_cases.authoring` is unconfigured, because the template alone decides which body fields a case has and
 guessing it writes the steps into a field nobody reads. Run `/bc:setup` to fill it in.
+
+### Revising approved scenarios
+
+Approved scenarios can change after their cases exist, and phase 7 keeps the cases in step:
+
+- **Re-review** — move the V&V ticket back to `pending-validation` in Jira. The next run re-validates it,
+  redrafts the scenarios, and waits for the reviewer to approve **the new draft**: an approval comment left on
+  the earlier draft does not count.
+- **Hand edit** — edit the scenario block on the approved ticket, keeping its `### S1 — Title` and bullet
+  structure. The next run notices the change and treats the edited block as the approved scenarios, because
+  the ticket still carries the approved label.
+
+Either way, the next run refreshes the cases: a case still exactly as the plugin generated it is updated to
+match, a revised scenario with no case gets a new one, and a case the V&V team has edited by hand is **never
+overwritten** — it is listed for manual review instead. Nothing is ever deleted, and a requirement link a
+revised scenario dropped is flagged rather than removed.
 
 ## Resuming
 
@@ -70,8 +86,10 @@ tickets already in flight and advances the ones that can move:
   concerns raised, fold the answers in, re-validate, and if nothing is outstanding, move the ticket on to
   phase 5. If the questions are still open, report how long they have been waiting and leave it.
 - **`pending-scenario-validation`** → re-read the comments on the **V&V ticket**. If the designated reviewer
-  approved, relabel to `ready-for-test-case-creation`.
-- **`ready-for-test-case-creation`** → terminal for this workflow. Reported in the summary, never re-processed.
+  approved — in a comment newer than the current scenarios — relabel to `ready-for-test-case-creation`.
+- **`ready-for-test-case-creation`** → terminal for the label pipeline: never relabelled or redrafted. Phase 7
+  still checks it every run, creating its cases the first time and refreshing them when its approved
+  scenarios are revised (see above).
 
 - **`pending-validation`** → cloned but never reviewed, because a previous run stopped there or was a dry
   run. Goes into validation on this run.

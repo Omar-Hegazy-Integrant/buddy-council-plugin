@@ -1,11 +1,12 @@
 ---
-description: Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, or maps scenarios you already have into TestRail test cases.
+description: Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, maps scenarios you already have into TestRail test cases, or edits the test cases you name.
 ---
 
 # /bc:ask — Buddy-Council Natural Language Query
 
 Route a natural language question to the appropriate analysis or answer it directly — or, when the user
-brings their own test scenarios, map them into TestRail.
+brings their own test scenarios, map them into TestRail, and when they ask to change specific test cases,
+edit them.
 
 ## Arguments: $ARGUMENTS
 
@@ -23,6 +24,8 @@ Analyze the user's question and classify it into one of these intents:
 
 **Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/contradiction-agent.agent.md`, using the user's question to determine scope (extract requirement ID, feature name, or default to "all").
 
+**Asking to fix the test cases that contradict a requirement** ("fix the test cases that contradict CWA-REQ-85") is this intent too: run the analysis for that scope, then treat the request as the user's yes to the agent's fix offer — it still shows every change before writing.
+
 ### Intent: COVERAGE
 **Trigger phrases**: coverage, untested, orphan, missing tests, gaps, "what's not tested", "which requirements have no tests", "test coverage"
 **Examples**:
@@ -34,6 +37,17 @@ Analyze the user's question and classify it into one of these intents:
 **Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/coverage-agent.agent.md`, using the user's question to determine scope.
 
 **Asking for test cases without supplying scenarios** ("create test cases for the untested requirements in Login", "write cases for CWA-REQ-85") is this intent too: the coverage agent finds which requirements truly lack a case, and its gap-fill offer drafts them from the requirement text. Treat the request as the user's yes to that offer — the agent still shows the plan before anything is written. If the requirement turns out to be covered already, say so rather than writing a duplicate.
+
+**Asking to repair orphan test cases** ("fix the orphan test cases in Sync", "link the orphans") is this intent as well: the coverage run finds them, and its repair offer — treated as the user's yes — re-links them through `update-test-cases`, showing the plan first.
+
+### Intent: EDIT (change specific test cases)
+**Trigger**: the user asks to change **existing** test cases they name or point at — by id (`C1234`, `TC-1234`) or by a folder or feature. Phrases: "update TC-1234", "change the expected result of C1234 to …", "rename C1234", "set priority High on TC-12 and TC-13", "add CWA-REQ-90 to TC-55", "remove the link to CWA-REQ-12 from C1234", "undo that change"
+**Examples**:
+- "Change step 2 of C1234 to expect a 3-second refresh"
+- "Add CWA-REQ-90 to TC-55's requirements"
+- "Set every case in Sync/Offline handling to High priority"
+
+**Action**: Follow `${CLAUDE_PLUGIN_ROOT}/skills/update-test-cases/SKILL.md` through its `edits` path, passing the user's request and the cases it names. The skill reads each case fresh, shows a before → after plan, and writes only after the user confirms. A request to *create* cases is AUTHOR or COVERAGE, not this.
 
 ### Intent: AUTHOR (map the user's scenarios into TestRail)
 **Trigger**: the user **supplies** scenarios — pasted, a file path, or a Jira key whose description holds them — and wants them as TestRail test cases. Phrases: "map these scenarios to TestRail", "turn these into test cases", "import login.feature into TestRail", "post these scenarios to TestRail", "create TestRail cases from the scenarios in PROJ-123"
@@ -63,6 +77,7 @@ If the intent is unclear from the question, ask the user a brief clarifying ques
 > 2. **Coverage gaps** (untested requirements, orphan tests)
 > 3. **General information** about specific requirements or test cases
 > 4. **Mapping scenarios** you already have into TestRail test cases
+> 5. **Editing** specific test cases
 
 Do not guess — ask.
 

@@ -74,14 +74,14 @@ Build a compact **board index**: `{ id, title, feature, status, linked_ids }` pe
 
 Process **one feature at a time**, in `feature_order`. For each feature:
 
-1. **Fetch only this feature's test cases (MANDATORY)** — `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md` narrowed to this feature's section/name. Never fetch all features' test cases together; never infer from `linked_ids`.
+1. **Fetch only this feature's test cases (MANDATORY)** — `${CLAUDE_PLUGIN_ROOT}/skills/fetch-test-cases/SKILL.md` narrowed to this feature — pass its requirement IDs and its name, so the provider finds the cases by their requirement links whatever their TestRail folders are called. Never fetch all features' test cases together; never infer from `linked_ids`.
 2. **Per-feature readiness:** note `<feature>: <R> requirements, <T> test cases`. If one feature returns 0 test cases, that is a legitimate coverage finding for that feature (0% — every requirement untested); record it and continue. If **every** feature returns 0, STOP — that is almost certainly a fetch/MCP error, not real coverage; report it and ask the user whether to continue with requirements only (report becomes **PARTIAL**) or abort.
 3. **Normalize + link** this feature's requirements and test cases (`normalize-artifacts`).
 4. **Analyze coverage** for this feature via `analyze-coverage` — untested requirements, orphan test cases, weak coverage, and per-feature metrics. Accumulate this feature's metrics into the running totals.
 5. **Delivery-risk pass for this feature (when the board index is non-empty):** filter the board index to issues matching this feature (by `feature`, or by `linked_ids` hitting this feature's requirement IDs) and classify them into the same three buckets as Step 5.5. Accumulate into the running totals.
 6. **Release this feature's full test-case bodies** from working context before the next feature. Keep the board index — it is compact and needed for later features.
 
-When the loop finishes, aggregate the per-feature metrics into overall totals and the coverage breakdown table. Then go to Step 7.
+When the loop finishes, list the suite's orphans once — the provider's orphan listing for `"all"` runs — because a case with no requirement ID is invisible to a link-based fetch. Add the ones the per-feature passes did not already find, under the feature their TestRail folder suggests, else `No feature`. Then aggregate the per-feature metrics into overall totals and the coverage breakdown table, and go to Step 7.
 
 ### Step 7: Report
 
@@ -92,33 +92,56 @@ Present the findings as a human-readable report following the format specified i
 - List orphan test cases
 - Flag weak coverage with specific gaps identified
 - Carry a distinct **Delivery risk (in flight)** section when the board index was non-empty: *untested in flight* first (each with issue key, browse link, and the requirement it implements), then *unanchored work*, then a one-line covered count. State the board scope actually queried (active sprint vs. whole-project fallback) so the reader knows what "in flight" covered. Keep these findings out of the headline coverage percentage — that figure is requirements-vs-tests and must stay comparable across runs
+- On an `"all"` run with Jama `requirements.roots` configured, check that the root still matches what the tests link to: call `testrail_get_requirement_ids` (the suite index is already cached by this run) and `jama_get_scope_proposal` with its `sample` plus the configured `root_ids`, `exclude_ids`, and `feature_depth`. When `outliers.count` is above zero, add one line — `Requirements root drift: 41 of 500 sampled linked IDs sit outside the root (e.g. CWA-REQ-412 in Product / Legacy) — re-run /bc:setup to re-anchor if they belong in scope.` Those requirements are outside this report entirely, so say so rather than letting the gap pass unseen
 - End with prioritized recommendations
 
 ### Step 8: Offer to close the gaps — no flag, no extra command
 
-After the report, when **both** are true — the run found at least one untested requirement, and
-`test_cases.authoring` is configured with a non-empty `requirement_field` — end with a single offer:
+After the report, end with up to two offers — one line each, **repair first**:
 
-```
-12 requirements have no test case. I can draft skeleton cases for them in TestRail,
-linked to their requirement IDs. Want me to? (all / pick some / no)
-```
+1. **Repair orphan links** — when the run found at least one orphan test case and
+   `test_cases.authoring.requirement_field` is set:
+
+   ```
+   5 test cases are orphans: 3 have their requirement ID stranded in References, 2 have none.
+   I can re-link them in TestRail — stranded links as-is, the rest by suggested matches you confirm. Want me to? (all / pick some / no)
+   ```
+
+2. **Draft missing cases** — when the run found at least one untested requirement, **not counting
+   requirements whose only problem is a stranded link**, and `test_cases.authoring` is configured with a
+   non-empty `requirement_field`:
+
+   ```
+   12 requirements have no test case. I can draft skeleton cases for them in TestRail,
+   linked to their requirement IDs. Want me to? (all / pick some / no)
+   ```
+
+Repair comes first because a stranded link makes one problem look like two: the case reads as an orphan
+*and* its requirement reads as untested. Drafting a case for that requirement would duplicate a test that
+already exists, so those requirements stay out of offer 2 even when the user declines offer 1.
 
 That is the whole interface. **Do not add a flag for this.** These commands are natural-language prompts,
 not a CLI parser: a user who wants it non-interactively can say so in the prompt
-("`/bc:coverage` and create the missing cases") and a user who never wants it just says no. A flag would be
-invisible until someone reads the docs, and the offer teaches the capability at the moment it is relevant.
+("`/bc:coverage` and create the missing cases", "`/bc:coverage` and fix the orphans") and a user who never
+wants it just says no. A flag would be invisible until someone reads the docs, and the offer teaches the
+capability at the moment it is relevant.
 
-Rules for the offer:
+Rules for the offers:
 
-- **Only when there is something to offer.** No untested requirements, or no `authoring` block → no offer,
+- **Only when there is something to offer.** Nothing to repair or draft, or no `authoring` block → no offer,
   no mention. An offer that fires on every run becomes noise people learn to skip.
-- **One line.** It is a footer to the report, not a second report.
-- **Never author without an explicit yes**, and never author more than the user selected. "All" means the
-  untested requirements *in this run's scope*, which the report has already listed — not the whole project.
+- **One line each.** They are a footer to the report, not a second report.
+- **Never write without an explicit yes**, and never touch more than the user selected. "All" means the
+  orphans or untested requirements *in this run's scope*, which the report has already listed — not the
+  whole project.
+- **Repair** → follow `${CLAUDE_PLUGIN_ROOT}/skills/update-test-cases/SKILL.md` via its `orphans` entry path,
+  passing this run's orphan cases and requirements. Stranded links are confirmed as one batch; every
+  suggested link for an unlinked case is confirmed one by one. When the repair is done, re-count: a
+  requirement whose stranded link was repaired is now tested — say so instead of leaving it in the untested
+  list.
 - **`pick some`** → list the untested requirements with numbers and let the user choose. Default to the
   HIGH-severity ones (safety-critical, untested) if they ask for a recommendation.
-- On yes, follow `${CLAUDE_PLUGIN_ROOT}/skills/draft-test-cases/SKILL.md` via its `requirements` entry path.
+- **Draft** → follow `${CLAUDE_PLUGIN_ROOT}/skills/draft-test-cases/SKILL.md` via its `requirements` entry path.
   Show the plan first — title, folder, and requirement IDs per case — and create only after confirmation.
 
 **These drafts are unreviewed.** Phase 7 of `/bc:vnv-sprint-prep` writes cases a human already approved;
@@ -144,12 +167,13 @@ After delivering the report, if the user asks a follow-up question:
 
 ## Boundaries
 
-This agent analyzes coverage, and may author test cases for the gaps it finds — but only after an explicit
-yes in-session (Step 8). It does not:
+This agent analyzes coverage, and may write to TestRail to close the gaps it finds — re-linking orphans and
+drafting cases for untested requirements — but only after an explicit yes in-session (Step 8). It does not:
 - Detect contradictions (use `/bc:contradiction`)
 - Answer general questions (use `/bc:ask`)
-- Modify requirements, or any source data other than creating new TestRail cases the user asked for
-- Modify or delete existing test cases — it only ever creates, and only for requirements it reported untested
+- Modify requirements, or any source data other than the TestRail changes the user said yes to
+- Delete test cases, or change anything on an existing case except the requirement links of the orphans it
+  reported — those go through `update-test-cases`, which never removes a link
 - Write cases without a requirement ID on them (see the linkage rule in `draft-test-cases`); a case that
   isn't wired to a requirement makes this very report wrong on the next run
 

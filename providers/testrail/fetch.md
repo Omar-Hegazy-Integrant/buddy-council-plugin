@@ -34,7 +34,8 @@ If the MCP tools are NOT available:
 - Done — return a single test case
 
 ### Strategy 2: By Section (scope is a feature name, or feature_name was passed from requirements)
-This is the **preferred strategy** when analyzing a specific feature — avoids fetching all cases.
+Use for a feature whose requirement IDs you do not have, and alongside Strategy 3 to catch the **unlinked**
+cases filed in a folder named after the feature — the cases Strategy 3 cannot see.
 
 1. Call `mcp__testrail__testrail_get_sections` with `project_id` and `suite_id`
 2. Find the section(s) whose name matches the feature name (case-insensitive, partial match)
@@ -42,12 +43,29 @@ This is the **preferred strategy** when analyzing a specific feature — avoids 
 4. Paginate within each section if needed (check `size == limit`)
 5. Combine results from all matching sections
 
-### Strategy 3: By Requirement References (requirement_ids were passed)
-Use when you know which requirement IDs you care about and want to find their linked test cases.
+### Strategy 3: By Requirement Links (requirement_ids were passed)
+The **preferred strategy** whenever the requirement IDs in scope are known — a feature's requirements, just
+fetched, or a single requirement. It finds cases by the link this plugin actually reads, so it works whatever
+the TestRail folders are called, and it is exact.
 
-1. Call `mcp__testrail__testrail_get_cases_by_refs` with `project_id`, `suite_id`, and `refs` (comma-separated requirement IDs)
-2. This searches TestRail's built-in References field
-3. If results are empty (the instance may use custom fields instead of refs), fall back to Strategy 2 or 4
+1. Call `mcp__testrail__testrail_get_linked_cases` with `project_id`, `suite_id`, `requirement_field`, and
+   `requirement_ids`. The field is `test_cases.authoring.requirement_field`, else `custom_jama_req_id` — the
+   same field the *Linking* section below reads.
+2. Page: while the response carries `next_offset`, call again with `offset: <next_offset>` and concatenate
+   `cases`. The suite is read once and cached for 10 minutes, so further calls in the run are cheap.
+3. When a feature name is known too, also run Strategy 2 and merge by case id: a case with no requirement ID
+   cannot be found by its links, and an orphan filed in the feature's folder must still reach the report.
+
+`unlinked_ids` lists the requested requirements no case links to — the untested ones, straight from TestRail.
+
+`mcp__testrail__testrail_get_cases_by_refs` searches the built-in References field instead. That field often
+holds other things — Jira keys, legacy IDs — so use it for what it is good at, like finding the cases that
+reference a Jira story key, not for requirement coverage.
+
+### Orphans across the whole suite (scope is "all")
+Strategies 2 and 3 only see cases near a feature. For an `"all"` run, call
+`mcp__testrail__testrail_get_linked_cases` once with `unlinked: true` (and `requirement_ids: []`) to list every
+case whose requirement field holds no ID — the suite's orphans, whatever folder they sit in.
 
 ### Strategy 4: All Cases (scope is "all" or no narrower context is available)
 Use only when no feature or requirement context is available.
@@ -61,9 +79,9 @@ Use only when no feature or requirement context is available.
 | Context Available | Strategy |
 |-------------------|----------|
 | Specific test case ID | Strategy 1 |
-| Feature/section name known (from requirements or scope) | Strategy 2 |
-| Specific requirement IDs to find linked tests for | Strategy 3, then fall back to 2 |
-| "all" or no context | Strategy 4 |
+| Requirement IDs known (a feature's requirements, or one requirement) | Strategy 3, plus Strategy 2 when the feature name is known too |
+| Only a feature/section name known | Strategy 2 |
+| "all" or no context | Strategy 4 — or, feature by feature, Strategy 3 — plus the orphan listing |
 
 ## Section Lookup (required for all strategies except 1)
 
@@ -79,6 +97,8 @@ For each test case returned, extract and map fields:
 - `custom_desc` or `custom_preconds` → combine into description
 - `custom_steps_separated` → structured test steps (array of `{content, expected}`)
 - the requirement field → parse into `linked_ids` (see Linking section below)
+- `refs` → `raw_fields.refs`, verbatim. Coverage needs it to tell a case whose requirement link is stranded in
+  References from one with no link at all — see the orphan repair in `skills/update-test-cases/SKILL.md`
 - `section_id` → resolve to section name using the section lookup
 
 ## Output
@@ -100,6 +120,7 @@ Return a JSON array of test case objects in the canonical schema:
         {"content": "Open patient monitoring view", "expected": "Vitals dashboard loads"},
         {"content": "Connect monitor device", "expected": "Real-time data appears within 3s"}
       ],
+      "refs": "CWA-REQ-85,CWA-REQ-86",
       "section_id": 5,
       "suite_id": 1
     }
@@ -186,3 +207,31 @@ not set is the usual cause of a 400, and the error names the field.
 
 The response shape is `{dry_run, created[], skipped[], failed[], sections_created[]}`, where each `created`
 entry carries the new `id`, its `section_path`, and a browse `url`.
+
+## Updating test cases (write)
+
+`mcp__testrail__testrail_update_cases` changes existing cases, each with its own fields;
+`testrail_update_case` is the single-case wrapper. **These write to the team's live TestRail and always
+prompt.** Call them only through `skills/update-test-cases/SKILL.md` — the plugin's one update path — never
+directly from an agent.
+
+Each entry is `case_id` (`1234`, `"C1234"`, or `"TC-1234"`) plus the fields to change, with the same keys as
+creation (`title`, `type_id`, `priority_id`, `estimate`, `milestone_id`, `refs`, `preconditions`, `steps`,
+`expected`, `steps_separated`, `custom_fields`). Omit a field to leave it alone; pass `""` to clear it.
+`steps_separated` replaces the whole step list.
+
+The server enforces the safety rules itself, so a careless caller cannot get around them:
+
+| Guard | What it does |
+|---|---|
+| **Diff first** | Reads each case and sends only the fields that actually differ; a case with nothing to change is not written at all |
+| **Link protection** | Blocks an update that would remove an ID from `refs` — or from `requirement_field`, which every call must pass — unless that entry sets `allow_unlink` |
+| **Conflict check** | With `expected_updated_on` (the `updated_on` from the dry run), blocks a case someone edited since it was read |
+| **Read-back** | Compares every sent field with the case TestRail returns and lists any it silently dropped in `dropped_fields`; by default the rest of the batch is then not attempted |
+| **No moves** | Refuses `template_id` and `section_id` — switching a template or folder is done in TestRail |
+
+`dry_run: true` reads and diffs without writing, and returns each case's current `updated_on` to pass back
+when applying. The response is `{dry_run, updated[], unchanged[], blocked[], failed[], not_attempted[],
+stopped}`; every `updated` entry carries `changes` with each field's `before` and `after`, so the previous
+values are always at hand to undo. Surface `blocked`, `failed`, `dropped_fields`, and `not_attempted` to the
+user every time.

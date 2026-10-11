@@ -91,8 +91,8 @@ indistinguishable from an oversight, and a reviewer needs to see that the check 
    (`${CLAUDE_PLUGIN_ROOT}/agents/vnv-sprint-prep-agent.agent.md`): strip every pipeline label — including
    the `pending-validation` from cloning and any `pending-questions` from an earlier round — then add this
    one. `src-<DEV-KEY>`, the platform label, and human-added labels are preserved.
-5. Stamp `scenarios_written_at` (ISO 8601 UTC) in the progress log, **and store the scenarios structurally**
-   alongside it as `stories[].scenarios`:
+5. Stamp `scenarios_written_at` (ISO 8601 UTC) and `scenarios_source: "phase5"` in the progress log, **and
+   store the scenarios structurally** alongside it as `stories[].scenarios`:
 
    ```json
    "scenarios": [

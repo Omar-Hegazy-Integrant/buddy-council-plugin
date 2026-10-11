@@ -17,7 +17,8 @@ Before anything else, check whether `.buddy-council/sources.json` exists in the 
 ```
 Buddy-Council is already configured in this project:
   Requirements:  excel — /path/to/requirements.xls (7 columns mapped)
-                 (or: jama — https://company.jamacloud.com, project CWA (42), features = folders)
+                 (or: jama — https://company.jamacloud.com, project CWA (42),
+                  root Mobile Software Requirements, 23 features)
   Test cases:    testrail — https://company.testrail.io (project 1, authoring configured)
   Jira board:    PROJ board 42 (or: NOT VERIFIED — re-testing this run)
   Enrichment:    cli
@@ -190,7 +191,9 @@ Features are Jama **folders** — each requirement belongs to its nearest folder
      "folder_item_type": "Folder" }`, and show the folder count with a few paths (`features.sample`). If the
      project has **no folders**, say requirements will group by their Set or Component instead, and ask once
      whether another item type marks features (e.g. a "Feature" type) — record its display name as
-     `folder_item_type`.
+     `folder_item_type`. In a large project that count mostly measures how much *else* the project holds —
+     other documents, archives — so do not dwell on it: Step 2b narrows the scope to what the test suite
+     actually links to.
    - **Item types.** Folders, Sets, and Components are never requirements — the server drops them itself.
      Write `item_type_exclude` with `Text` (narrative) plus any test-management type present, such as
      `Test Case` — this plugin reads test cases from TestRail. Every other type is included.
@@ -299,10 +302,16 @@ With the tools live:
    State what you found: `Requirement link: custom_jama_req_id (found on 18 of 20 sampled cases)`.
 5. Ask the **one** question — where generated cases should live:
 
-   > Where should `/bc:vnv-sprint-prep` file the test cases it generates?
+   > Where should generated test cases go?
+   > - Beside the existing cases for the same requirement or feature — no new folder tree; a feature with no cases yet gets its own folder
    > - Under a `V&V` folder, mirroring each feature (`V&V/Sync/Offline handling`) — keeps generated cases separate from hand-written ones
    > - Mirroring the feature directly (`Sync/Offline handling`) — mixed in with existing cases
    > - All in one fixed folder — you name it
+
+   Recommend the first option when the requirement field was populated on most sampled cases: the suite
+   already organizes its cases, and new ones belong among them. Recommend the `V&V` folder when it was not.
+   The answer applies to every path that creates cases — `/bc:vnv-sprint-prep`, the `/bc:coverage` gap-fill,
+   and `/bc:ask` scenario mapping.
 
 Write the block, and show the resolved names (not just ids) in the Step 4 recap so the user can veto:
 
@@ -318,10 +327,75 @@ Write the block, and show the resolved names (not just ids) in the Step 4 recap 
 }
 ```
 
-`section_strategy` is `"feature"` (folder path from each requirement's feature) or `"fixed"` (everything in
-`section_root`). `section_root` is `null` when the user picked the un-prefixed option.
+`section_strategy` is `"linked"` (beside the existing cases for the same requirement, else the same feature,
+else a feature folder), `"feature"` (folder path from each requirement's feature), or `"fixed"` (everything in
+`section_root`). `section_root` is `null` when the user picked an un-prefixed option.
 `create_missing_sections` defaults to `true`; set it to `false` only if the user says their suite structure
 is fixed and a missing folder should be an error.
+
+### Step 2b: Anchor the requirements on the test suite (Jama only)
+
+A large Jama project holds far more than the requirements this team tests — other documents, hazard
+analyses, archives — and with no anchor every folder in it counts as a feature. The test suite already knows
+which part matters: its cases link to specific requirements. Use that to choose the requirements **root** and
+the **features** with one confirmation.
+
+Run this when the requirements source is Jama, the TestRail tools are live, and Step 2a resolved a
+`requirement_field`. Otherwise skip it with a visible line — `Requirements root: not anchored yet — re-run
+/bc:setup once the TestRail tools are live` — and save without `roots`: everything still works on the whole
+project, with every folder a feature.
+
+1. **What the tests link to.** Call `testrail_get_requirement_ids` with the project, suite,
+   `requirement_field`, and `sample_size: 2000`. It returns counts, the ID prefixes in use, and the IDs —
+   all of them when the suite links to 2,000 or fewer distinct IDs, otherwise an even spread. Passing every
+   ID makes the "no linked case" list in step 3 exact. When `distinct_ids` exceeds the sample, say that the
+   per-feature link counts come from a sample, so a feature listed without links may still have a few.
+2. **Where those live in Jama.** With the Jama tools live, call `jama_get_scope_proposal` with
+   `document_keys` set to the sample and the Step 1a `item_type_exclude`. Otherwise write the sample to a
+   temp file, one ID per line, and run the check — it prints JSON with a `scope_proposal`:
+
+   ```bash
+   JAMA_BASE_URL="<base url>" BC_SECRETS_FILE="$HOME/.buddy-council/secrets.json" \
+     uv run --quiet --directory "<plugin_root>/mcp-servers/jama-server" python server.py \
+     --check --project <id> --anchors-file <temp file> --item-type-exclude Text
+   ```
+
+3. **Show it, then ask once:**
+
+   ```
+   Your test cases link to 1,480 requirement IDs (CWA-REQ-*). In Jama they live here:
+     Root:       Product / Software Requirements   (97% of the links)
+     Item type:  Mobile SRS — other types ignored
+     Features:   23 top-level folders, 1,512 requirements
+                 Login (64) · Patient Monitoring (210) · Alarms (98) · …
+     No linked case yet:  Archive (300), Release 3 Drafts (40)
+     Outside the root:    41 linked IDs, e.g. CWA-REQ-412 in Product / Legacy / Import
+
+   Use this? [Enter to accept, or say "one level deeper", "exclude Archive",
+              "use <folder> as the root", or "no root"]: _
+   ```
+
+   A feature with no linked case is either untested — exactly what `/bc:coverage` exists to show — or an
+   archive nobody tests. Only the user can tell, so list them and let the user exclude any by name; never drop
+   one on your own.
+4. **Adjustments** re-run the preview with `root_ids`, `exclude_ids`, or `feature_depth` (on the CLI:
+   `--root`, `--exclude`, `--feature-depth`) and show it again. Folder ids are in the proposal's `candidates`
+   and `features.list`.
+5. **Record** for the Step 4 save:
+   - `requirements.roots`: `[{"id": <id>, "path": "<path>"}]` — the id is what the server uses; the path is
+     for people reading the config
+   - `requirements.exclude`: the same shape, only when the user excluded something
+   - `requirements.feature_inference.depth`: `1`, unless the user went deeper
+   - `requirements.item_type_filter`: the proposal's `proposed_item_types` — the types the tests link to
+
+Edge cases:
+
+- **No root proposed** — the links are spread across the project. Say so, offer the `candidates`, and save
+  no root if the user picks none.
+- **`anchors.resolved` is 0** — none of the IDs exist in this Jama project. Stop: either it is the wrong
+  project, or the requirement field holds something other than Jama document keys. Ask before going on.
+- **`anchors.not_found`** — IDs the tests link to that Jama does not have: deleted requirements or typos.
+  Report the count and a few examples; they are worth a look, but they do not block the anchor.
 
 ## Code mapping — automatic, no questions
 
@@ -667,8 +741,10 @@ When the requirements source is **Jama**, the first lines read instead:
 ```
   Requirements:  jama — https://company.jamacloud.com, project CWA "Clinical Window App" (42) — read-only
                  connected as Jane Doe (OAuth API credentials)
-  Features:      24 folders (Software Requirements / Patient Monitoring, …)
-  Item types:    Requirement, System Requirement (Text, Test Case excluded)
+  Root:          Product / Software Requirements — anchored on 1,480 test-linked IDs (97%)
+                 excluded: Archive
+  Features:      23 top-level folders (Login, Patient Monitoring, Alarms, …)
+  Item types:    Mobile SRS — the type the tests link to
   Field mapping: status ← Status, rationale ← Rationale, GitHub doc URL ← Linked to Github
 ```
 
@@ -789,10 +865,14 @@ credentials, ever; those went to `~/.buddy-council/secrets.json` in Step 1a:
     "project_id": 42,
     "project_key": "CWA",
     "project_name": "Clinical Window App",
+    "roots": [{ "id": 1001, "path": "Product / Software Requirements" }],
+    "exclude": [{ "id": 1950, "path": "Product / Software Requirements / Archive" }],
     "feature_inference": {
       "strategy": "hierarchical_folder",
-      "folder_item_type": "Folder"
+      "folder_item_type": "Folder",
+      "depth": 1
     },
+    "item_type_filter": ["Mobile SRS"],
     "item_type_exclude": ["Text", "Test Case"],
     "field_mapping": {
       "status": "Status",
@@ -808,9 +888,10 @@ credentials, ever; those went to `~/.buddy-council/secrets.json` in Step 1a:
 }
 ```
 
-`project_id` is an integer. `base_url` is the normalized root (no `/rest/v1`, no `/perspective.req…`). When
-switching from Jama to Excel or back, replace the whole `requirements` block rather than merging the two
-shapes.
+`project_id` is an integer. `base_url` is the normalized root (no `/rest/v1`, no `/perspective.req…`).
+`roots`, `exclude`, `feature_inference.depth`, and `item_type_filter` come from Step 2b; omit all four when
+the requirements were not anchored, and every folder in the project is then a feature. When switching from
+Jama to Excel or back, replace the whole `requirements` block rather than merging the two shapes.
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
@@ -1076,7 +1157,7 @@ token itself, on the first call, and renews it when it expires.
 - Confirm the `command` in both files is an absolute `uv`/`uvx` path that exists on disk, and that the atlassian `--env-file` argument is an absolute path with no `~`
 - If a V&V board was configured, confirm its `id` differs from the dev board's, and that `discriminator` is set whenever the two share a `project_key`
 - If Excel was configured, confirm the file is readable
-- If Jama was configured, confirm: `requirements.provider` is `"jama"` with an integer `project_id`; `~/.buddy-council/secrets.json` has a `jama` section with exactly one auth style; both MCP configs have a `jama` entry whose `--directory` is `<plugin_root>/mcp-servers/jama-server` and whose env holds only `JAMA_BASE_URL` and `BC_SECRETS_FILE`. If Excel was configured, confirm neither MCP config still carries a `jama` entry
+- If Jama was configured, confirm: `requirements.provider` is `"jama"` with an integer `project_id`, and any `roots`/`exclude` entries carry integer `id`s; `~/.buddy-council/secrets.json` has a `jama` section with exactly one auth style; both MCP configs have a `jama` entry whose `--directory` is `<plugin_root>/mcp-servers/jama-server` and whose env holds only `JAMA_BASE_URL` and `BC_SECRETS_FILE`. If Excel was configured, confirm neither MCP config still carries a `jama` entry
 - Tell the user:
   1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate
   2. Then run `/bc:contradiction` to detect contradictions or `/bc:validate` to create tickets
@@ -1088,10 +1169,10 @@ The bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`
 Because MCP tool naming in Copilot's hooks varies by version, MCP reads may still prompt there. Print a ready-to-paste `--allow-tool` launch recipe covering the MCP read tools that were just configured, and tell the user it's only needed if prompts appear (writes like Jira creation still prompt by design):
 
 - Always include the TestRail read tools:
-  `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates)` — deliberately **not** `testrail(testrail_add_case)`, `testrail(testrail_add_cases)`, or `testrail(testrail_add_section)`, which must keep prompting
+  `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates),testrail(testrail_get_requirement_ids),testrail(testrail_get_linked_cases)` — deliberately **not** `testrail(testrail_add_case)`, `testrail(testrail_add_cases)`, `testrail(testrail_add_section)`, `testrail(testrail_update_case)`, or `testrail(testrail_update_cases)`, which must keep prompting
 - If Jira was configured, also add the Atlassian read tools: `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)` — deliberately **none** of `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, or `jira_add_issues_to_sprint`, which must keep prompting
 - If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
-- If Jama is the requirements source, also add the Jama tools: `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item)` — that is every tool the server has, because it has no write tools
+- If Jama is the requirements source, also add the Jama tools: `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — that is every tool the server has, because it has no write tools
 
 Present it as a single command, e.g.:
 

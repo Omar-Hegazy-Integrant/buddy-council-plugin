@@ -95,6 +95,7 @@ Produce a human-readable report structured as:
 **Requirement (CWA-REQ-85)**: "The system shall display patient vitals with a refresh rate of 3 seconds"
 **Test Case (TC-1234), Step 3**: Expects "vitals update every 10 seconds"
 **Explanation**: The test case validates a 10-second refresh interval, but the requirement specifies 3 seconds. The test would pass for a system that violates the requirement.
+**Fix**: test case — TC-1234, step 3 expected result
 **Recommendation**: Update TC-1234 Step 3 to expect a 3-second refresh rate.
 
 ## High Issues
@@ -128,6 +129,13 @@ Produce a human-readable report structured as:
 - Be specific: quote exact text from requirements and test cases
 - Explain WHY it's a contradiction, don't just state that one exists
 - Provide actionable recommendations for each finding
+- **Name the side to change** on every requirement-versus-test-case finding (types 1, 2, 4, 7) with a
+  `**Fix**:` line — `test case — TC-1234, step 3 expected result`, `requirement — CWA-REQ-85`, or
+  `decide — <why neither side is clearly right>`. The requirement is the specification, so a test that
+  contradicts an unambiguous requirement is the side to fix. Name the requirement only on evidence that it is
+  stale — a newer requirement or in-flight board work supersedes it — and say `decide` when you cannot tell.
+  The contradiction agent offers to update only the cases a `test case` line names, so a wrong side here
+  rewrites a correct test.
 - Do not report stylistic differences or wording variations as contradictions
 - Only flag genuine semantic conflicts
 - When uncertain, classify as MEDIUM and note the ambiguity
