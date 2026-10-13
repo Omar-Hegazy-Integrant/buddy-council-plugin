@@ -7,6 +7,11 @@ writes nothing in Jama. There is no code path that creates, edits, moves, or
 deletes anything. The plugin's hooks auto-approve the ``jama_get_*`` glob on
 that basis, so a write tool must never be added under that prefix.
 
+The one local side effect: with ``save_to``, ``jama_get_requirements`` writes its
+result to a JSON file directly inside an existing
+``<project>/.buddy-council/runs/<run>/`` folder, so a run's data reaches the
+analysis as a file instead of passing through a model. Nothing else is written.
+
 Features are Jama folders: a requirement's ``feature`` is the name of its
 nearest Folder ancestor in the project tree (``feature_item_type`` changes which
 item type counts as a feature), falling back to the nearest Set or Component.
@@ -25,6 +30,7 @@ test that /bc:setup runs before the server is registered.
 
 import argparse
 import asyncio
+import contextlib
 import datetime
 import json
 import logging
@@ -32,12 +38,14 @@ import math
 import os
 import re
 import sys
+import tempfile
 import time
 import urllib.parse
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -614,6 +622,61 @@ def _dump(payload: Any) -> str:
 
 def _utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+# ---------------------------------------------------------------------------
+# Run files — with save_to, a tool writes its whole result into the caller's run folder
+# ---------------------------------------------------------------------------
+
+_RUN_FILE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\.json")
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_SAVE_TO_SHAPE = "<project>/.buddy-council/runs/<run>/<name>.json"
+
+
+def _run_file_path(save_to: str) -> Path:
+    """Validate save_to: a .json file directly inside an existing .buddy-council/runs/<run>/ folder.
+
+    The plugin's collect step creates the run folder; this server never creates a directory, and nothing
+    outside such a folder can be written.
+    """
+    text = str(save_to or "").strip()
+    path = Path(text)
+    if not text or not path.is_absolute():
+        raise JamaError(f"save_to must be an absolute path: {_SAVE_TO_SHAPE}.")
+    run_dir = path.parent
+    if (
+        ".." in path.parts
+        or not _RUN_FILE_NAME.fullmatch(path.name)
+        or not _RUN_ID.fullmatch(run_dir.name)
+        or run_dir.parent.name != "runs"
+        or run_dir.parent.parent.name != ".buddy-council"
+    ):
+        raise JamaError(f"Refusing save_to {text!r}: it must be {_SAVE_TO_SHAPE}.")
+    if not run_dir.is_dir():
+        raise JamaError(f"Refusing save_to {text!r}: the run folder does not exist — the collect step creates it first.")
+    if path.is_symlink():
+        raise JamaError(f"Refusing save_to {text!r}: it is a symbolic link.")
+    real = run_dir.resolve()
+    if real.parent.name != "runs" or real.parent.parent.name != ".buddy-council":
+        raise JamaError(f"Refusing save_to {text!r}: the run folder resolves outside a .buddy-council/runs/ folder.")
+    return real / path.name
+
+
+def _write_run_file(save_to: str, payload: dict[str, Any]) -> tuple[str, int]:
+    """Write payload as JSON to save_to, atomically and readable only by the user. Returns (path, bytes)."""
+    path = _run_file_path(save_to)
+    data = json.dumps(payload, ensure_ascii=False, indent=1, default=str).encode("utf-8")
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return str(path), len(data)
 
 
 # ---------------------------------------------------------------------------
@@ -2025,6 +2088,7 @@ async def jama_get_requirements(
     exclude_ids: list[int] | None = None,
     refresh: bool = False,
     offset: int = 0,
+    save_to: str = "",
 ) -> str:
     """Fetch a Jama project's requirements in the plugin's canonical schema, optionally scoped to one feature.
 
@@ -2058,14 +2122,22 @@ async def jama_get_requirements(
         refresh: Ignore the 10-minute project cache and re-read Jama. Applies to the
             first page; later pages are served from the tree it read.
         offset: Position to resume from — the previous page's `next_offset`.
+        save_to: Write every requirement in scope to this file instead of returning
+            them — an absolute path inside the run folder the plugin's collect step
+            created: <project>/.buddy-council/runs/<run>/requirements.json. The
+            response then carries only `saved_to`, the counts, and the summary.
 
     A large project takes Jama a minute or more to send. If the read is still
     running when this call has to answer, the result is {loading: true, ...}
     with progress: call again with the same arguments to get the requirements.
 
     Returns JSON {project_id, scope: {input, kind, matched}, total, offset,
-    next_offset, requirements, summary, warnings, fetched_at, truncated}.
+    next_offset, requirements, summary, warnings, fetched_at, truncated} — with
+    save_to, `saved_to` and `bytes` in place of the requirements and paging.
     """
+    if save_to:
+        _run_file_path(save_to)  # a bad path fails before Jama is read
+        offset = 0
     refresh = refresh and offset <= 0
     try:
         snapshot, cache_hit = await _project_snapshot(project_id, refresh)
@@ -2085,7 +2157,7 @@ async def jama_get_requirements(
     used = 0
     for iid in remaining:
         requirement = _render_requirement(tree, iid, mapping, include_custom_fields, base_url, project_id)
-        size = len(_dump(requirement))
+        size = 0 if save_to else len(_dump(requirement))
         if requirements and used + size > _PAGE_CHAR_BUDGET:
             break
         requirements.append(requirement)
@@ -2113,10 +2185,51 @@ async def jama_get_requirements(
         resume = f"; call again with offset={next_offset}" if next_offset is not None else "; last page"
         parts.append(f"page {start + 1}-{end} of {len(scoped.ids)}{resume}")
     parts.append(source)
+    scope_info = {"input": scope, "kind": scoped.kind, "matched": scoped.matched}
+    if save_to:
+        saved_to, size = _write_run_file(
+            save_to,
+            {
+                "kind": "requirements",
+                "source": "jama",
+                "written_at": _utc_now(),
+                "fetched_at": snapshot.fetched_at,
+                "project_id": project_id,
+                "scope": scope_info,
+                # What the caller asked for, so the collect step can check it against the project's config.
+                "args": {
+                    "item_type_filter": item_type_filter or [],
+                    "item_type_exclude": item_type_exclude or [],
+                    "root_ids": root_ids or [],
+                    "exclude_ids": exclude_ids or [],
+                    "feature_depth": feature_depth,
+                    "feature_item_type": feature_item_type,
+                    "field_mapping": field_mapping or {},
+                },
+                "summary": "; ".join(parts),
+                "warnings": warnings,
+                "truncated": snapshot.truncated,
+                "count": len(requirements),
+                "requirements": requirements,
+            },
+        )
+        return _dump(
+            {
+                "project_id": project_id,
+                "scope": scope_info,
+                "total": len(requirements),
+                "saved_to": saved_to,
+                "bytes": size,
+                "summary": f"{'; '.join(parts)}; {len(requirements)} written to {saved_to}",
+                "warnings": warnings,
+                "fetched_at": snapshot.fetched_at,
+                "truncated": snapshot.truncated,
+            }
+        )
     return _dump(
         {
             "project_id": project_id,
-            "scope": {"input": scope, "kind": scoped.kind, "matched": scoped.matched},
+            "scope": scope_info,
             "total": len(scoped.ids),
             "offset": start,
             "next_offset": next_offset,

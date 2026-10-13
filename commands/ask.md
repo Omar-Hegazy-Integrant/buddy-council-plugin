@@ -1,12 +1,12 @@
 ---
-description: Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, maps scenarios you already have into TestRail test cases, or edits the test cases you name.
+description: Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, finds where something you describe is already specified, maps scenarios you already have into TestRail test cases, or edits the test cases you name.
 ---
 
 # /bc:ask — Buddy-Council Natural Language Query
 
-Route a natural language question to the appropriate analysis or answer it directly — or, when the user
-brings their own test scenarios, map them into TestRail, and when they ask to change specific test cases,
-edit them.
+Route a natural language question to the appropriate analysis or answer it directly — find where a behavior
+the user describes is already specified, or, when the user brings their own test scenarios, map them into
+TestRail, and when they ask to change specific test cases, edit them.
 
 ## Arguments: $ARGUMENTS
 
@@ -59,6 +59,23 @@ Analyze the user's question and classify it into one of these intents:
 
 **Action**: Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/agents/scenario-mapping-agent.agent.md`, passing the scenarios (or the file path / Jira key) plus anything the user specified — requirement IDs, a feature, a TestRail folder, a platform, and whether they asked only for a preview.
 
+### Intent: LOOKUP (is it already specified, and where?)
+**Trigger**: the user describes a behavior, business rule, or topic **in their own words** — no requirement ID —
+and asks whether the requirements already cover it, where it is specified, or which requirements relate to it.
+Phrases: "do we have a requirement for …", "is there anything about … in the requirements", "is … already
+specified / covered / existing", "which requirements cover / mention / talk about …", "where is … defined",
+"does the spec say …", "what do the requirements say about …"
+**Examples**:
+- "Do we already have a requirement that silences alerts during sensor warm-up?"
+- "Where do the requirements talk about Bluetooth permissions?"
+- "Which requirements cover what happens when the phone is on battery?"
+- "Is exporting a report as PDF already specified?"
+- "In the alerts requirements, is snoozing covered?"
+
+**Action**: Follow `${CLAUDE_PLUGIN_ROOT}/skills/lookup-requirements/SKILL.md`, passing the ask verbatim and
+any feature or area the user named. A question about a requirement the user names by ID, or a request to list
+or summarize a named feature, is QA; a question about the test coverage of requirements is COVERAGE.
+
 ### Intent: QA (General Question)
 **Trigger phrases**: "what does", "tell me about", "which test cases", "list", "summarize", "describe", "how many", "what is", "show me", "explain"
 **Examples**:
@@ -76,8 +93,9 @@ If the intent is unclear from the question, ask the user a brief clarifying ques
 > 1. **Contradictions** between requirements and test cases
 > 2. **Coverage gaps** (untested requirements, orphan tests)
 > 3. **General information** about specific requirements or test cases
-> 4. **Mapping scenarios** you already have into TestRail test cases
-> 5. **Editing** specific test cases
+> 4. **Finding** where something you describe is already specified in the requirements
+> 5. **Mapping scenarios** you already have into TestRail test cases
+> 6. **Editing** specific test cases
 
 Do not guess — ask.
 

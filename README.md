@@ -25,7 +25,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | `/bc:contradiction` | Detect contradictions, inconsistencies, and alignment gaps between requirements and test cases |
 | `/bc:coverage` | Find untested requirements, orphan test cases, and coverage gaps |
 | `/bc:validate` | Validate a ticket description against requirements and test cases, then draft and create a Jira ticket |
-| `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, maps scenarios you already have into TestRail test cases, or edits the test cases you name |
+| `/bc:ask` | Ask a natural-language question about requirements and test cases — routes to the right analysis, answers directly, finds where something you describe is already specified, maps scenarios you already have into TestRail test cases, or edits the test cases you name |
 | `/bc:onboarding` | Walk a new team member through the product feature-by-feature with paced demos, optional code mapping, and an assessment. Resumes across sessions |
 | `/bc:codemap "<feature>"` | Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations |
 | `/bc:vnv-sprint-prep` | V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, drive them through scenario review, and write the approved scenarios into TestRail as test cases |
@@ -106,7 +106,7 @@ The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/ho
 If your Copilot version still prompts for MCP reads (MCP tool naming in hooks varies by version), pre-approve them at launch with `--allow-tool`:
 
 ```bash
-copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates),testrail(testrail_get_requirement_ids),testrail(testrail_get_linked_cases)'
+copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates),testrail(testrail_get_requirement_ids),testrail(testrail_get_linked_cases),testrail(testrail_get_canonical_cases)'
 ```
 
 Append the read-only tools for any other sources you configured:
@@ -518,6 +518,20 @@ issue type, or the active sprint) and then verifies the clone actually landed on
 
 Routes automatically to the right agent based on intent.
 
+### Find Where Something Is Already Specified
+
+```
+/bc:ask "Do we already have a requirement that silences alerts during sensor warm-up?"
+/bc:ask "Where do the requirements talk about Bluetooth permissions?"
+/bc:ask "In the alerts requirements, is snoozing covered?"
+```
+
+Describe a behavior or business rule in your own words, and get back whether it is **already specified**, **partly specified**, or **not specified** — with the requirements that cover it quoted verbatim, any requirement that **conflicts** with it, the related ones, where in the requirements tree it lives, which test cases verify it (or test it without a requirement behind them), and in-flight board issues that touch it.
+
+It doesn't read every requirement to find out. Your session's model splits the ask into its concepts and gives each the other wordings the requirements might use ("alarm" → alert, notification, audible); code then ranks every requirement in scope against them (BM25 — keyword relevance, no embeddings) in about a second and writes the top 25 out in full; and the model judges only those. When the first search can't settle it — nothing covers the ask, or the top results use the project's own wording for a concept — it searches again with those words before ever answering "not specified".
+
+The data comes from a run folder (see [Low-cost collection](#low-cost-collection-for-bccoverage-bccontradiction-and-bcask-lookups)); a complete run of the whole scope collected in the last 30 minutes is reused, so follow-up questions answer in seconds. Say "refresh" to re-read Jama and TestRail.
+
 ### Edit Test Cases
 
 ```
@@ -596,6 +610,20 @@ Command → Agent → Skills (fetch → normalize → analyze) → Report
 
 Agents never call providers directly — they go through router skills, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
 
+### Low-cost collection for `/bc:coverage`, `/bc:contradiction`, and `/bc:ask` lookups
+
+These commands read the most data, so they split the work by what it needs:
+
+| Work | Runs on |
+|---|---|
+| Fetching requirements, every test case in the suite, and the GitHub docs; waiting out a slow Jama read | the `data-collector` sub-agent on a **low-cost model** — `claude-haiku-4.5`, else `gpt-5-mini`, in Copilot CLI; Haiku in Claude Code |
+| Cross-linking IDs and counting untested requirements, orphans, stranded links, coverage per feature; ranking requirements against a lookup | **code** (`skills/collect-artifacts/bc_run.py`) — no model at all |
+| Contradictions, weak coverage, severity, the report, every question to you, every write | **your session's model**, reading one feature at a time |
+
+The data travels as files, never as a model's retelling: the servers write it straight into a **run folder** in your project, `.buddy-council/runs/<run-id>/`, and your model reads `links.json` (the counts) and then each feature's bundle — its requirements, verbatim, with their custom fields (platform, product, version), each followed by the test cases that link to it with theirs (applicable OS, product version, CtQ, priority) — plus the GitHub docs the feature links to. The low-cost model is never taken at its word: the link step checks the run against your `sources.json` and writes the `Fetch:`, `Enrichment:` and `Readiness:` lines itself, and a run that doesn't match the config is collected again by your session's model. If the sub-agent can't run, you'll see `Collect: ran inline — …` and your session's model does the same steps itself.
+
+To use a different model for the collector in Copilot CLI, pick one for `bc:data-collector` in `/subagents`. Board issues, and GitHub docs under the `mcp` enrichment strategy, are still fetched by your session's model.
+
 See [docs/architecture.md](docs/architecture.md) for the full architecture documentation.
 
 ## Security
@@ -608,12 +636,13 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - **Jama is read-only by construction.** The vendored Jama server has no write tools at all: every tool is `jama_get_*`, its HTTP client can only issue GET requests, and its test suite fails if that ever changes. That is why the hook can auto-approve the `jama_get_*` glob. Jama's own hosted MCP server is deliberately not used — it exposes create/edit/move tools and has no bulk reads
 - The Jama credential lives in the `jama` section of `~/.buddy-council/secrets.json` and nowhere else — the server reads it only from that file, never from environment variables, so it cannot leak into an MCP config. Prefer an API client ID/secret on a read-only Jama account; it is revocable without touching the account password
 - The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*` or `testrail_update_*`. Never name a write tool `testrail_get_*` — the server's test suite fails if one is
+- **Run folders hold requirement and test case text on disk.** `/bc:coverage`, `/bc:contradiction`, and `/bc:ask` lookups write what they fetch to `.buddy-council/runs/` in your project — inside `.buddy-council/`, which `/bc:setup` keeps out of git — with files readable only by you (`chmod 600`). Only the newest 5 runs are kept, none longer than a week; delete the folder any time. The read tools' `save_to` option is the servers' only local write, and it accepts nothing but a `.json` file directly inside an existing run folder — never a symbolic link, never anywhere else
 - **Updates guard what was there.** The update tools read every case first and send only what differs, refuse to remove a requirement link unless the user asked for that explicitly, refuse to overwrite a case edited since it was read, verify every field against what TestRail stored (it silently discards unknown custom fields), and never move a case or change its template. No path deletes a test case
 - **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes or updates no test cases; `--apply` executes after one batch confirmation per phase
 - The Jira token lives in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `sources.json`, not in `secrets.json`, not in either MCP config, which reference it only by absolute path. That file is the single place to rotate or revoke it
 - Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
-  - the same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches)
+  - the same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches), and the run-folder script `bc_run.py` — but only as one plain command: `python3`, the plugin's own copy by absolute path, a known subcommand, and arguments that are bare or single-quoted, so nothing can be chained onto it
   - a second PreToolUse hook auto-approves writes **only** to the plugin's own generated files (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's own `.mcp.json`) — all other writes still prompt
   - a PostToolUse hook writes the redacted tool log described under [Debugging a bc run](#debugging-a-bc-run) — metadata only, credentials masked, never file contents or responses
 

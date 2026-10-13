@@ -19,10 +19,12 @@ buddy_council_plugin/
 ├── agents/                      # Reasoning engines
 │   ├── contradiction-agent.agent.md   # Orchestrates the contradiction workflow
 │   ├── coverage-agent.agent.md        # Orchestrates the coverage workflow
+│   ├── data-collector.agent.md        # Low-cost sub-agent: collects a run into .buddy-council/runs/
 │   └── scenario-mapping-agent.agent.md # User scenarios → requirement traces → TestRail cases
 ├── skills/                      # Reusable capabilities (SKILL.md with frontmatter)
 │   ├── fetch-requirements/      # Router: delegates to configured provider
 │   ├── fetch-test-cases/        # Router: delegates to configured provider
+│   ├── collect-artifacts/       # Run folders: launches data-collector; bc_run.py new/enrich/link (stdlib, Python 3.9+)
 │   ├── normalize-artifacts/     # Clean, normalize IDs, cross-link
 │   ├── detect-contradictions/   # Core analysis (7 contradiction types)
 │   ├── analyze-coverage/        # Coverage gap detection and metrics
@@ -37,7 +39,7 @@ buddy_council_plugin/
 │   └── jama/fetch.md            # Jama live via the read-only jama MCP server (features = folders)
 ├── mcp-servers/                 # Standalone MCP servers wrapping external APIs
 │   ├── testrail-server/         # Python MCP server for TestRail REST API
-│   │   ├── server.py            # 12 read tools (incl. a cached requirement-link index) + 5 write tools (add_case/add_cases/add_section/update_case/update_cases)
+│   │   ├── server.py            # 13 read tools (incl. a cached requirement-link index and canonical cases) + 5 write tools (add_case/add_cases/add_section/update_case/update_cases)
 │   │   ├── pyproject.toml       # Dependencies: mcp[cli], httpx
 │   │   └── tests/               # stdlib unittest suite against a fake TestRail API
 │   └── jama-server/             # Python MCP server for the Jama REST API — read-only by construction
@@ -54,41 +56,58 @@ buddy_council_plugin/
 
 ## Data Flow
 
+`/bc:contradiction` and `/bc:coverage` split each run by what the work needs: a low-cost sub-agent fetches,
+code links and counts, and the session's model only judges. The data travels as files in a run folder.
+
 ```
 User runs /bc:contradiction [scope]
   │
-  ├─ Command (commands/contradiction.md)
-  │    └─ Validates config exists
+  ├─ Command (commands/contradiction.md) → Agent (agents/contradiction-agent.agent.md), on the session's model
   │
-  ├─ Agent (agents/contradiction-agent.agent.md)
-  │    └─ Orchestrates the full pipeline:
+  │    Step 1–2: Load .buddy-council/sources.json, determine the scope
   │
-  │    Step 1: Load .buddy-council/sources.json
-  │    Step 2: Determine scope (requirement ID, feature, or "all")
-  │
-  │    Step 3: Fetch requirements
-  │    │  └─ skills/fetch-requirements/ → reads config → delegates to provider
-  │    │     ├─ providers/excel/fetch.md → bundled parser → Excel export
-  │    │     └─ providers/jama/fetch.md → jama MCP tools (GET only) → Jama REST API
+  │    Step 3: Collect — skills/collect-artifacts/
+  │    │  └─ bc:data-collector sub-agent, on a low-cost model (Haiku; Copilot: claude-haiku-4.5, else gpt-5-mini)
+  │    │     ├─ bc_run.py new        → .buddy-council/runs/<run-id>/
+  │    │     ├─ jama_get_requirements(save_to)        → requirements.json   (or the Excel parser)
+  │    │     ├─ testrail_get_canonical_cases(save_to) → test_cases.json     (every case in the suite)
+  │    │     ├─ bc_run.py enrich     → docs/ + docs.json (gh CLI strategy)
+  │    │     └─ bc_run.py link       → links.json + bundles/NN-<feature>-<p>.md   (code: no model)
+  │    │        returns counts, Fetch/Enrichment/Readiness lines, failures — never the data
   │    │
-  │    Step 4: Fetch test cases
-  │    │  └─ skills/fetch-test-cases/ → reads config → delegates to provider
-  │    │     └─ providers/testrail/fetch.md → MCP tools → TestRail API
-  │    │
-  │    Step 5: Normalize & cross-link
-  │    │  └─ skills/normalize-artifacts/
-  │    │     ├─ Clean HTML, whitespace, nan values
-  │    │     ├─ Normalize IDs (CWA-REQ-XX, TC-XXXX)
-  │    │     └─ Bidirectional linking via linked_ids
-  │    │
-  │    Step 6: Detect contradictions
-  │    │  └─ skills/detect-contradictions/
-  │    │     └─ 7 contradiction types, 4 severity levels
-  │    │
+  │    Step 3a: Board issues — skills/fetch-board-issues/ (session's model)
+  │    Step 4: Readiness gate from links.json counts
+  │    Step 5: One feature at a time — read its bundle parts, detect contradictions, board pass
+  │    Step 6: Cross-feature pass from a compact index; re-read two bundles to confirm
   │    Step 7: Human-readable report
   │
   └─ Output: Markdown report grouped by severity
 ```
+
+The other commands (`/bc:ask`, `/bc:validate`, `/bc:onboarding`, `/bc:codemap`, `/bc:vnv-sprint-prep`) still
+fetch inline through the router skills:
+
+```
+skills/fetch-requirements/ → providers/excel/fetch.md (bundled parser) | providers/jama/fetch.md (jama MCP, GET only)
+skills/fetch-test-cases/   → providers/testrail/fetch.md → testrail_get_canonical_cases (canonical, slim)
+skills/normalize-artifacts/ → clean text, normalize IDs, cross-link
+```
+
+### Run folders
+
+| File | Written by | Holds |
+|---|---|---|
+| `requirements.json` | Jama server (`save_to`) or Excel parser | canonical requirements in scope |
+| `test_cases.json` | TestRail server (`save_to`) | every case in the suite, canonical — the link step scopes them |
+| `docs/`, `docs.json` | `bc_run.py enrich` | the GitHub docs requirements link to, verbatim, truncated at `max_doc_chars`, split into parts of at most 18 KB |
+| `links.json` | `bc_run.py link` | counts, untested (Deprecated/Deferred left out), orphans, stranded links, unknown linked IDs, per-feature rows with their bundles and docs; the `Fetch:`/`Enrichment:`/`Readiness:` lines; missing sources; and every mismatch between the run and `sources.json` |
+| `bundles/*.md` | `bc_run.py link` | per feature: each requirement verbatim with its custom fields, then the cases that link to it with theirs; parts of at most 18 KB |
+| `search/NN-<ask>-<p>.md` | `bc_run.py search` | a lookup's results: where the matches are, the top 25 requirements verbatim with what they matched, the test cases and docs that mention the ask, the next 25 candidates, and the project's own wording for a second search |
+| `manifest.json` | `bc_run.py` | command, scope, timestamps, counts |
+
+A run folder is created by `bc_run.py new`, never by a server: `save_to` only writes a `.json` file directly
+inside an existing `.buddy-council/runs/<run>/`, refuses a symbolic link, and creates no directory. The newest
+5 runs are kept, none longer than a week. Files are `chmod 600`.
 
 ## Canonical Schema
 
@@ -164,6 +183,7 @@ The agent detects 7 types of issues:
 |-------|---------|---------|
 | Contradiction | `/bc:contradiction` | Detect conflicts between artifacts |
 | Coverage | `/bc:coverage` | Find untested requirements and coverage gaps |
+| Data collector | `/bc:coverage`, `/bc:contradiction` | Low-cost sub-agent: fetch into a run folder, link in code, return counts |
 | QA (via orchestration) | `/bc:ask` | Answer general questions about artifacts |
 | Scenario mapping | `/bc:ask` | Trace the user's own scenarios to requirements, check them against existing cases, write them into TestRail |
 
@@ -180,6 +200,9 @@ The `/bc:ask` command classifies intent and routes to the right agent:
 
 /bc:ask "What does CWA-REQ-85 do?"
   └─ ask.md → QA intent → fetches data, answers directly
+
+/bc:ask "Do we already have a requirement that silences alerts during warm-up?"
+  └─ ask.md → LOOKUP intent → lookup-requirements → a recent or new run → bc_run.py search (code) → judged by the model
 
 /bc:ask "Map the scenarios in sync.feature into TestRail"
   └─ ask.md → AUTHOR intent → follows scenario-mapping-agent.agent.md → draft-test-cases
@@ -215,7 +238,7 @@ Agent → Router Skill → Provider Skill → MCP Tool → External API
 
 | Server | Status | Tools |
 |--------|--------|-------|
-| `testrail-server` | Active | 12 `testrail_get_*` reads (projects, suites, sections, cases, cases by refs, case, case fields, case types, priorities, templates, requirement IDs, linked cases); writes `testrail_add_case`, `testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, `testrail_update_cases` — always prompted |
+| `testrail-server` | Active | 13 `testrail_get_*` reads (projects, suites, sections, cases, cases by refs, case, case fields, case types, priorities, templates, requirement IDs, linked cases, canonical cases); writes `testrail_add_case`, `testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, `testrail_update_cases` — always prompted |
 | `jama-server` | Active, read-only | `jama_get_current_user`, `jama_get_projects`, `jama_get_item_types`, `jama_get_features`, `jama_get_requirements`, `jama_get_item`, `jama_get_items`, `jama_get_scope_proposal` |
 
 The Jama server is the one MCP server that emits the canonical schema itself, like the Excel parser: feature

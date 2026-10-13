@@ -61,6 +61,7 @@ mcp dev server.py
 | `testrail_get_templates` | Case templates for a project, for `template_id` |
 | `testrail_get_requirement_ids` | Which requirement IDs the suite's cases link to: counts, prefixes, and a spread sample |
 | `testrail_get_linked_cases` | The cases linked to given requirement IDs, and the sections they sit in; `unlinked=true` lists the orphans |
+| `testrail_get_canonical_cases` | Cases in the plugin's canonical schema — `TC-` id, `linked_ids` from the requirement field, steps, References, folder path — filtered by requirement IDs, folder, or `unlinked`; `save_to` writes them into a run folder |
 
 ### Write
 
@@ -143,6 +144,35 @@ case count as coverage — so `testrail_update_cases` guards every case it touch
 TestRail's own bulk `update_cases` endpoint can only set the same values on every case, so the server loops
 `update_case`, retrying a `429`. Every updated entry returns each field's `before` and `after`, so the
 previous values are at hand to undo a change. `steps_separated` replaces the whole step list: send every step.
+
+Requirement IDs are split on commas, semicolons, and newlines after any markup and entities are dropped —
+some instances store the requirement field as rich text (`<p>CWA-REQ-85,&nbsp;CWA-REQ-86</p>`), which would
+otherwise read as IDs nothing matches. The link index, canonical cases, and the update tools' link protection
+all read IDs this way.
+
+## Canonical cases and run folders
+
+`testrail_get_canonical_cases` renders cases from the same cached suite index as `testrail_get_linked_cases`,
+already in the canonical `test_case` schema the analysis reads: preconditions as `description`, steps and
+expected results, References, the folder path, the browse URL, priority and type by name, and the other custom
+fields under their labels — dropdown and multi-select ids resolved to option names from `get_case_fields` (the
+config for this project, else the global one), ticked checkboxes, numbers, and text cut at 500 characters with a
+note of how much more TestRail holds. User, date, and milestone fields are left out. Field definitions,
+priorities, and case types are cached for 10 minutes; if one cannot be read, raw values stay and a warning says
+so. That is a fraction of a raw case's size, and there is nothing left to map. Filters: `requirement_ids`,
+`section` (a folder path including its subfolders, or a bare name matched as whole words against every folder
+name — `Alarms` finds `Alarms - iOS`, not `Alarmsound`), and `unlinked`; `requirement_ids` with `section`
+returns a case matching either.
+
+A GET that hits a network error or timeout is retried twice; a POST never is, because it may already have been
+applied.
+
+With `save_to`, every matching case is written to a JSON file instead of being returned, and the response
+carries only the counts and the path. That is the server's only local side effect, and it is narrow: the
+path must be a `.json` file directly inside an **existing** `<project>/.buddy-council/runs/<run>/` folder,
+the target must not be a symbolic link, and the folder must resolve to a real run folder. The server never
+creates a directory; the plugin's `bc_run.py new` does. The file is written atomically, readable only by
+the user.
 
 ## Tests
 

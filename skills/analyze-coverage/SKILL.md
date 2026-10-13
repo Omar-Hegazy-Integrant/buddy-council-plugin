@@ -15,6 +15,15 @@ After artifacts have been fetched and normalized. This is the core analysis skil
 
 This skill requires normalized requirements AND test cases. If you were handed zero test cases, do NOT report "0% coverage" as a finding — a zero-test-case input almost always means the fetch was skipped or failed. Stop and tell the calling agent to verify the test-case fetch (empty result vs. provider error). Only compute true 0% coverage when the caller has confirmed the scope genuinely has no test cases.
 
+## Input from a run folder
+
+The coverage agent reads its input from a run folder (`skills/collect-artifacts/SKILL.md`). There, code has
+already done the counting from every record: `links.json` holds the untested requirements, orphans, stranded
+links (flagged `stranded` on the untested requirement they would cover), the per-feature metrics, and the
+totals, with Deprecated and Deferred requirements already left out of untested (counted as `retired`). Use
+those as given — never recount them from what you read. Your part is the judgment: weak coverage, from each
+requirement's text against the steps of the cases under it in the feature's bundle, and severity.
+
 ## Coverage Categories
 
 ### 1. Untested Requirements

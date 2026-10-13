@@ -101,6 +101,33 @@ if echo "$FIRST_LINE" | grep -qE '^[[:space:]]*(pip3?|python3?[[:space:]]+-m[[:s
   allow "bc: dependency setup"
 fi
 
+# (g) The run-folder script, skills/collect-artifacts/bc_run.py (new, enrich, link, search, show, recent). It reads
+#     and writes only inside <project>/.buddy-council/runs/, and its one network use is read-only `gh api` GETs. Approved only as
+#     one plain command — python3, THIS plugin's own copy of the script by absolute path, a known
+#     subcommand and options, every argument bare or single-quoted — so nothing can be chained onto it.
+PLUGIN_DIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd -P)"
+if [ -n "$PLUGIN_DIR" ] && BC_CMD="$COMMAND" BC_PLUGIN_DIR="$PLUGIN_DIR" python3 -c '
+import os, re, sys
+cmd, root = os.environ.get("BC_CMD", ""), os.environ.get("BC_PLUGIN_DIR", "")
+token = r"(?:[A-Za-z0-9_./:=@%+,-]+|'"'"'[^'"'"']*'"'"')"
+if not root or "\n" in cmd or "\r" in cmd or not re.fullmatch(r"\s*" + token + r"(?:\s+" + token + r")*\s*", cmd):
+    sys.exit(1)
+args = [t[1:-1] if t.startswith(chr(39)) else t for t in re.findall(token, cmd)]
+script = os.path.join(root, "skills", "collect-artifacts", "bc_run.py")
+if len(args) < 3 or args[0] != "python3" or not os.path.isabs(args[1]):
+    sys.exit(1)
+if os.path.realpath(args[1]) != os.path.realpath(script):
+    sys.exit(1)
+options = {"new": {"--project", "--command", "--scope"}, "enrich": {"--run"}, "link": {"--run"},
+           "search": {"--run", "--query", "--concept", "--feature", "--top"}, "show": {"--run", "--ids"},
+           "recent": {"--project", "--max-age-minutes"}}.get(args[2])
+rest = args[3:]
+if options is None or len(rest) % 2 or any(o not in options for o in rest[::2]):
+    sys.exit(1)
+' 2>/dev/null; then
+  allow "bc: run-folder script"
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Everything else — defer to the normal permission prompt.
 # ---------------------------------------------------------------------------

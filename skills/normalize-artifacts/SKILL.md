@@ -11,6 +11,10 @@ Normalize fetched requirements and test cases into a consistent canonical schema
 
 After fetching raw data from providers, before passing to analysis skills.
 
+`/bc:coverage` and `/bc:contradiction` do not use this skill: their data arrives already canonical from the
+Jama and TestRail servers, and `skills/collect-artifacts/bc_run.py link` matches IDs and cross-links in
+code. The other commands still normalize here.
+
 ## Canonical Schema
 
 Every artifact must conform to this shape:

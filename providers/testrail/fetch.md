@@ -27,6 +27,15 @@ If the MCP tools are NOT available:
 
 **IMPORTANT: Always use the MCP tools below. Never use curl or Bash to call the TestRail API directly.**
 
+**Read cases with `mcp__testrail__testrail_get_canonical_cases`.** It returns them already in the canonical
+schema below — `TC-` ids, `linked_ids` parsed from the requirement field, steps, References, folder path — at
+a fraction of the raw size, so there is nothing to map. One call covers each strategy through its filters:
+`requirement_ids` (Strategy 3), `section` (Strategy 2; given with `requirement_ids`, a case matching either is
+returned), `unlinked: true` (orphans), or no filter (Strategy 4). Always pass `requirement_field`. The raw
+tools (`testrail_get_cases`, `testrail_get_case`, `testrail_get_linked_cases`) remain for the raw fields a
+write path needs. `save_to` writes the result into a run folder instead of returning it — that is how
+`skills/collect-artifacts` collects; don't use it elsewhere.
+
 **Choose the narrowest fetch strategy based on available context:**
 
 ### Strategy 1: Single Test Case (scope is a test case ID like "TC-1234")
@@ -37,24 +46,26 @@ If the MCP tools are NOT available:
 Use for a feature whose requirement IDs you do not have, and alongside Strategy 3 to catch the **unlinked**
 cases filed in a folder named after the feature — the cases Strategy 3 cannot see.
 
-1. Call `mcp__testrail__testrail_get_sections` with `project_id` and `suite_id`
-2. Find the section(s) whose name matches the feature name (case-insensitive, partial match)
-3. For each matching section, call `mcp__testrail__testrail_get_cases` with `project_id`, `suite_id`, AND `section_id`
-4. Paginate within each section if needed (check `size == limit`)
-5. Combine results from all matching sections
+1. Call `mcp__testrail__testrail_get_canonical_cases` with `project_id`, `suite_id`, `requirement_field`, and
+   `section` = the feature name. A bare name matches every folder whose name contains it as whole words,
+   case-insensitively and at any depth (`Alarms` finds `Alarms - iOS`), subfolders included; a path such as
+   `"Alarms/Battery"` matches that folder. When the folders are
+   named differently, list them with `mcp__testrail__testrail_get_sections` and pass the closest `path`.
+2. Page: while the response carries `next_offset`, call again with `offset: <next_offset>` and concatenate
+   `test_cases`.
 
 ### Strategy 3: By Requirement Links (requirement_ids were passed)
 The **preferred strategy** whenever the requirement IDs in scope are known — a feature's requirements, just
 fetched, or a single requirement. It finds cases by the link this plugin actually reads, so it works whatever
 the TestRail folders are called, and it is exact.
 
-1. Call `mcp__testrail__testrail_get_linked_cases` with `project_id`, `suite_id`, `requirement_field`, and
-   `requirement_ids`. The field is `test_cases.authoring.requirement_field`, else `custom_jama_req_id` — the
-   same field the *Linking* section below reads.
+1. Call `mcp__testrail__testrail_get_canonical_cases` with `project_id`, `suite_id`, `requirement_field`, and
+   `requirement_ids` — plus `section` = the feature name when it is known, so the unlinked cases filed in the
+   feature's folder come back in the same call (a case with no requirement ID cannot be found by its links).
+   The field is `test_cases.authoring.requirement_field`, else `custom_jama_req_id` — the same field the
+   *Linking* section below reads.
 2. Page: while the response carries `next_offset`, call again with `offset: <next_offset>` and concatenate
-   `cases`. The suite is read once and cached for 10 minutes, so further calls in the run are cheap.
-3. When a feature name is known too, also run Strategy 2 and merge by case id: a case with no requirement ID
-   cannot be found by its links, and an orphan filed in the feature's folder must still reach the report.
+   `test_cases`. The suite is read once and cached for 10 minutes, so further calls in the run are cheap.
 
 `unlinked_ids` lists the requested requirements no case links to — the untested ones, straight from TestRail.
 
@@ -64,15 +75,12 @@ reference a Jira story key, not for requirement coverage.
 
 ### Orphans across the whole suite (scope is "all")
 Strategies 2 and 3 only see cases near a feature. For an `"all"` run, call
-`mcp__testrail__testrail_get_linked_cases` once with `unlinked: true` (and `requirement_ids: []`) to list every
-case whose requirement field holds no ID — the suite's orphans, whatever folder they sit in.
+`mcp__testrail__testrail_get_canonical_cases` once with `unlinked: true` to list every case whose requirement
+field holds no ID — the suite's orphans, whatever folder they sit in.
 
 ### Strategy 4: All Cases (scope is "all" or no narrower context is available)
-Use only when no feature or requirement context is available.
-
-1. Call `mcp__testrail__testrail_get_cases` with `project_id`, `suite_id`, `offset=0`
-2. Paginate: if `size == limit`, call again with `offset += limit`
-3. Repeat until all cases are collected
+Use only when no feature or requirement context is available: call
+`mcp__testrail__testrail_get_canonical_cases` with no filter and follow `next_offset` until it is null.
 
 ## How to Choose
 
@@ -83,15 +91,15 @@ Use only when no feature or requirement context is available.
 | Only a feature/section name known | Strategy 2 |
 | "all" or no context | Strategy 4 — or, feature by feature, Strategy 3 — plus the orphan listing |
 
-## Section Lookup (required for all strategies except 1)
+## Section Lookup (raw tools only)
 
-Before fetching cases (unless using Strategy 1), always fetch sections first:
-- Call `mcp__testrail__testrail_get_sections` with `project_id` and `suite_id`
-- Build a lookup: `{section_id: section_name}` for resolving the `feature` field
+`testrail_get_canonical_cases` resolves folders itself (`feature` is the folder name,
+`raw_fields.section_path` the full path). When you read raw cases instead, fetch the sections first with
+`mcp__testrail__testrail_get_sections` and build `{section_id: section_name}` to resolve the `feature` field.
 
 ## Field Mapping
 
-For each test case returned, extract and map fields:
+`testrail_get_canonical_cases` returns exactly this mapping. When you read raw cases, map each one:
 - `id` → prefix with "TC-" (e.g., `id: 1234` becomes `"TC-1234"`)
 - `title` → test case title
 - `custom_desc` or `custom_preconds` → combine into description
@@ -144,6 +152,9 @@ and store them in `linked_ids`. This field may contain:
 - A single ID: "CWA-REQ-85"
 - Multiple IDs: "CWA-REQ-85, CWA-REQ-86"
 - IDs with prefixes or formatting variations — normalize to consistent format
+- Rich text — on some instances the field holds markup such as `<p>CWA-REQ-85,&nbsp;CWA-REQ-86</p>`. The
+  server's link index, `testrail_get_canonical_cases`, and the update guards drop the markup before splitting;
+  when you parse a raw case yourself, strip it too, or every such link reads as a different ID
 
 ## Creating test cases (write)
 

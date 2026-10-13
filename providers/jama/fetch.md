@@ -84,6 +84,11 @@ the response carries `next_offset`, call `jama_get_requirements` again with the 
 `"offset": <next_offset>`, and concatenate every page's `requirements`. Later pages come from the cached tree,
 so they cost no Jama requests. Stopping early silently drops requirements — `total` says how many to expect.
 
+**`save_to`** writes every requirement in scope into a run folder instead of returning them, and the response
+carries only the counts and the file path. It is how `skills/collect-artifacts` collects for `/bc:coverage`
+and `/bc:contradiction`; it accepts only a `.json` file directly inside an existing
+`<project>/.buddy-council/runs/<run>/` folder. Don't use it elsewhere.
+
 ### Scoping — features are folders
 
 Scoping happens **inside the server**, so only the relevant requirements enter context:

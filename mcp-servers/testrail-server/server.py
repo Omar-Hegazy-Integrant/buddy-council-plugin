@@ -6,16 +6,25 @@ Every `testrail_get_*` tool is read-only. The write tools — `testrail_add_case
 deliberately excluded from the plugin's auto-approve hook and from
 `settings.json`, so they always reach a permission prompt. No write tool may
 ever be named `testrail_get_*`: the hook auto-approves that glob.
+
+The one local side effect of a read tool: with `save_to`,
+`testrail_get_canonical_cases` writes its result to a JSON file directly inside an
+existing `<project>/.buddy-council/runs/<run>/` folder, so a run's data reaches the
+analysis as a file instead of passing through a model. Nothing else is written.
 """
 
 import asyncio
+import contextlib
+import html
 import os
 import re
 import sys
 import json
+import tempfile
 import time
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -97,6 +106,7 @@ _PAGE_LIMIT = 250  # TestRail's maximum page size on get_* endpoints
 _RATE_LIMIT_STATUS = 429
 _MAX_RATE_LIMIT_RETRIES = 3
 _DEFAULT_RETRY_AFTER_SECONDS = 5.0
+_MAX_NETWORK_RETRIES = 2  # reads only: a POST that timed out may still have been applied
 _MAX_ERROR_CHARS = 500
 _SECTION_PATH_SEPARATOR = "/"
 
@@ -142,9 +152,11 @@ async def _request(
     TestRail uses index.php?/api/v2/<endpoint>&key=val for query params, so the
     URL is built manually rather than via httpx base_url + params.
 
-    Retries on 429 (TestRail Cloud's rate limit), honouring Retry-After. Raises
-    TestRailError carrying the server's own message on any other 4xx/5xx, because
-    "HTTP 400" alone is useless when the real cause is a required custom field.
+    Retries on 429 (TestRail Cloud's rate limit), honouring Retry-After, and retries
+    a GET that hit a network error or timeout — never a POST, which may already have
+    been applied. Raises TestRailError carrying the server's own message on any other
+    4xx/5xx, because "HTTP 400" alone is useless when the real cause is a required
+    custom field.
     """
     url = f"{_API_BASE}{endpoint}"
     if params:
@@ -152,8 +164,19 @@ async def _request(
         if query:
             url = f"{url}&{query}"
 
-    for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
-        response = await _client.request(method, url, json=payload)
+    network_retries = 0
+    attempt = -1
+    while attempt < _MAX_RATE_LIMIT_RETRIES:
+        attempt += 1
+        try:
+            response = await _client.request(method, url, json=payload)
+        except httpx.TransportError as exc:
+            if method == "GET" and network_retries < _MAX_NETWORK_RETRIES:
+                network_retries += 1
+                attempt -= 1  # a network retry does not use up a rate-limit retry
+                await asyncio.sleep(float(network_retries))
+                continue
+            raise TestRailError(f"{method} {endpoint} → could not reach TestRail ({type(exc).__name__}: {exc})") from None
         if response.status_code == _RATE_LIMIT_STATUS and attempt < _MAX_RATE_LIMIT_RETRIES:
             await asyncio.sleep(_retry_after_seconds(response))
             continue
@@ -461,11 +484,15 @@ def _canon(value: Any) -> Any:
 
 
 def _tokens(value: Any) -> list[str]:
-    """IDs in a reference-style field — "A, B;C" or a multi-select list — in order."""
+    """IDs in a reference-style field — "A, B;C", a multi-select list, or rich text ("<p>A,&nbsp;B</p>") — in order.
+
+    Some instances store the requirement field as rich text, so markup and entities are dropped before
+    splitting; otherwise "<p>A" would never match "A".
+    """
     if value is None:
         return []
-    items = value if isinstance(value, list) else _TOKEN_SPLIT.split(str(value))
-    return [token for token in (str(item).strip() for item in items) if token]
+    items = value if isinstance(value, list) else _TOKEN_SPLIT.split(_clean(value))
+    return [token for token in (_clean(item) for item in items) if token]
 
 
 def _step_keys(steps: Any) -> tuple[str, ...]:
@@ -584,6 +611,266 @@ def _spread(values: list[str], size: int) -> list[str]:
     if size == 1:
         return [values[0]]
     return list(dict.fromkeys(values[round(i * (len(values) - 1) / (size - 1))] for i in range(size)))
+
+
+# ---------------------------------------------------------------------------
+# Canonical cases — the plugin's slim test_case schema, rendered from the cached suite
+# ---------------------------------------------------------------------------
+
+_CASE_ID_PREFIX = "TC-"
+_MAX_CUSTOM_TEXT = 500  # longer custom text is cut here, with a note of how much more TestRail holds
+_BODY_FIELDS = {
+    "custom_preconds", "custom_steps", "custom_expected", "custom_steps_separated",
+    "custom_mission", "custom_goals", "custom_description", "custom_desc",
+}
+_TEXT_FIELD_TYPES = {1, 3, 4}  # String, Text, URL
+_SKIPPED_FIELD_TYPES = {7, 8, 9, 10, 11}  # User, Date, Milestone, Steps, Step Results
+_DROPDOWN, _CHECKBOX, _INTEGER, _MULTI_SELECT = 6, 5, 2, 12
+_TAG = re.compile(r"<[^>]+>")
+_BREAK_TAG = re.compile(r"<\s*(br|/p|/li|/div|/h[1-6]|/tr)\s*/?>", re.IGNORECASE)
+_BLANK_RUN = re.compile(r"\n{3,}")
+_META_CACHE: dict[Any, tuple[float, Any]] = {}  # field definitions, priorities, case types — configuration, not cases
+
+
+def _clean(value: Any) -> str:
+    """A text field as plain text: tags dropped (line breaks kept), entities decoded, whitespace tidied."""
+    text = _norm_text(value)
+    if "<" in text and ">" in text:
+        text = _TAG.sub("", _BREAK_TAG.sub("\n", text))
+    text = html.unescape(text)
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    return _BLANK_RUN.sub("\n\n", text).strip()
+
+
+async def _cached_meta(key: Any, load: Any) -> Any:
+    cached = _META_CACHE.get(key)
+    if cached and time.monotonic() - cached[0] < _INDEX_TTL_SECONDS:
+        return cached[1]
+    value = await load()
+    _META_CACHE[key] = (time.monotonic(), value)
+    return value
+
+
+def _options_for(field: dict[str, Any], project_id: int) -> dict[int, str]:
+    """A dropdown or multi-select's option names, from the config that applies to this project."""
+    configs = [c for c in field.get("configs") or [] if isinstance(c, dict)]
+    chosen = next((c for c in configs if project_id in ((c.get("context") or {}).get("project_ids") or [])), None)
+    chosen = chosen or next((c for c in configs if (c.get("context") or {}).get("is_global")), None)
+    chosen = chosen or (configs[0] if configs else {})
+    options: dict[int, str] = {}
+    for line in str((chosen.get("options") or {}).get("items") or "").splitlines():
+        number, _, label = line.partition(",")
+        if number.strip().isdigit():
+            options[int(number.strip())] = label.strip()
+    return options
+
+
+async def _case_meta(project_id: int) -> tuple[dict[str, dict[str, Any]], dict[int, str], dict[int, str], list[str]]:
+    """Custom field definitions (label, type, option names), priority names, and case type names.
+
+    Any of them that cannot be read leaves raw values in place and a warning, never a failed fetch.
+    """
+    warnings: list[str] = []
+
+    async def fields() -> dict[str, dict[str, Any]]:
+        listing = await _get("get_case_fields")
+        return {
+            f["system_name"]: {"label": f.get("label") or f["system_name"], "type_id": f.get("type_id"), "options": _options_for(f, project_id)}
+            for f in listing or []
+            if isinstance(f, dict) and f.get("system_name")
+        }
+
+    async def named(endpoint: str) -> dict[int, str]:
+        listing = await _get(endpoint)
+        return {int(e["id"]): str(e.get("name") or e["id"]) for e in listing or [] if isinstance(e, dict) and e.get("id") is not None}
+
+    results: list[Any] = []
+    for key, load, what in (
+        (("fields", project_id), fields, "case field definitions"),
+        ("get_priorities", lambda: named("get_priorities"), "priorities"),
+        ("get_case_types", lambda: named("get_case_types"), "case types"),
+    ):
+        try:
+            results.append(await _cached_meta(key, load))
+        except TestRailError as exc:
+            warnings.append(f"Could not read {what} ({exc}); their raw ids are shown instead.")
+            results.append({})
+    return results[0], results[1], results[2], warnings
+
+
+def _custom_value(value: Any, meta: dict[str, Any] | None) -> Any:
+    """A custom field as a reader would want it, or None when it carries nothing worth showing."""
+    type_id = (meta or {}).get("type_id")
+    options = (meta or {}).get("options") or {}
+    if type_id in _SKIPPED_FIELD_TYPES or value is None or value == "" or value == []:
+        return None
+    if type_id == _DROPDOWN or (type_id is None and isinstance(value, int) and not isinstance(value, bool) and options):
+        return options.get(value, str(value)) if isinstance(value, int) else None
+    if type_id == _MULTI_SELECT or isinstance(value, list):
+        names = [options.get(v, str(v)) for v in value if isinstance(v, (int, str))] if isinstance(value, list) else []
+        return names or None
+    if type_id == _CHECKBOX or isinstance(value, bool):
+        return True if value is True else None  # an unticked box is indistinguishable from an unset one
+    if type_id == _INTEGER and isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str) and (type_id in _TEXT_FIELD_TYPES or type_id is None):
+        text = _clean(value)
+        if len(text) > _MAX_CUSTOM_TEXT:
+            text = f"{text[:_MAX_CUSTOM_TEXT]}… [{len(text) - _MAX_CUSTOM_TEXT} more characters in TestRail]"
+        return text or None
+    return None
+
+
+def _case_steps(case: dict[str, Any]) -> list[dict[str, str]]:
+    """Steps from a steps template, or the text template's steps/expected as a single step."""
+    steps = case.get("custom_steps_separated")
+    if isinstance(steps, list):
+        rendered = [
+            {"content": _clean(step.get("content")), "expected": _clean(step.get("expected"))}
+            for step in steps
+            if isinstance(step, dict)
+        ]
+        return [step for step in rendered if step["content"] or step["expected"]]
+    content, expected = _clean(case.get("custom_steps")), _clean(case.get("custom_expected"))
+    return [{"content": content, "expected": expected}] if content or expected else []
+
+
+def _canonical_case(
+    case: dict[str, Any],
+    field: str,
+    section_paths: dict[int, str],
+    include_steps: bool,
+    fields: dict[str, dict[str, Any]] | None = None,
+    priorities: dict[int, str] | None = None,
+    case_types: dict[int, str] | None = None,
+) -> dict[str, Any]:
+    """One TestRail case in the canonical test_case schema the analysis skills read."""
+    fields, priorities, case_types = fields or {}, priorities or {}, case_types or {}
+    case_id = case.get("id")
+    section_id = case.get("section_id")
+    path = section_paths.get(section_id, "")
+    description = []
+    for key, label in (("custom_preconds", "Preconditions"), ("custom_mission", "Mission"), ("custom_goals", "Goals")):
+        text = _clean(case.get(key))
+        if text:
+            description.append(f"{label}: {text}")
+    for key in ("custom_description", "custom_desc"):
+        text = _clean(case.get(key))
+        if text:
+            description.insert(0, text)
+    raw: dict[str, Any] = {
+        "testrail_id": case_id,
+        "section_id": section_id,
+        "section_path": path,
+        "suite_id": case.get("suite_id"),
+        "refs": _norm_text(case.get("refs")),
+        "priority": priorities.get(case.get("priority_id"), case.get("priority_id")),
+        "type": case_types.get(case.get("type_id"), case.get("type_id")),
+        "template_id": case.get("template_id"),
+        "updated_on": case.get("updated_on"),
+        "url": f"{BASE_URL}/index.php?/cases/view/{case_id}" if case_id else None,
+    }
+    if include_steps:
+        raw["steps"] = _case_steps(case)
+    custom: dict[str, Any] = {}
+    for key, value in case.items():
+        if not key.startswith("custom_") or key == field or key in _BODY_FIELDS:
+            continue
+        shown = _custom_value(value, fields.get(key))
+        if shown is None:
+            continue
+        label = str((fields.get(key) or {}).get("label") or key)
+        custom[f"{label} ({key})" if label in custom else label] = shown
+    if custom:
+        raw["custom"] = custom
+    return {
+        "type": "test_case",
+        "id": f"{_CASE_ID_PREFIX}{case_id}",
+        "title": _clean(case.get("title")),
+        "description": "\n\n".join(description),
+        "feature": path.rsplit(_SECTION_PATH_SEPARATOR, 1)[-1] if path else "",
+        "status": "",
+        "linked_ids": _tokens(case.get(field)),
+        "raw_fields": raw,
+    }
+
+
+def _words(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.casefold()))
+
+
+def _in_section(path: str, wanted: str) -> bool:
+    """A section path equal to or under ``wanted`` — or, for a bare name, with a folder whose name contains it.
+
+    A bare name matches as whole words, case-insensitively, so "Alarms" finds "Alarms", "Alarms - iOS", and
+    "iOS Alarms" but not "Alarmsound".
+    """
+    folded, target = path.casefold(), wanted.strip().strip(_SECTION_PATH_SEPARATOR).casefold()
+    if not target:
+        return False
+    if _SECTION_PATH_SEPARATOR in target:
+        return folded == target or folded.startswith(target + _SECTION_PATH_SEPARATOR)
+    words = _words(target)
+    return bool(words) and any(f" {words} " in f" {_words(segment)} " for segment in folded.split(_SECTION_PATH_SEPARATOR))
+
+
+# ---------------------------------------------------------------------------
+# Run files — with save_to, a read writes its whole result into the caller's run folder
+# ---------------------------------------------------------------------------
+
+_RUN_FILE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\.json")
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_SAVE_TO_SHAPE = "<project>/.buddy-council/runs/<run>/<name>.json"
+
+
+def _run_file_path(save_to: str) -> Path:
+    """Validate save_to: a .json file directly inside an existing .buddy-council/runs/<run>/ folder.
+
+    The plugin's collect step creates the run folder; this server never creates a directory, and nothing
+    outside such a folder can be written.
+    """
+    text = str(save_to or "").strip()
+    path = Path(text)
+    if not text or not path.is_absolute():
+        raise TestRailError(f"save_to must be an absolute path: {_SAVE_TO_SHAPE}.")
+    run_dir = path.parent
+    if (
+        ".." in path.parts
+        or not _RUN_FILE_NAME.fullmatch(path.name)
+        or not _RUN_ID.fullmatch(run_dir.name)
+        or run_dir.parent.name != "runs"
+        or run_dir.parent.parent.name != ".buddy-council"
+    ):
+        raise TestRailError(f"Refusing save_to {text!r}: it must be {_SAVE_TO_SHAPE}.")
+    if not run_dir.is_dir():
+        raise TestRailError(f"Refusing save_to {text!r}: the run folder does not exist — the collect step creates it first.")
+    if path.is_symlink():
+        raise TestRailError(f"Refusing save_to {text!r}: it is a symbolic link.")
+    real = run_dir.resolve()
+    if real.parent.name != "runs" or real.parent.parent.name != ".buddy-council":
+        raise TestRailError(f"Refusing save_to {text!r}: the run folder resolves outside a .buddy-council/runs/ folder.")
+    return real / path.name
+
+
+def _write_run_file(save_to: str, payload: dict[str, Any]) -> tuple[str, int]:
+    """Write payload as JSON to save_to, atomically and readable only by the user. Returns (path, bytes)."""
+    path = _run_file_path(save_to)
+    data = json.dumps(payload, ensure_ascii=False, indent=1, default=str).encode("utf-8")
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return str(path), len(data)
+
+
+def _utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 # ---------------------------------------------------------------------------
@@ -914,6 +1201,174 @@ async def testrail_get_linked_cases(
             "next_offset": end if include_cases and end < len(matched) else None,
         },
         indent=2,
+    )
+
+
+@mcp.tool(structured_output=False)
+async def testrail_get_canonical_cases(
+    project_id: int,
+    requirement_field: str,
+    suite_id: int | None = None,
+    requirement_ids: list[str] | None = None,
+    section: str = "",
+    unlinked: bool = False,
+    include_steps: bool = True,
+    offset: int = 0,
+    refresh: bool = False,
+    save_to: str = "",
+) -> str:
+    """Fetch test cases in the plugin's canonical schema — slim, with their requirement links. Read-only.
+
+    Each case is {type: "test_case", id: "TC-1234", title, description, feature,
+    status, linked_ids, raw_fields}: linked_ids are the IDs in the requirement
+    field, description holds the preconditions, and raw_fields carries the steps,
+    refs, section path, and browse url — a fraction of the size of the raw cases
+    from testrail_get_cases. The suite is read once and cached for 10 minutes; any
+    write through this server clears the cache.
+
+    With no filter, every case in the suite. Filters:
+    - requirement_ids: the cases linked to any of these IDs through the requirement field.
+    - section: the cases filed under this folder. A path ("Alarms/Battery") includes
+      its subfolders; a bare name matches a folder of that name at any depth. Given
+      together with requirement_ids, a case matching either is returned.
+    - unlinked: only the cases whose requirement field holds no ID (within `section`
+      when it is given) — the orphans.
+
+    Large results page: while `next_offset` is set, call again with the same
+    arguments and offset=next_offset, and concatenate `test_cases`.
+
+    Args:
+        project_id: The TestRail project ID.
+        requirement_field: The custom field holding requirement IDs
+            (test_cases.authoring.requirement_field); custom_ prefix optional.
+        suite_id: The suite to read. Required on multi-suite projects.
+        requirement_ids: Only cases linked to these requirement IDs.
+        section: Only cases under this folder path or folder name.
+        unlinked: Only cases with no requirement ID.
+        include_steps: Include each case's steps and expected results (default true).
+        offset: Position to resume `test_cases` from — the previous page's `next_offset`.
+        refresh: Ignore the cache and re-read the suite.
+        save_to: Write every matching case to this file instead of returning them —
+            an absolute path inside the run folder the plugin's collect step created:
+            <project>/.buddy-council/runs/<run>/test_cases.json. The response then
+            carries only `saved_to`, the counts, and the summary.
+
+    Returns JSON {"requirement_field", "field_found", "suite_id", "cases_scanned",
+    "matched", "offset", "next_offset", "test_cases", "unlinked_ids", "summary",
+    "warnings"} — with save_to, "saved_to" and "bytes" in place of test_cases and paging.
+    """
+    if save_to:
+        _run_file_path(save_to)  # a bad path fails before TestRail is read
+        offset = 0
+    field = _custom_key(requirement_field)
+    wanted: dict[str, str] = {}
+    for raw in requirement_ids or []:
+        token = str(raw).strip()
+        if token:
+            wanted.setdefault(token.casefold(), token)
+    folder = (section or "").strip()
+    index = await _link_index(project_id, suite_id, field, refresh)
+    linked: set[str] = set()
+    matched: list[dict[str, Any]] = []
+    for case in index.cases:
+        tokens = index.ids_by_case.get(case.get("id"), [])
+        in_folder = bool(folder) and _in_section(index.section_paths.get(case.get("section_id"), ""), folder)
+        if unlinked:
+            if tokens or (folder and not in_folder):
+                continue
+        elif wanted or folder:
+            hits = {t.casefold() for t in tokens} & wanted.keys()
+            linked |= hits
+            if not hits and not in_folder:
+                continue
+        matched.append(case)
+    fields, priorities, case_types, warnings = await _case_meta(project_id)
+    rendered = [
+        _canonical_case(case, field, index.section_paths, include_steps, fields, priorities, case_types) for case in matched
+    ]
+
+    field_found = any(field in case for case in index.cases)
+    if index.cases and not field_found:
+        warnings.append(f"No case carries a field named {field} — check test_cases.authoring.requirement_field.")
+    if folder and not any(_in_section(path, folder) for path in index.section_paths.values()):
+        warnings.append(f"No folder matches section {folder!r}.")
+    unlinked_ids = [] if unlinked else [original for key, original in wanted.items() if key not in linked]
+    selection = []
+    if wanted and not unlinked:
+        selection.append(f"linked to {len(wanted) - len(unlinked_ids)} of {len(wanted)} requested requirement IDs")
+    if folder:
+        selection.append(f"under folder {folder!r}")
+    if unlinked:
+        selection.append("with no requirement ID")
+    what = f" ({'; '.join(selection)})" if selection else ""
+    summary = f"{len(rendered)} of {len(index.cases)} cases in suite {suite_id}{what}"
+    if not include_steps:
+        summary += "; steps left out"
+
+    if save_to:
+        saved_to, size = _write_run_file(
+            save_to,
+            {
+                "kind": "test_cases",
+                "source": "testrail",
+                "written_at": _utc_now(),
+                "project_id": project_id,
+                "suite_id": suite_id,
+                "requirement_field": field,
+                "filter": {"requirement_ids": list(wanted.values()), "section": folder, "unlinked": unlinked},
+                "summary": summary,
+                "warnings": warnings,
+                "cases_scanned": len(index.cases),
+                "count": len(rendered),
+                "test_cases": rendered,
+            },
+        )
+        return json.dumps(
+            {
+                "requirement_field": field,
+                "field_found": field_found,
+                "suite_id": suite_id,
+                "cases_scanned": len(index.cases),
+                "matched": len(rendered),
+                "saved_to": saved_to,
+                "bytes": size,
+                "unlinked_ids": unlinked_ids,
+                "summary": f"{summary}; written to {saved_to}",
+                "warnings": warnings,
+            },
+            indent=2,
+        )
+
+    start = min(max(offset, 0), len(rendered))
+    page: list[dict[str, Any]] = []
+    used = 0
+    for case in rendered[start:]:
+        size = len(json.dumps(case, ensure_ascii=False))
+        if page and used + size > _CASES_CHAR_BUDGET:
+            break
+        page.append(case)
+        used += size
+    end = start + len(page)
+    next_offset = end if end < len(rendered) else None
+    if start or next_offset is not None:
+        resume = f"call again with offset={next_offset}" if next_offset is not None else "last page"
+        summary += f"; page {start + 1}-{end} of {len(rendered)}, {resume}"
+    return json.dumps(
+        {
+            "requirement_field": field,
+            "field_found": field_found,
+            "suite_id": suite_id,
+            "cases_scanned": len(index.cases),
+            "matched": len(rendered),
+            "offset": start,
+            "next_offset": next_offset,
+            "test_cases": page,
+            "unlinked_ids": unlinked_ids,
+            "summary": summary,
+            "warnings": warnings,
+        },
+        indent=2,
+        ensure_ascii=False,
     )
 
 

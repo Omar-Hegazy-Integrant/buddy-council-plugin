@@ -1119,6 +1119,94 @@ class BackgroundRead(ServerTestCase):
         self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 8)
 
 
+class SaveToRunFolder(ServerTestCase):
+    """With save_to, the whole result goes to a file in the run folder and the response stays small."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.run_dir = Path(self.tmp.name, "proj", ".buddy-council", "runs", "20261012-coverage")
+        self.run_dir.mkdir(parents=True)
+        self.target = str(self.run_dir / "requirements.json")
+
+    async def asyncTearDown(self):
+        self.tmp.cleanup()
+        await super().asyncTearDown()
+
+    async def test_every_requirement_is_written_and_none_returned(self):
+        with mock.patch.object(server, "_PAGE_CHAR_BUDGET", 900):
+            payload = await self.requirements(save_to=self.target, offset=3)
+        self.assertNotIn("requirements", payload)
+        self.assertNotIn("next_offset", payload)
+        self.assertEqual((payload["total"], payload["saved_to"]), (8, str(self.run_dir.resolve() / "requirements.json")))
+        self.assertIn("8 written to", payload["summary"])
+        written = json.loads(Path(self.target).read_text())
+        self.assertEqual((written["kind"], written["source"], written["count"]), ("requirements", "jama", 8))
+        self.assertEqual([r["id"] for r in written["requirements"]], [f"CWA-REQ-{n}" for n in range(1, 9)])
+        self.assertEqual(written["scope"]["kind"], "all")
+        self.assertEqual(payload["bytes"], Path(self.target).stat().st_size)
+        self.assertEqual(Path(self.target).stat().st_mode & 0o777, 0o600)
+
+    async def test_a_scoped_read_saves_only_the_scope(self):
+        await self.requirements(scope="Vitals", save_to=self.target)
+        written = json.loads(Path(self.target).read_text())
+        self.assertEqual([r["id"] for r in written["requirements"]], ["CWA-REQ-3", "CWA-REQ-4"])
+        self.assertEqual(written["scope"]["kind"], "feature")
+
+    async def test_the_file_records_the_arguments_it_was_read_with(self):
+        await self.requirements(root_ids=[ROOT], feature_depth=2, field_mapping={"status": "Status"}, save_to=self.target)
+        args = json.loads(Path(self.target).read_text())["args"]
+        self.assertEqual(
+            args,
+            {"item_type_filter": [], "item_type_exclude": NON_REQUIREMENT_TYPES, "root_ids": [ROOT], "exclude_ids": [],
+             "feature_depth": 2, "feature_item_type": "Folder", "field_mapping": {"status": "Status"}},
+        )
+
+    async def test_paths_outside_a_run_folder_are_refused_before_jama_is_read(self):
+        outside = Path(self.tmp.name, "proj", "requirements.json")
+        bad = [
+            "requirements.json",
+            str(outside),
+            str(self.run_dir / "Requirements.json"),
+            str(self.run_dir / "requirements.txt"),
+            str(self.run_dir / ".." / "x" / "requirements.json"),
+            str(self.run_dir.parent / "missing-run" / "requirements.json"),
+            str(Path(self.tmp.name, "proj", ".buddy-council", "requirements.json")),
+        ]
+        for path in bad:
+            with self.assertRaises(server.JamaError, msg=path):
+                await self.requirements(save_to=path)
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 0)
+        self.assertFalse(outside.exists())
+
+    async def test_a_symlink_is_never_followed(self):
+        victim = Path(self.tmp.name, "victim.txt")
+        victim.write_text("keep me")
+        Path(self.target).symlink_to(victim)
+        with self.assertRaises(server.JamaError):
+            await self.requirements(save_to=self.target)
+        elsewhere = Path(self.tmp.name, "elsewhere")
+        elsewhere.mkdir()
+        linked_run = self.run_dir.parent / "linked-run"
+        linked_run.symlink_to(elsewhere)
+        with self.assertRaises(server.JamaError):
+            await self.requirements(save_to=str(linked_run / "requirements.json"))
+        self.assertEqual(victim.read_text(), "keep me")
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
+    async def test_nothing_is_written_while_the_project_is_still_loading(self):
+        self.fake.hold = asyncio.Event()
+        with mock.patch.object(server, "_PAGE_SIZE", 2), mock.patch.object(server, "_SNAPSHOT_WAIT_SECONDS", 0.01):
+            payload = await self.requirements(save_to=self.target)
+            self.assertTrue(payload["loading"])
+            self.assertFalse(Path(self.target).exists())
+            self.fake.hold.set()
+            await asyncio.wait([load.task for load in server._STATE.loads.values()])
+            payload = await self.requirements(save_to=self.target)
+        self.assertEqual(payload["total"], 8)
+        self.assertTrue(Path(self.target).exists())
+
+
 class SetupCheck(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()

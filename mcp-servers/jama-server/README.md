@@ -100,6 +100,11 @@ hundreds of kilobytes, so the server is built around request count and latency:
   would pass ~25 s, and returns `next_offset` for the rest. `include_relationships=false` skips the two
   traceability requests per item, which are most of the cost.
 - Item types (the field definitions, several large pages) are cached for an hour.
+- **`save_to` keeps large results out of the conversation.** `jama_get_requirements` with `save_to` writes
+  every requirement in scope to a JSON file in a run folder and answers with the counts and the path. The
+  path must be a `.json` file directly inside an existing `<project>/.buddy-council/runs/<run>/` folder, never
+  a symbolic link; the server creates no directory. This is its only local side effect — nothing is ever
+  written to Jama.
 - **Each result is sent once, as text.** Every tool sets `structured_output=False`; otherwise FastMCP adds a
   structured copy of the same JSON, Copilot CLI hands the model both, and every response doubles. The test
   suite fails if a tool is added without it.

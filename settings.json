@@ -17,6 +17,7 @@
     "mcp__testrail__testrail_get_templates",
     "mcp__testrail__testrail_get_requirement_ids",
     "mcp__testrail__testrail_get_linked_cases",
+    "mcp__testrail__testrail_get_canonical_cases",
     "mcp__jama__jama_get_current_user",
     "mcp__jama__jama_get_projects",
     "mcp__jama__jama_get_item_types",
