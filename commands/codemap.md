@@ -1,5 +1,5 @@
 ---
-description: Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations.
+description: "Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations."
 ---
 
 # /bc:codemap — Map a Feature to the Codebase
