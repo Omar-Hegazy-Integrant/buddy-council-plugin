@@ -5,6 +5,7 @@ A run folder, ``<project>/.buddy-council/runs/<run-id>/``, carries one analysis 
 step to the analysis as files, so the data itself never passes through a model:
 
   requirements.json  written by the Jama server (``save_to``) or the Excel parser
+  background.json    lookups on Jama only: the rest of the project, context for answers (``save_to``)
   test_cases.json    written by the TestRail server (``save_to``)
   docs/, docs.json   GitHub docs the requirements link to (``enrich``, gh CLI strategy)
   links.json         requirement <-> test case links, untested, orphans, stranded links (``link``)
@@ -18,7 +19,8 @@ Subcommands, each printing one JSON object to stdout:
   link   --run DIR                                     cross-link, write links.json and the bundles
   search --run DIR --query TEXT [--concept 'a|b|c']... [--feature TEXT] [--top N]
                                                        rank the run against an ask (BM25), write search/*.md
-  show   --run DIR --ids 'ID, ID'                      print those requirements and test cases (Markdown)
+  show   --run DIR --ids 'ID, ID'                      print those requirements, background items, and test
+                                                       cases (Markdown)
   recent --project DIR [--max-age-minutes N]           the newest complete, verified run of the whole scope
 
 Nothing here talks to Jama, TestRail, or Jira, and nothing is written outside the run folder. ``enrich``
@@ -147,6 +149,7 @@ def cmd_new(project_text: str, command: str, scope: str, keep: int = KEEP_RUNS) 
     return {
         "run_dir": str(run),
         "requirements": str(run / "requirements.json"),
+        "background": str(run / "background.json"),
         "test_cases": str(run / "test_cases.json"),
         "pruned": pruned,
     }
@@ -563,8 +566,12 @@ def cmd_link(run_text: str) -> dict[str, Any]:
             missing_by_req.setdefault(key(rid), []).append(doc)
 
     config = read_json(run.parent.parent / "sources.json") or {}
-    mismatches = verify_run(config, manifest, requirements_data, cases_data)
-    lines, missing, enrichment = report_lines(config, requirements_data, requirements, cases_data, cases, docs_data)
+    background_data = read_json(run / "background.json")
+    expect_background = manifest.get("command") == "lookup" and (config.get("requirements") or {}).get("provider") == "jama"
+    mismatches = verify_run(config, manifest, requirements_data, cases_data, background_data)
+    lines, missing, enrichment = report_lines(
+        config, requirements_data, requirements, cases_data, cases, docs_data, background_data, expect_background
+    )
 
     bundles = run / "bundles"
     bundles.mkdir(mode=0o700, exist_ok=True)
@@ -610,6 +617,8 @@ def cmd_link(run_text: str) -> dict[str, Any]:
         "unknown_linked_ids": len(unknown),
         "features": len(features),
     }
+    if background_data is not None:
+        counts["background"] = len(requirement_list(background_data))
     readiness = f'Readiness: {len(by_id)} requirements, {len(in_scope)} test cases for scope "{scope_text or "all"}"'
     lines.append(readiness)
     if unknown:
@@ -878,7 +887,23 @@ def same_scope(a: Any, b: Any) -> bool:
     return norm(a) == norm(b)
 
 
-def verify_run(config: dict[str, Any], manifest: dict[str, Any], requirements_data: Any, cases_data: Any) -> list[str]:
+def jama_arg_problems(req: dict[str, Any], got: dict[str, Any], what: str) -> list[str]:
+    """The selection arguments a Jama file was read with that differ from the config."""
+    problems = []
+    for arg, expected, actual in (
+        ("item_type_filter", names(req.get("item_type_filter")), names(got.get("item_type_filter"))),
+        ("item_type_exclude", names(req.get("item_type_exclude")), names(got.get("item_type_exclude"))),
+        ("root_ids", id_list(req.get("roots")), id_list(got.get("root_ids"))),
+        ("exclude_ids", id_list(req.get("exclude")), id_list(got.get("exclude_ids"))),
+    ):
+        if expected != actual:
+            problems.append(f"{what} were read with {arg}={actual or 'none'}, but the config says {expected or 'none'}.")
+    return problems
+
+
+def verify_run(
+    config: dict[str, Any], manifest: dict[str, Any], requirements_data: Any, cases_data: Any, background_data: Any = None,
+) -> list[str]:
     """What in the run differs from the project's config — each entry means the collector called a tool wrongly."""
     problems: list[str] = []
     req = config.get("requirements") or {}
@@ -893,14 +918,7 @@ def verify_run(config: dict[str, Any], manifest: dict[str, Any], requirements_da
         inference = req.get("feature_inference") or {}
         if requirements_data.get("project_id") != req.get("project_id"):
             problems.append(f"requirements were read from Jama project {requirements_data.get('project_id')}, not {req.get('project_id')}.")
-        for arg, expected, actual in (
-            ("item_type_filter", names(req.get("item_type_filter")), names(got.get("item_type_filter"))),
-            ("item_type_exclude", names(req.get("item_type_exclude")), names(got.get("item_type_exclude"))),
-            ("root_ids", id_list(req.get("roots")), id_list(got.get("root_ids"))),
-            ("exclude_ids", id_list(req.get("exclude")), id_list(got.get("exclude_ids"))),
-        ):
-            if expected != actual:
-                problems.append(f"requirements were read with {arg}={actual or 'none'}, but the config says {expected or 'none'}.")
+        problems += jama_arg_problems(req, got, "requirements")
         if req.get("roots") and int(got.get("feature_depth") or 1) != int(inference.get("depth") or 1):
             problems.append(f"requirements were read with feature_depth={got.get('feature_depth')}, but the config says {inference.get('depth') or 1}.")
         if str(got.get("feature_item_type") or "Folder").casefold() != str(inference.get("folder_item_type") or "Folder").casefold():
@@ -912,6 +930,14 @@ def verify_run(config: dict[str, Any], manifest: dict[str, Any], requirements_da
         scope = (requirements_data.get("scope") or {}).get("input")
         if not same_scope(scope, manifest.get("scope")):
             problems.append(f"requirements were read for scope {scope!r}, but this run is for {manifest.get('scope')!r}.")
+    if background_data is not None and provider == "jama":
+        if not (isinstance(background_data, dict) and background_data.get("source") == "jama"
+                and background_data.get("kind") == "background"):
+            problems.append("background.json was not written by the Jama server with background=true.")
+        else:
+            if background_data.get("project_id") != req.get("project_id"):
+                problems.append(f"background was read from Jama project {background_data.get('project_id')}, not {req.get('project_id')}.")
+            problems += jama_arg_problems(req, background_data.get("args") or {}, "background items")
     tests = config.get("test_cases") or {}
     if not tests:
         return problems
@@ -935,6 +961,7 @@ def verify_run(config: dict[str, Any], manifest: dict[str, Any], requirements_da
 def report_lines(
     config: dict[str, Any], requirements_data: Any, requirements: list[dict[str, Any]],
     cases_data: Any, cases: list[dict[str, Any]], docs_data: dict[str, Any],
+    background_data: Any = None, expect_background: bool = False,
 ) -> tuple[list[str], list[str], dict[str, Any]]:
     """The Fetch and Enrichment lines, from the files the servers and scripts wrote — not from any model."""
     lines: list[str] = []
@@ -944,6 +971,15 @@ def report_lines(
         lines.append(f"Fetch: requirements → {len(requirements)} from Jama project {requirements_data.get('project_id')} ({summary})")
     else:
         lines.append(f"Fetch: requirements → {len(requirements)} from the Excel export")
+    if isinstance(background_data, dict):
+        summary = background_data.get("summary") or ""
+        lines.append(
+            f"Fetch: background → {len(requirement_list(background_data))} items from the rest of Jama project "
+            f"{background_data.get('project_id')}, context for answers, never counted ({summary})"
+        )
+    elif expect_background:
+        lines.append("Fetch: background → FAILED — no background file in the run")
+        missing.append("background")
     if cases_data is None:
         lines.append("Fetch: test cases → FAILED — no test case file in the run")
         missing.append("test cases")
@@ -982,6 +1018,7 @@ SEARCH_TOP = 25  # requirements written out in full
 SEARCH_NEXT = 25  # further candidates listed by ID and title
 SEARCH_CASES = 10
 SEARCH_DOCS = 5
+SEARCH_BACKGROUND = 10
 MAX_SHOW_IDS = 20
 MAX_CONCEPTS = 8
 SNIPPET_CHARS = 220
@@ -1098,6 +1135,14 @@ def case_record(item: dict[str, Any]) -> Record:
     ]
     texts = [str(item.get("description") or ""), *steps]  # the title is shown anyway; the snippet adds what it doesn't say
     return Record("test_case", str(item.get("id") or ""), item, fields, texts)
+
+
+def background_record(item: dict[str, Any]) -> Record:
+    """An item from the rest of the project, weighed like a requirement, with its text for a snippet."""
+    record = requirement_record(item)
+    record.kind = "background"
+    record.texts = [str(item.get("description") or ""), str(item.get("rationale") or "")]
+    return record
 
 
 def parse_concepts(concept_args: list[str], query: str) -> list[dict[str, Any]]:
@@ -1323,6 +1368,8 @@ def cmd_search(run_text: str, query: str, concept_args: list[str], feature: str 
                 text = path.read_text(encoding="utf-8")
                 doc_records.append(Record("doc", name, doc, [(1.0, text)], [text]))
     doc_hits, _ = rank(doc_records, concepts)
+    background_records = [background_record(item) for item in requirement_list(read_json(run / "background.json"))]
+    background_hits, _ = rank(background_records, concepts)
 
     shown_ranked = ranked[:top]
     rank_of = {key(hit["record"].id): n for n, hit in enumerate(shown_ranked, start=1)}
@@ -1386,6 +1433,26 @@ def cmd_search(run_text: str, query: str, concept_args: list[str], feature: str 
             snippet = best_line(hit["record"].texts, concepts)
             blocks.append((line + (f"\n  > {snippet}" if snippet else "") + "\n", "## Linked docs that mention it (continued)\n\n"))
         blocks.append(("\n", ""))
+    if background_hits:
+        blocks.append((
+            f"## Elsewhere in the project — background, not requirements in scope: {len(background_hits)} match, "
+            f"the top {min(len(background_hits), SEARCH_BACKGROUND)} shown\n\n",
+            "",
+        ))
+        for hit in background_hits[:SEARCH_BACKGROUND]:
+            item = hit["record"].item
+            raw = item.get("raw_fields") or {}
+            facts = [str(raw["item_type"])] if raw.get("item_type") else []
+            if item.get("status"):
+                facts.append(f"Status: {item['status']}")
+            if location_of(item):
+                facts.append(f"Folder: {location_of(item)}")
+            facts.append(f"matches: {matched_text(hit)}")
+            line = f"- {title_of(item)} · " + " · ".join(facts)
+            snippet = best_line(hit["record"].texts, concepts)
+            link = f"\n  Link: {raw['url']}" if raw.get("url") else ""
+            blocks.append((line + (f"\n  > {snippet}" if snippet else "") + link + "\n", "## Elsewhere in the project (continued)\n\n"))
+        blocks.append(("\n", ""))
     following = ranked[top:top + SEARCH_NEXT]
     if following:
         blocks.append(("## Next candidates — open any with show\n\n", ""))
@@ -1409,9 +1476,13 @@ def cmd_search(run_text: str, query: str, concept_args: list[str], feature: str 
     files = []
     for p, body in enumerate(parts, start=1):
         title = f"# Search {number}: {one_line(query)}" + (f" — part {p} of {len(parts)}" if len(parts) > 1 else "")
+        searched = f"{len(in_scope)} requirements, {len(scoped_cases)} test cases, and {len(doc_records)} doc parts"
+        if background_records:
+            searched = (f"{len(in_scope)} requirements, {len(scoped_cases)} test cases, {len(doc_records)} doc parts, "
+                        f"and {len(background_records)} background items elsewhere in the project")
         header = (
             f"{title}\nConcepts: {concept_line}\n"
-            f"Searched {len(in_scope)} requirements, {len(scoped_cases)} test cases, and {len(doc_records)} doc parts{scope_note}. "
+            f"Searched {searched}{scope_note}. "
             f"Requirements matching every concept: {all_concepts} · matching at least one: {len(ranked)} · shown in full: {len(shown_ranked)}\n\n"
         )
         name = f"search/{number:02d}-{search_slug(query)}-{p}.md"
@@ -1421,12 +1492,19 @@ def cmd_search(run_text: str, query: str, concept_args: list[str], feature: str 
         "search": number,
         "files": files,
         "concepts": [{"name": c["name"], "wordings": [a["label"] for a in c["alternatives"]]} for c in concepts],
-        "searched": {"requirements": len(in_scope), "test_cases": len(scoped_cases), "doc_parts": len(doc_records)},
-        "matched": {"requirements": len(ranked), "every_concept": all_concepts, "test_cases": len(case_hits), "doc_parts": len(doc_hits)},
+        "searched": {"requirements": len(in_scope), "test_cases": len(scoped_cases), "doc_parts": len(doc_records),
+                     "background": len(background_records)},
+        "matched": {"requirements": len(ranked), "every_concept": all_concepts, "test_cases": len(case_hits), "doc_parts": len(doc_hits),
+                    "background": len(background_hits)},
         "top": [
             {"rank": n, "id": hit["record"].id, "score": round(hit["score"], 1), "matches": [name for name, _ in hit["matched"]],
              "feature": hit["record"].item.get("feature") or NO_FEATURE}
             for n, hit in enumerate(shown_ranked[:10], start=1)
+        ],
+        "top_background": [
+            {"id": hit["record"].id, "score": round(hit["score"], 1), "matches": [name for name, _ in hit["matched"]],
+             "folder": location_of(hit["record"].item)}
+            for hit in background_hits[:5]
         ],
         "by_feature": [{"feature": name, "count": g["count"]} for name, g in sorted(groups.items(), key=lambda kv: -kv[1]["count"])],
         "unmatched_wordings": unmatched,
@@ -1436,7 +1514,7 @@ def cmd_search(run_text: str, query: str, concept_args: list[str], feature: str 
 
 
 def cmd_show(run_text: str, ids_text: str) -> str:
-    """Markdown for the requested requirements and test cases, verbatim."""
+    """Markdown for the requested requirements, background items, and test cases, verbatim."""
     run = run_folder(run_text)
     wanted = [t for t in re.split(r"[\s,;]+", ids_text or "") if t][:MAX_SHOW_IDS]
     if not wanted:
@@ -1444,6 +1522,9 @@ def cmd_show(run_text: str, ids_text: str) -> str:
     requirements: dict[str, dict[str, Any]] = {}
     for item in requirement_list(read_json(run / "requirements.json")):
         requirements.setdefault(key(item.get("id")), item)
+    background: dict[str, dict[str, Any]] = {}
+    for item in requirement_list(read_json(run / "background.json")):
+        background.setdefault(key(item.get("id")), item)
     cases = case_list(read_json(run / "test_cases.json"))
     cases_by_id = {key(c.get("id")): c for c in cases}
     tested_by: dict[str, list[dict[str, Any]]] = {}
@@ -1460,6 +1541,14 @@ def cmd_show(run_text: str, ids_text: str) -> str:
             if url:
                 lines.append(f"Link: {url}")
             lines.append(case_titles(tested_by.get(key(item.get("id")), []), limit=20))
+            out.append("\n".join(lines).rstrip() + "\n")
+            continue
+        item = background.get(key(raw))
+        if item is not None:
+            lines = [f"## {title_of(item)} — background, not a requirement in scope", *requirement_body(item, {}, {})]
+            url = (item.get("raw_fields") or {}).get("url")
+            if url:
+                lines.append(f"Link: {url}")
             out.append("\n".join(lines).rstrip() + "\n")
             continue
         number = re.fullmatch(r"(?i)(?:tc-?|c)?(\d+)", raw)
@@ -1492,7 +1581,10 @@ def cmd_recent(project_text: str, max_age_minutes: int = RECENT_MINUTES) -> dict
             links = read_json(folder / "links.json") or {}
             if (links.get("scope") or {}).get("mode") != "all" or links.get("missing") or not links.get("lines"):
                 continue
-            if verify_run(config, manifest, read_json(folder / "requirements.json"), read_json(folder / "test_cases.json")):
+            background = read_json(folder / "background.json")
+            if (config.get("requirements") or {}).get("provider") == "jama" and background is None:
+                continue  # a lookup on Jama searches the rest of the project too
+            if verify_run(config, manifest, read_json(folder / "requirements.json"), read_json(folder / "test_cases.json"), background):
                 continue
         except (RunError, ValueError, TypeError):
             continue
@@ -1520,7 +1612,7 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("--concept", action="append", default=[], help="one idea of the ask: 'own words|other wording|...'")
     search.add_argument("--feature", default="", help="only requirements in folders whose path contains these words")
     search.add_argument("--top", type=int, default=SEARCH_TOP, help="requirements written out in full (5-60)")
-    show = sub.add_parser("show", help="print requirements and test cases by ID, as Markdown")
+    show = sub.add_parser("show", help="print requirements, background items, and test cases by ID, as Markdown")
     show.add_argument("--run", required=True)
     show.add_argument("--ids", required=True)
     recent = sub.add_parser("recent", help="the newest complete, verified run of the whole scope")

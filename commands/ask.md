@@ -73,8 +73,10 @@ specified / covered / existing", "which requirements cover / mention / talk abou
 - "In the alerts requirements, is snoozing covered?"
 
 **Action**: Follow `${CLAUDE_PLUGIN_ROOT}/skills/lookup-requirements/SKILL.md`, passing the ask verbatim and
-any feature or area the user named. A question about a requirement the user names by ID, or a request to list
-or summarize a named feature, is QA; a question about the test coverage of requirements is COVERAGE.
+any feature or area the user named. With Jama, the answer also draws on the rest of the project — system
+requirements, risks, labeling, standards, design — as background, which never counts as a requirement in
+scope. A question about a requirement the user names by ID, or a request to list or summarize a named
+feature, is QA; a question about the test coverage of requirements is COVERAGE.
 
 ### Intent: QA (General Question)
 **Trigger phrases**: "what does", "tell me about", "which test cases", "list", "summarize", "describe", "how many", "what is", "show me", "explain"

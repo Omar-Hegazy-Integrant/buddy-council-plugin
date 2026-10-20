@@ -93,6 +93,7 @@ _MAX_ERROR_CHARS = 500
 _MAX_ANCESTOR_DEPTH = 64
 _MAX_RELATED_LOOKUPS = 100
 _MAX_LISTED_FEATURES = 50
+_MAX_BACKGROUND_TYPES_LISTED = 5
 # Serialized requirements per jama_get_requirements response (~15k tokens), so a page always fits
 # under the clients' MCP output caps (Claude Code's default is 25k tokens). Larger results page via offset.
 _PAGE_CHAR_BUDGET = 60_000
@@ -1130,6 +1131,28 @@ def _select_requirements(tree: Tree, item_type_exclude: list[str], item_type_fil
     return Selection(ids, excluded, filtered, outside)
 
 
+def _select_background(tree: Tree, item_type_exclude: list[str], item_type_filter: list[str]) -> list[int]:
+    """The rest of the project: every item the requirements leave out — outside the roots, or of another item
+    type inside them — except excluded item types and excluded subtrees, which stay out of everything."""
+    exclude = {_norm(name) for name in item_type_exclude if _norm(name)}
+    include = {_norm(name) for name in item_type_filter if _norm(name)}
+    ids: list[int] = []
+    for iid in tree.order:
+        if tree.is_container(iid):
+            continue
+        ancestors = tree.ancestors(iid)
+        if tree.exclude_set and (iid in tree.exclude_set or tree.exclude_set.intersection(ancestors)):
+            continue
+        item_type = tree.types.get(tree.items[iid].get("itemType"))
+        if exclude and _type_matches(item_type, exclude):
+            continue
+        inside = not tree.level_mode or bool(tree.root_set.intersection(ancestors))
+        if inside and (not include or _type_matches(item_type, include)):
+            continue  # a requirement in scope
+        ids.append(iid)
+    return ids
+
+
 @dataclass
 class ScopeResult:
     ids: list[int]
@@ -1345,8 +1368,13 @@ def _render_requirement(
     include_custom_fields: bool,
     base_url: str,
     project_id: int | None,
+    background: bool = False,
 ) -> dict[str, Any]:
-    """One Jama item in the plugin's canonical requirement schema (same shape as the Excel parser)."""
+    """One Jama item in the plugin's canonical requirement schema (same shape as the Excel parser).
+
+    A background item — the rest of the project, never a requirement in scope — has type "background", its
+    nearest folder as `feature`, and always carries `raw_fields.folder_path`.
+    """
     item = tree.items[iid]
     fields = item.get("fields") or {}
     item_type = tree.types.get(item.get("itemType"))
@@ -1367,7 +1395,7 @@ def _render_requirement(
         "modified_date": item.get("modifiedDate") or fields.get("modifiedDate"),
         "url": f"{base_url}/perspective.req#/items/{iid}?projectId={project}",
     }
-    if tree.level_mode:
+    if tree.level_mode or background:
         nearest = tree.nearest_container(iid)
         raw["folder_path"] = tree.path(nearest) if nearest is not None else ""
     if include_custom_fields:
@@ -1385,7 +1413,7 @@ def _render_requirement(
             raw[f"{label} ({key})" if label in raw else label] = rendered
 
     requirement: dict[str, Any] = {
-        "type": "requirement",
+        "type": "background" if background else "requirement",
         "id": _document_key(item) or str(iid),
         "title": _as_text(_render_value(fields.get("name"), None)),
         "description": html_to_text(fields.get("description")),
@@ -2089,6 +2117,7 @@ async def jama_get_requirements(
     refresh: bool = False,
     offset: int = 0,
     save_to: str = "",
+    background: bool = False,
 ) -> str:
     """Fetch a Jama project's requirements in the plugin's canonical schema, optionally scoped to one feature.
 
@@ -2098,6 +2127,14 @@ async def jama_get_requirements(
     and each one's `feature` is the container `feature_depth` levels below its root —
     deeper folders roll up into it, and `raw_fields.folder_path` keeps the exact
     location. Folders, sets, and components themselves are never returned.
+
+    With background=true, the same arguments return the rest of the project instead:
+    every item those requirements leave out — outside the roots, or of another item
+    type inside them — minus item_type_exclude types and exclude_ids subtrees. Each
+    has type "background", its nearest folder as `feature`, and its location in
+    `raw_fields.folder_path`. It is context for answering questions (system
+    requirements, risks, standards, design), never a requirement in scope. scope is
+    ignored: background is always read whole.
 
     Large results come in pages sized to fit an MCP response. While the result
     carries `next_offset`, call again with the same arguments and
@@ -2124,8 +2161,10 @@ async def jama_get_requirements(
         offset: Position to resume from — the previous page's `next_offset`.
         save_to: Write every requirement in scope to this file instead of returning
             them — an absolute path inside the run folder the plugin's collect step
-            created: <project>/.buddy-council/runs/<run>/requirements.json. The
-            response then carries only `saved_to`, the counts, and the summary.
+            created: <project>/.buddy-council/runs/<run>/requirements.json (or
+            background.json with background=true). The response then carries only
+            `saved_to`, the counts, and the summary.
+        background: Return the rest of the project — see above — instead of the requirements.
 
     A large project takes Jama a minute or more to send. If the read is still
     running when this call has to answer, the result is {loading: true, ...}
@@ -2146,8 +2185,20 @@ async def jama_get_requirements(
     types = await _item_types(refresh)
     tree = Tree(snapshot.items, types, feature_item_type, root_ids, feature_depth, exclude_ids)
     selection = _select_requirements(tree, item_type_exclude or [], item_type_filter or [])
-    tree.assign_labels({tree.feature_of(iid) for iid in selection.ids})
-    scoped = _apply_scope(tree, selection.ids, scope)
+    if background:
+        # Wherever a background item sits, its feature is its nearest folder — not a level below a root.
+        render_tree = Tree(snapshot.items, types, feature_item_type)
+        ignored_scope = scope.strip() and scope.strip().casefold() != "all"
+        scoped = ScopeResult(
+            _select_background(tree, item_type_exclude or [], item_type_filter or []),
+            "background",
+            [],
+            f"scope {scope.strip()!r} ignored: background is always read whole." if ignored_scope else None,
+        )
+    else:
+        render_tree = tree
+        tree.assign_labels({tree.feature_of(iid) for iid in selection.ids})
+        scoped = _apply_scope(tree, selection.ids, scope)
     mapping, ignored = _field_mapping(field_mapping)
     start = min(max(offset, 0), len(scoped.ids))
     remaining = scoped.ids[start:]
@@ -2156,7 +2207,9 @@ async def jama_get_requirements(
     requirements: list[dict[str, Any]] = []
     used = 0
     for iid in remaining:
-        requirement = _render_requirement(tree, iid, mapping, include_custom_fields, base_url, project_id)
+        requirement = _render_requirement(
+            render_tree, iid, mapping, include_custom_fields, base_url, project_id, background=background
+        )
         size = 0 if save_to else len(_dump(requirement))
         if requirements and used + size > _PAGE_CHAR_BUDGET:
             break
@@ -2171,14 +2224,23 @@ async def jama_get_requirements(
     if ignored:
         warnings.append(f"Ignored field_mapping keys {ignored}; only {list(_MAPPABLE_FIELDS)} can be mapped.")
     feature_count = len({tree.feature_of(iid) for iid in selection.ids} - {None})
-    parts = [f"{len(selection.ids)} requirements across {feature_count} features"]
-    if selection.excluded:
-        parts.append(f"{selection.excluded} items skipped by item_type_exclude")
-    if selection.filtered:
-        parts.append(f"{selection.filtered} items dropped by item_type_filter")
-    if selection.outside:
-        parts.append(f"{selection.outside} items outside the requirements root ignored")
-    if scoped.kind != "all":
+    if background:
+        by_type = Counter(_type_display(types.get(tree.items[iid].get("itemType")), "?") for iid in scoped.ids)
+        listed = ", ".join(f"{name} {count}" for name, count in by_type.most_common(_MAX_BACKGROUND_TYPES_LISTED))
+        more = ", …" if len(by_type) > _MAX_BACKGROUND_TYPES_LISTED else ""
+        parts = [
+            f"{len(scoped.ids)} background items — the rest of the project, beside the {len(selection.ids)} "
+            f"requirements in scope" + (f" ({listed}{more})" if listed else "")
+        ]
+    else:
+        parts = [f"{len(selection.ids)} requirements across {feature_count} features"]
+        if selection.excluded:
+            parts.append(f"{selection.excluded} items skipped by item_type_exclude")
+        if selection.filtered:
+            parts.append(f"{selection.filtered} items dropped by item_type_filter")
+        if selection.outside:
+            parts.append(f"{selection.outside} items outside the requirements root ignored")
+    if scoped.kind not in ("all", "background"):
         matched = f": {'; '.join(scoped.matched)}" if scoped.matched else ""
         parts.append(f"scope '{scope.strip()}' ({scoped.kind}{matched}) -> {len(scoped.ids)} matched")
     if start or next_offset is not None:
@@ -2190,7 +2252,7 @@ async def jama_get_requirements(
         saved_to, size = _write_run_file(
             save_to,
             {
-                "kind": "requirements",
+                "kind": "background" if background else "requirements",
                 "source": "jama",
                 "written_at": _utc_now(),
                 "fetched_at": snapshot.fetched_at,
@@ -2205,6 +2267,7 @@ async def jama_get_requirements(
                     "feature_depth": feature_depth,
                     "feature_item_type": feature_item_type,
                     "field_mapping": field_mapping or {},
+                    "background": background,
                 },
                 "summary": "; ".join(parts),
                 "warnings": warnings,
@@ -2427,16 +2490,19 @@ _MAX_ANCHORS = 5000
 _MAX_PREVIEW_FEATURES = 200
 _MAX_CANDIDATES = 12
 _MAX_OUTLIERS_LISTED = 20
+_MAX_ELSEWHERE_LISTED = 5
+_MAX_BACKGROUND_TYPES_PREVIEWED = 8
 
 
 def _choose_roots(tree: Tree, counts: Counter, total: int) -> list[int]:
-    """The smallest containers holding nearly all linked requirements.
+    """The smallest containers holding nearly all linked requirements — where the links concentrate.
 
     Walk down from the project while a single child container holds at least 95% of the links below the
-    current node. A Set or Folder reached that way is the root: its top-level folders become the
+    current node. A Set or Folder reached that way is where they concentrate: its top-level folders are the
     features. Above set level — the project itself, or a Component, which groups different documents —
     split instead into the few children that together hold 95% of the links, each walked down the same
-    way. Links outside the chosen roots are outliers to report, never a reason to widen a root.
+    way. Links outside the chosen containers are outliers to report, never a reason to widen one.
+    The proposal then widens each to its whole document (`_widen_to_documents`).
     """
 
     def linked_children(node: int | None) -> list[int]:
@@ -2462,6 +2528,37 @@ def _choose_roots(tree: Tree, counts: Counter, total: int) -> list[int]:
         return [] if node is None else [node]
 
     return resolve(None, total) if total else []
+
+
+def _document_of(tree: Tree, container: int) -> int:
+    """The whole document a container belongs to: its Set, itself when it is one — Jama keeps a document, and
+    its ID prefix, in a Set. With no Set above it, the top-most container below the Components."""
+    chain = [container] + [a for a in tree.ancestors(container) if tree.is_container(a)]
+    found = next((c for c in chain if tree.kind(c) == "set"), None)
+    if found is not None:
+        return found
+    below_components = [c for c in chain if tree.kind(c) != "component"]
+    return below_components[-1] if below_components else container
+
+
+def _widen_to_documents(tree: Tree, anchors: list[int], counts: Counter, feature_depth: int) -> tuple[list[int], int]:
+    """The whole documents holding the anchors as roots, and the feature depth that keeps the anchors' features.
+
+    A document's other chapters come into scope with it — requirements without a linked case show as
+    untested instead of vanishing. Features stay the folders `feature_depth` levels below where the links
+    concentrate: the depth is counted from the document now, so the lead anchor's own levels are added.
+    """
+    roots: list[int] = []
+    for anchor in anchors:
+        document = _document_of(tree, anchor)
+        if document not in roots:
+            roots.append(document)
+    roots = [r for r in roots if not any(other in tree.ancestors(r) for other in roots if other != r)]
+    lead = max(anchors, key=lambda a: counts[a])  # the first of equals
+    above = [a for a in tree.ancestors(lead) if tree.is_container(a)]
+    document = _document_of(tree, lead)
+    steps = above.index(document) + 1 if document in above else 0
+    return roots, steps + max(1, int(feature_depth or 1))
 
 
 def _parse_keys(values: list[str] | str) -> list[str]:
@@ -2522,7 +2619,14 @@ def _scope_proposal(
         for ancestor in tree.ancestors(iid):
             if tree.is_container(ancestor):
                 counts[ancestor] += 1
-    roots = [int(r) for r in root_ids] if root_ids else _choose_roots(tree, counts, len(linked))
+    concentrated: list[int] = []
+    if root_ids:
+        roots, depth = [int(r) for r in root_ids], max(1, int(feature_depth or 1))
+    else:
+        concentrated = _choose_roots(tree, counts, len(linked))
+        roots, depth = (
+            _widen_to_documents(tree, concentrated, counts, feature_depth) if concentrated else ([], feature_depth)
+        )
     if linked and not roots:
         warnings.append(
             "The linked requirements are spread across the whole project with no narrower container holding "
@@ -2547,12 +2651,14 @@ def _scope_proposal(
         "candidates": [
             {"id": c, "path": tree.path(c), "kind": tree.kind(c), "linked": counts[c]} for c in candidates
         ],
-        "feature_depth": feature_depth,
+        "feature_depth": depth,
+        "linked_folders": [{"id": c, "path": tree.path(c), "linked": counts[c]} for c in concentrated],
         "roots": [],
         "coverage": 0.0,
         "outliers": {"count": 0, "sample": []},
         "features": {"count": 0, "list": [], "without_links": []},
-        "requirements": {"in_roots": 0, "of_type_outside_roots": 0},
+        "requirements": {"in_roots": 0, "of_type_outside_roots": 0, "of_type_outside_where": []},
+        "background": {"items": 0, "item_types": []},
         "warnings": warnings,
         "fetched_at": snapshot.fetched_at,
     }
@@ -2562,13 +2668,21 @@ def _scope_proposal(
         )
         return result
 
-    level = Tree(snapshot.items, types, root_ids=roots, feature_depth=feature_depth, exclude_ids=exclude_ids)
+    level = Tree(snapshot.items, types, root_ids=roots, feature_depth=depth, exclude_ids=exclude_ids)
     warnings.extend(f"Root {r} is not a container in this project." for r in level.missing_roots)
     covered = [iid for iid in linked if level.in_scope(iid)]
     outliers = [iid for iid in linked if not level.in_scope(iid)]
     key_of = {iid: key for key, iid in resolved.items()}
     selection = _select_requirements(level, item_type_exclude or [], proposed_types)
     all_of_type = _select_requirements(tree, item_type_exclude or [], proposed_types)
+    in_roots = set(selection.ids)
+    elsewhere: Counter = Counter()
+    for iid in all_of_type.ids:
+        if iid not in in_roots:
+            nearest = tree.nearest_container(iid)
+            elsewhere[_document_of(tree, nearest) if nearest is not None else None] += 1
+    background = _select_background(level, item_type_exclude or [], proposed_types)
+    background_types = Counter(_type_display(types.get(tree.items[iid].get("itemType")), "?") for iid in background)
     per_feature = Counter(level.feature_of(iid) for iid in selection.ids)
     linked_per_feature = Counter(level.feature_of(iid) for iid in covered)
     level.assign_labels(set(per_feature))
@@ -2608,6 +2722,17 @@ def _scope_proposal(
             "requirements": {
                 "in_roots": len(selection.ids),
                 "of_type_outside_roots": len(all_of_type.ids) - len(selection.ids),
+                "of_type_outside_where": [
+                    {"path": tree.path(document) if document is not None else "", "count": count}
+                    for document, count in elsewhere.most_common(_MAX_ELSEWHERE_LISTED)
+                ],
+            },
+            "background": {
+                "items": len(background),
+                "item_types": [
+                    {"display": name, "count": count}
+                    for name, count in background_types.most_common(_MAX_BACKGROUND_TYPES_PREVIEWED)
+                ],
             },
         }
     )
@@ -2616,10 +2741,10 @@ def _scope_proposal(
     without_links = len(result["features"]["without_links"])
     result["summary"] = (
         f"{len(linked)} of {len(keys)} linked IDs found ({types_text}); root {root_paths} holds "
-        f"{round(coverage * 100)}% of them; {len(features)} features {feature_depth} level"
-        f"{'s' if feature_depth != 1 else ''} below it with {len(selection.ids)} requirements"
+        f"{round(coverage * 100)}% of them; {len(features)} features {depth} level"
+        f"{'s' if depth != 1 else ''} below it with {len(selection.ids)} requirements"
         + (f"; {without_links} of the {len(features)} features have no linked case" if without_links else "")
-        + "."
+        + f"; {len(background)} background items elsewhere in the project."
     )
     return result
 
@@ -2636,19 +2761,23 @@ async def jama_get_scope_proposal(
 ) -> str:
     """Propose the requirements root for a project from the requirement IDs its test cases link to.
 
-    Finds where those requirements live in the project tree, proposes the smallest
-    container(s) holding nearly all of them as the root, the item types they belong
-    to, and previews the features (the containers `feature_depth` levels below the
-    root) with their requirement counts and how many linked IDs fall in each. A few
-    links elsewhere are reported as outliers instead of widening the root. Features
-    with no linked IDs are listed: they are untested requirements — or an archive to
-    exclude, which only a person can tell. Pass root_ids / exclude_ids to preview an
-    adjustment instead of the computed root.
+    Finds where those requirements concentrate in the project tree (`linked_folders`),
+    then proposes the whole document holding them as the root — its Set, so every
+    requirement of that document is in scope and one without a linked case shows as
+    untested. The features stay the folders `feature_depth` levels below where the
+    links concentrate; the returned `feature_depth` counts from the root. Also
+    returns the item types the links belong to, the features with their requirement
+    counts and linked IDs, where same-type requirements outside the root sit (often
+    an archive), and how much of the project is left as background for answers. A
+    few links elsewhere are reported as outliers instead of widening the root. Pass
+    root_ids / exclude_ids to preview an adjustment instead of the computed root —
+    feature_depth then counts from the given root.
 
     Args:
         project_id: Jama project id.
         document_keys: Requirement IDs the test cases link to (a spread sample is enough).
-        feature_depth: Levels below the root that define a feature. Default 1.
+        feature_depth: Levels below where the links concentrate that define a feature — below
+            the given root with root_ids. Default 1.
         item_type_exclude: Item types never counted as requirements.
         root_ids: Preview these roots instead of proposing one.
         exclude_ids: Containers inside the root to leave out.
@@ -2800,7 +2929,10 @@ def main(argv: list[str] | None = None) -> int:
         "--anchors-file",
         help="with --project: a file of requirement IDs the test cases link to; adds a scope_proposal to the report",
     )
-    parser.add_argument("--feature-depth", type=int, default=1, help="levels below the root that define a feature")
+    parser.add_argument(
+        "--feature-depth", type=int, default=1,
+        help="levels below where the links concentrate (below --root when given) that define a feature",
+    )
     parser.add_argument("--root", type=int, action="append", help="preview this root instead of proposing one")
     parser.add_argument("--exclude", type=int, action="append", help="container inside the root to leave out")
     parser.add_argument("--item-type-exclude", action="append", help="item type never counted as a requirement")

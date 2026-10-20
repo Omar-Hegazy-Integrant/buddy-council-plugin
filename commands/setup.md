@@ -192,8 +192,8 @@ Features are Jama **folders** — each requirement belongs to its nearest folder
      project has **no folders**, say requirements will group by their Set or Component instead, and ask once
      whether another item type marks features (e.g. a "Feature" type) — record its display name as
      `folder_item_type`. In a large project that count mostly measures how much *else* the project holds —
-     other documents, archives — so do not dwell on it: Step 2b narrows the scope to what the test suite
-     actually links to.
+     other documents, archives — so do not dwell on it: Step 2b scopes the requirements to the document the
+     test suite links to, and keeps the rest as background.
    - **Item types.** Folders, Sets, and Components are never requirements — the server drops them itself.
      Write `item_type_exclude` with `Text` (narrative) plus any test-management type present, such as
      `Test Case` — this plugin reads test cases from TestRail. Every other type is included.
@@ -269,11 +269,12 @@ Test cases come from **TestRail** — currently the only supported test-case sou
 - If successful, ask which project to use (list the projects returned)
 - Ask if they want to filter by suite (optional)
 
-### Step 2a: Case authoring defaults (one question, only when the tools are live)
+### Step 2a: Case authoring defaults (no questions, only when the tools are live)
 
-`/bc:vnv-sprint-prep` phase 7 writes test cases into this instance. Creating a case needs three ids and a
-folder policy that have no safe universal default, so resolve them **now**, once, rather than asking on every
-run. This is a single question — everything else is detected.
+`/bc:vnv-sprint-prep` phase 7 writes test cases into this instance. Creating a case needs three ids that
+differ per instance and a folder policy, so resolve them **now**, once, rather than on every run. **Nothing
+here is a question** — the ids are detected, the folder policy is defaulted from how the suite is already
+organized, and the Step 4 recap shows both in plain words, where the user can change them.
 
 Skip this sub-step entirely when the MCP tools are not yet live (first-time setup): omit `authoring`, and the
 next `/bc:setup` run fills it in. Phase 7 skips itself with a visible line until it exists, which is correct
@@ -300,18 +301,30 @@ With the tools live:
    TestRail accepts a payload with an unknown `custom_*` key and discards the value without an error.
 
    State what you found: `Requirement link: custom_jama_req_id (found on 18 of 20 sampled cases)`.
-5. Ask the **one** question — where generated cases should live:
+5. **Choose where generated cases go — do not ask.** Folder placement can't be judged in the abstract at
+   setup time, and doesn't need to be: every path that creates cases — `/bc:vnv-sprint-prep`, the
+   `/bc:coverage` gap-fill, and `/bc:ask` scenario mapping — shows each case's folder in its plan and waits
+   for a yes before writing. Default from what step 4 found:
 
-   > Where should generated test cases go?
-   > - Beside the existing cases for the same requirement or feature — no new folder tree; a feature with no cases yet gets its own folder
-   > - Under a `V&V` folder, mirroring each feature (`V&V/Sync/Offline handling`) — keeps generated cases separate from hand-written ones
-   > - Mirroring the feature directly (`Sync/Offline handling`) — mixed in with existing cases
-   > - All in one fixed folder — you name it
+   - The requirement field was populated on **most** sampled cases → `section_strategy: "linked"`,
+     `section_root: null`. The suite already organizes its cases, and new ones belong among them.
+   - Otherwise → `section_strategy: "feature"`, `section_root: "V&V"`. With few links there is little to file
+     beside, and one `V&V` folder keeps generated cases together instead of scattering new feature folders
+     across the suite.
 
-   Recommend the first option when the requirement field was populated on most sampled cases: the suite
-   already organizes its cases, and new ones belong among them. Recommend the `V&V` folder when it was not.
-   The answer applies to every path that creates cases — `/bc:vnv-sprint-prep`, the `/bc:coverage` gap-fill,
-   and `/bc:ask` scenario mapping.
+   **On a re-run, keep an existing `section_strategy` and `section_root`** — the user may have chosen them —
+   unless they ask to change them.
+
+   Show the placement as one line in the Step 4 recap, using the wording below verbatim — no config keys and
+   no command names, since the reader may not have run any command yet. When the user wants something else,
+   at the recap or on any later run, map their words onto the config:
+
+   | Placement | Config | Recap line |
+   |---|---|---|
+   | Beside existing cases (default) | `"linked"`, root `null` | `new cases are saved next to existing cases for the same requirement or feature` |
+   | Their own folder, one subfolder per feature | `"feature"`, root `"V&V"` or the folder they name | `new cases are saved in a <root> folder, one subfolder per feature` |
+   | A folder per feature, among the existing ones | `"feature"`, root `null` | `new cases are saved in a folder named after their feature` |
+   | Everything in one folder | `"fixed"`, root = the folder they name | `new cases are all saved in <root>` |
 
 Write the block, and show the resolved names (not just ids) in the Step 4 recap so the user can veto:
 
@@ -321,24 +334,31 @@ Write the block, and show the resolved names (not just ids) in the Step 4 recap 
   "type_id": 7,
   "priority_id": 4,
   "requirement_field": "custom_jama_req_id",
-  "section_strategy": "feature",
-  "section_root": "V&V",
+  "section_strategy": "linked",
+  "section_root": null,
   "create_missing_sections": true
 }
 ```
 
 `section_strategy` is `"linked"` (beside the existing cases for the same requirement, else the same feature,
 else a feature folder), `"feature"` (folder path from each requirement's feature), or `"fixed"` (everything in
-`section_root`). `section_root` is `null` when the user picked an un-prefixed option.
+`section_root`). `section_root` is `null` for an un-prefixed placement.
 `create_missing_sections` defaults to `true`; set it to `false` only if the user says their suite structure
 is fixed and a missing folder should be an error.
 
-### Step 2b: Anchor the requirements on the test suite (Jama only)
+### Step 2b: Anchor the requirements on the test suite (Jama only — no questions)
 
-A large Jama project holds far more than the requirements this team tests — other documents, hazard
-analyses, archives — and with no anchor every folder in it counts as a feature. The test suite already knows
-which part matters: its cases link to specific requirements. Use that to choose the requirements **root** and
-the **features** with one confirmation.
+A large Jama project holds far more than the requirements this team tests — other documents, system
+requirements, risk analyses, archives. The test suite already knows which part matters: its cases link to
+specific requirements, and those live in one **document** — a Jama Set, such as `Mobile App SRS`. That whole
+document becomes the requirements **root**, so every requirement in it is in scope and one without a linked
+case shows as untested instead of vanishing. The **features** stay the folders where the links concentrate,
+however deep the document nests them. Everything else in the project is **background**: `/bc:ask` lookups
+search it to enrich their answers, and no report ever counts it.
+
+Decide all of it from the evidence, **without asking**. Roots, depths, and anchors are not something a person
+can weigh in the abstract — and they don't need to: the Step 4 recap shows the result in plain words, and the
+user changes it there or on any later run.
 
 Run this when the requirements source is Jama, the TestRail tools are live, and Step 2a resolved a
 `requirement_field`. Otherwise skip it with a visible line — `Requirements root: not anchored yet — re-run
@@ -348,8 +368,8 @@ project, with every folder a feature.
 1. **What the tests link to.** Call `testrail_get_requirement_ids` with the project, suite,
    `requirement_field`, and `sample_size: 2000`. It returns counts, the ID prefixes in use, and the IDs —
    all of them when the suite links to 2,000 or fewer distinct IDs, otherwise an even spread. Passing every
-   ID makes the "no linked case" list in step 3 exact. When `distinct_ids` exceeds the sample, say that the
-   per-feature link counts come from a sample, so a feature listed without links may still have a few.
+   ID makes the "not tested yet" list exact. When `distinct_ids` exceeds the sample, say that the per-feature
+   link counts come from a sample, so a feature listed as not tested may still have a few links.
 2. **Where those live in Jama.** With the Jama tools live, call `jama_get_scope_proposal` with
    `document_keys` set to the sample and the Step 1a `item_type_exclude`. Otherwise write the sample to a
    temp file, one ID per line, and run the check — it prints JSON with a `scope_proposal`:
@@ -360,42 +380,58 @@ project, with every folder a feature.
      --check --project <id> --anchors-file <temp file> --item-type-exclude Text
    ```
 
-3. **Show it, then ask once:**
-
-   ```
-   Your test cases link to 1,480 requirement IDs (CWA-REQ-*). In Jama they live here:
-     Root:       Product / Software Requirements   (97% of the links)
-     Item type:  Mobile SRS — other types ignored
-     Features:   23 top-level folders, 1,512 requirements
-                 Login (64) · Patient Monitoring (210) · Alarms (98) · …
-     No linked case yet:  Archive (300), Release 3 Drafts (40)
-     Outside the root:    41 linked IDs, e.g. CWA-REQ-412 in Product / Legacy / Import
-
-   Use this? [Enter to accept, or say "one level deeper", "exclude Archive",
-              "use <folder> as the root", or "no root"]: _
-   ```
-
-   A feature with no linked case is either untested — exactly what `/bc:coverage` exists to show — or an
-   archive nobody tests. Only the user can tell, so list them and let the user exclude any by name; never drop
-   one on your own.
-4. **Adjustments** re-run the preview with `root_ids`, `exclude_ids`, or `feature_depth` (on the CLI:
-   `--root`, `--exclude`, `--feature-depth`) and show it again. Folder ids are in the proposal's `candidates`
-   and `features.list`.
-5. **Record** for the Step 4 save:
-   - `requirements.roots`: `[{"id": <id>, "path": "<path>"}]` — the id is what the server uses; the path is
-     for people reading the config
-   - `requirements.exclude`: the same shape, only when the user excluded something
-   - `requirements.feature_inference.depth`: `1`, unless the user went deeper
+   The proposal finds where the links concentrate (`linked_folders`), widens that to its whole document
+   (`roots`), and counts `feature_depth` from the root so the features stay the folders the links sit in.
+3. **Record** for the Step 4 save, straight from the proposal:
+   - `requirements.roots`: each of `roots` as `{"id": <id>, "path": "<path>"}` — the id is what the server
+     uses; the path is for people reading the config
+   - `requirements.feature_inference.depth`: the proposal's `feature_depth`
    - `requirements.item_type_filter`: the proposal's `proposed_item_types` — the types the tests link to
+   - `requirements.exclude`: on a re-run, the saved entries that still sit inside the new root; otherwise omit it
 
-Edge cases:
+   On a re-run whose proposal differs from the saved `roots`, the recap says what the root was, so a root the
+   user chose earlier is never replaced unseen.
+4. **Show it in the Step 4 recap, in plain words** — the reader may never have opened Jama's tree, so no ids
+   and no "root", "depth", "anchor", or "item type filter":
 
-- **No root proposed** — the links are spread across the project. Say so, offer the `candidates`, and save
-  no root if the user picks none.
-- **`anchors.resolved` is 0** — none of the IDs exist in this Jama project. Stop: either it is the wrong
-  project, or the requirement field holds something other than Jama document keys. Ask before going on.
-- **`anchors.not_found`** — IDs the tests link to that Jama does not have: deleted requirements or typos.
-  Report the count and a few examples; they are worth a look, but they do not block the anchor.
+   ```
+     In scope:      the whole "Mobile App SRS (SRS-1000003-01)" document — the one your test cases link to
+                    420 requirements in 11 features (General Requirements, App Setup, Alerts, …)
+                    every one has a linked test case
+     Background:    the rest of the project — 3,190 items (system requirements, design, labeling,
+                    standards, …) — is searched to enrich answers, never counted in reports
+   ```
+
+   Add a line only for what applies, in these words:
+   - Features without a linked case (`features.without_links`): `not tested yet: Non-Functional (25) — say
+     "leave out Non-Functional" if it is an archive`. Only the user knows whether an untested folder is a gap
+     or an archive, so list them and never drop one on your own.
+   - Same-type requirements outside the document (`requirements.of_type_outside_where`): `25 more of the same
+     kind sit in Archive / Archive- MAS Software Requirement Specifications — background, not counted`
+   - Links outside the document (`outliers`): `41 of the IDs your tests link to sit outside this document
+     (e.g. CWA-REQ-412 in Product / Legacy / Import) — not counted`
+   - IDs Jama does not have (`anchors.not_found`): `2 IDs your test cases link to are not in Jama
+     (NO_REQUIREMENTS_OK, TBD) — deleted or mistyped`
+   - A re-run that changed it: `was: Mobile App SRS / REQUIREMENTS / Functional Requirements — say "keep the
+     previous scope" to keep it`
+5. **When the user asks for a change** — at the recap, or on any later run — preview it with the same tool
+   (`root_ids`, `exclude_ids`, `feature_depth`; on the CLI `--root`, `--exclude`, `--feature-depth`), then
+   show the recap again. Folder ids are in the proposal's `candidates`, `linked_folders`, and
+   `features.list`; with `root_ids`, `feature_depth` counts from that root.
+   - "leave out <folder>" → add its id to `exclude_ids`
+   - "only <folder>" or "use <folder>" → `root_ids` = its id, `feature_depth` 1
+   - "split the features one level deeper" → the same `root_ids`, `feature_depth` + 1
+   - "the whole project" → save no `roots`
+   - "keep the previous scope" → the saved `roots`, `exclude`, and `depth`, unchanged
+
+Edge cases — still no question; each becomes a recap line:
+
+- **No root proposed** — the links are spread across the project. Save no root, and say so: `In scope: the
+  whole project — your test cases link to requirements all over it, so nothing narrower fits`.
+- **`anchors.resolved` is 0** — none of the IDs exist in this Jama project: either it is the wrong project, or
+  the requirement field holds something other than Jama document keys. Save no root and lead the recap with
+  `None of the 1,480 requirement IDs your test cases link to exist in this Jama project — check the project
+  before saving.`
 
 ## Code mapping — automatic, no questions
 
@@ -724,7 +760,8 @@ Ready to save:
   Test cases:    testrail — https://company.testrail.io, project 1
   Case authoring: template "Test Case (Steps)", type "Functional", priority "Medium"
                  requirement link → custom_jama_req_id (+ built-in References)
-                 generated cases → V&V/<feature>, missing folders created
+                 new cases are saved next to existing cases for the same requirement or feature
+                 (want them somewhere else? say where before saving)
   Jira:          connected as Jane Doe — jira.company.com (Server/Data Center)
   Jira board:    PROJ board 42 "PROJ Scrum Board" (scrum) — 37 open issues
   V&V board:     PROJ board 77 "V&V Board" — same project, clones stamped label "vnv"
@@ -741,14 +778,16 @@ When the requirements source is **Jama**, the first lines read instead:
 ```
   Requirements:  jama — https://company.jamacloud.com, project CWA "Clinical Window App" (42) — read-only
                  connected as Jane Doe (OAuth API credentials)
-  Root:          Product / Software Requirements — anchored on 1,480 test-linked IDs (97%)
-                 excluded: Archive
-  Features:      23 top-level folders (Login, Patient Monitoring, Alarms, …)
-  Item types:    Mobile SRS — the type the tests link to
+  In scope:      the whole "Software Requirements" document — the one your test cases link to
+                 1,512 requirements in 23 features (Login, Patient Monitoring, Alarms, …)
+                 not tested yet: Release 3 Drafts (40) — say "leave out Release 3 Drafts" if it is an archive
+  Background:    the rest of the project — 2,900 items (system requirements, hazards, design, …) —
+                 is searched to enrich answers, never counted in reports
   Field mapping: status ← Status, rationale ← Rationale, GitHub doc URL ← Linked to Github
 ```
 
-On yes, write all files (4a–4c below). On no, ask what to change, fix it, and re-show the recap.
+On yes, write all files (4a–4c below). On no, ask what to change — unless the answer already says — fix it,
+and re-show the recap.
 
 ### 4a: Write source config
 
@@ -800,8 +839,8 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
       "type_id": 7,
       "priority_id": 4,
       "requirement_field": "custom_jama_req_id",
-      "section_strategy": "feature",
-      "section_root": "V&V",
+      "section_strategy": "linked",
+      "section_root": null,
       "create_missing_sections": true
     }
   },

@@ -196,7 +196,7 @@ The wizard runs in four steps with a single review-and-save confirmation at the 
    - **Excel**: point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs).
 
    Either way, GitHub doc enrichment is auto-configured when a GitHub-link column or field is mapped (`gh` CLI preferred, MCP fallback).
-2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on. With Jama as the requirements source, setup then **anchors Jama on your test suite**: it reads which requirement IDs your cases link to, finds where they live in Jama, and proposes that part as the requirements **root** — with its top-level folders as the features and only the item types the tests link to. A large project's other documents and archives never reach a report. You confirm once, and can go a level deeper, exclude a folder (such as an archive), or pick another root. The same step asks where generated test cases should go; when your cases already carry requirement IDs, the recommended answer files each new case **beside the existing cases for the same requirement or feature**, so no parallel folder tree appears.
+2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on. With Jama as the requirements source, setup then **anchors Jama on your test suite, without asking**: it reads which requirement IDs your cases link to, finds the **document** they live in (a Jama set, such as `Mobile App SRS`), and takes that whole document as the requirements in scope — so a requirement in it with no linked case shows up as untested instead of vanishing. The features stay the folders your linked requirements sit in, however deep the document nests them, and only the item types the tests link to count. The rest of the project — system requirements, risks, labeling, standards, design, archives — is **background**: `/bc:ask` searches it to enrich answers, and no report counts it. The review in step 4 shows this in plain words; say "leave out <folder>", "only <folder>", or "the whole project" to change it, then or on any re-run. The same step picks where generated test cases go **without asking**: **beside the existing cases for the same requirement or feature** when your cases already carry requirement IDs, so no parallel folder tree appears — otherwise in a `V&V` folder, one subfolder per feature. The review in step 4 shows the choice in one line; say where you'd rather have them, then or on any re-run. Whatever the setting, every command that creates cases shows each case's folder before writing anything.
 3. **Jira (required)** — the base URL, a token, and your team's board URL. Cloud vs Server/Data Center is detected from the host, so you're only asked for the credential that deployment actually uses. **The connection is tested before moving on**, exactly like TestRail: by MCP tool if the server is already loaded, otherwise by a direct REST call. The board URL is parsed for the board id and project key — and when a classic RapidBoard URL carries no key, it's derived from the board's own issues rather than asked for. If the test fails (usually a self-hosted Jira needing the VPN), the answers are saved as *pending*, setup finishes, and it re-tests on the next run — `/bc:contradiction` and `/bc:coverage` keep working meanwhile, only `/bc:validate` waits.
    The same step then offers the **V&V board** plus its platform field and scenario reviewer, for `/bc:vnv-sprint-prep`. That part *is* skippable — the command can collect it itself on first run. **The V&V board may live in the same project as the dev board**; only a duplicate board *id* is refused. When they share a project, setup samples both boards to work out what the V&V board's filter keys off — a label, component, or issue type — confirms it in one question, and stamps it on every clone.
 4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
@@ -279,7 +279,7 @@ The `atlassian` entry belongs here too — see the `mcp-atlassian` block further
     "base_url": "https://company.jamacloud.com",
     "project_id": 42,
     "roots": [{ "id": 1001, "path": "Product / Software Requirements" }],
-    "feature_inference": { "strategy": "hierarchical_folder", "folder_item_type": "Folder", "depth": 1 },
+    "feature_inference": { "strategy": "hierarchical_folder", "folder_item_type": "Folder", "depth": 3 },
     "item_type_filter": ["Mobile SRS"],
     "item_type_exclude": ["Text", "Test Case"],
     "field_mapping": { "status": "Status", "rationale": "Rationale", "github_url": "Linked to Github" }
@@ -287,10 +287,12 @@ The `atlassian` entry belongs here too — see the `mcp-atlassian` block further
 }
 ```
 
-`roots` limits everything to those Jama containers (sets or folders), and a feature is then a folder `depth`
-levels below a root — leave `roots` out to use the whole project, where every folder is a feature, and add
-`"exclude": [{ "id": …, "path": … }]` to leave a subtree out. `/bc:setup` proposes all of this from your test
-suite's requirement links. `field_mapping` values are Jama field **labels**; `folder_item_type` is the item
+`roots` limits the requirements to those Jama containers — `/bc:setup` picks the whole document (set) your
+test cases link to — and a feature is then a folder `depth` levels below a root: setup sets the depth so the
+features are the folders your linked requirements sit in. Leave `roots` out to use the whole project, where
+every folder is a feature, and add `"exclude": [{ "id": …, "path": … }]` to leave a subtree out. Everything
+outside the requirements (except excluded types and subtrees) is background that `/bc:ask` lookups search,
+never counted. `field_mapping` values are Jama field **labels**; `folder_item_type` is the item
 type that marks a feature when there are no roots. The
 credential goes in `~/.buddy-council/secrets.json` — `client_id` + `client_secret` from Jama → profile menu →
 **Set API Credentials** (`username` + `password` only on instances without API credentials):
@@ -415,7 +417,7 @@ TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
 /bc:contradiction "Patient Monitoring"   # Analyze a specific feature
 ```
 
-With Jama as the requirements source, a feature is a **Jama folder** — by default a top-level folder of the requirements root `/bc:setup` anchored on your test suite, with deeper folders rolled into it. The scope covers everything under it; a sub-folder name narrows to just that part, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`. Test cases are found by their requirement links, whatever their TestRail folders are called.
+With Jama as the requirements source, a feature is a **Jama folder** — by default one of the folders your linked requirements sit in, inside the document `/bc:setup` anchored on your test suite, with deeper folders rolled into it. The scope covers everything under it; a sub-folder name narrows to just that part, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`. Test cases are found by their requirement links, whatever their TestRail folders are called.
 
 The agent fetches requirements, test cases, and the in-flight issues on your Jira dev board, normalizes and cross-links them, then analyzes for 7 types of contradictions:
 
@@ -530,6 +532,8 @@ Describe a behavior or business rule in your own words, and get back whether it 
 
 It doesn't read every requirement to find out. Your session's model splits the ask into its concepts and gives each the other wordings the requirements might use ("alarm" → alert, notification, audible); code then ranks every requirement in scope against them (BM25 — keyword relevance, no embeddings) in about a second and writes the top 25 out in full; and the model judges only those. When the first search can't settle it — nothing covers the ask, or the top results use the project's own wording for a concept — it searches again with those words before ever answering "not specified".
 
+With Jama, the same search runs over the **rest of the project** too — the system requirements, risks, labeling, standards, and design outside the requirements in scope — and the answer adds what they say as background: "not in the app requirements, but the system requirement H-GMS-31 says alarms must reach 50 dBA". Background enriches an answer; it never makes something "specified" and never counts in a report.
+
 The data comes from a run folder (see [Low-cost collection](#low-cost-collection-for-bccoverage-bccontradiction-and-bcask-lookups)); a complete run of the whole scope collected in the last 30 minutes is reused, so follow-up questions answer in seconds. Say "refresh" to re-read Jama and TestRail.
 
 ### Edit Test Cases
@@ -616,8 +620,8 @@ These commands read the most data, so they split the work by what it needs:
 
 | Work | Runs on |
 |---|---|
-| Fetching requirements, every test case in the suite, and the GitHub docs; waiting out a slow Jama read | the `data-collector` sub-agent on a **low-cost model** — `claude-haiku-4.5`, else `gpt-5-mini`, in Copilot CLI; Haiku in Claude Code |
-| Cross-linking IDs and counting untested requirements, orphans, stranded links, coverage per feature; ranking requirements against a lookup | **code** (`skills/collect-artifacts/bc_run.py`) — no model at all |
+| Fetching requirements, every test case in the suite, and the GitHub docs — for a lookup on Jama, the rest of the project as background too; waiting out a slow Jama read | the `data-collector` sub-agent on a **low-cost model** — `claude-haiku-4.5`, else `gpt-5-mini`, in Copilot CLI; Haiku in Claude Code |
+| Cross-linking IDs and counting untested requirements, orphans, stranded links, coverage per feature; ranking requirements and background against a lookup | **code** (`skills/collect-artifacts/bc_run.py`) — no model at all |
 | Contradictions, weak coverage, severity, the report, every question to you, every write | **your session's model**, reading one feature at a time |
 
 The data travels as files, never as a model's retelling: the servers write it straight into a **run folder** in your project, `.buddy-council/runs/<run-id>/`, and your model reads `links.json` (the counts) and then each feature's bundle — its requirements, verbatim, with their custom fields (platform, product, version), each followed by the test cases that link to it with theirs (applicable OS, product version, CtQ, priority) — plus the GitHub docs the feature links to. The low-cost model is never taken at its word: the link step checks the run against your `sources.json` and writes the `Fetch:`, `Enrichment:` and `Readiness:` lines itself, and a run that doesn't match the config is collected again by your session's model. If the sub-agent can't run, you'll see `Collect: ran inline — …` and your session's model does the same steps itself.

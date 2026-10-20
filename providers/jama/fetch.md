@@ -115,8 +115,12 @@ count — what a feature-scoped fetch returns) and `direct_requirements` (those 
 folder), plus `outside_features` for requirements in no folder.
 
 `jama_get_scope_proposal` is how `/bc:setup` chooses the roots: given the requirement IDs the test suite
-links to, it proposes the smallest container(s) holding nearly all of them and previews the resulting
-features. Analysis commands do not need it.
+links to, it proposes the whole document (Jama set) holding them, with the feature depth that keeps the
+folders they sit in as features, and previews the result. Analysis commands do not need it.
+
+`/bc:ask` lookups also read the **background** — the rest of the project — by calling `jama_get_requirements`
+with the same arguments plus `background: true` (through the collector, into the run folder's
+`background.json`). It is context for answers, never a requirement: the router fetch above never asks for it.
 
 ## Output
 
@@ -124,7 +128,7 @@ The response is `{project_id, scope, total, offset, next_offset, requirements, s
 truncated}`.
 
 - **`requirements` is already in the canonical schema** — return it unchanged. Each entry's `id` is the Jama
-  document key and `feature` its top-level folder under the root — or, without roots, its nearest folder
+  document key and `feature` the folder `feature_depth` levels below its root — or, without roots, its nearest folder
   (falling back to the nearest Set/Component, then `"Unknown"`). With roots, two features that share a name
   are labelled with their paths, so they never merge. `status`/`rationale` come from `field_mapping`, and
   `description` is Jama's rich text flattened to plain text. `raw_fields` carries `jama_id`, `item_type`,

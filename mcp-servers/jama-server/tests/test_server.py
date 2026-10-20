@@ -66,6 +66,24 @@ TYPES = [
         ],
     },
     {"id": 90, "typeKey": "TC", "display": "Test Case", "fields": [{"name": "name", "label": "Name", "fieldType": "STRING"}]},
+    {
+        "id": 91,
+        "typeKey": "SYS",
+        "display": "System Requirement",
+        "fields": [
+            {"name": "name", "label": "Name", "fieldType": "STRING"},
+            {"name": "description", "label": "Description", "fieldType": "TEXT", "textType": "RICHTEXT"},
+        ],
+    },
+    {
+        "id": 92,
+        "typeKey": "MSRS",
+        "display": "Mobile SRS Requirement",
+        "fields": [
+            {"name": "name", "label": "Name", "fieldType": "STRING"},
+            {"name": "description", "label": "Description", "fieldType": "TEXT", "textType": "RICHTEXT"},
+        ],
+    },
 ]
 
 REQ1_FIELDS = {
@@ -600,36 +618,158 @@ class RequirementRoots(ServerTestCase):
         self.assertTrue(any("outside the configured requirements root" in w for w in outside["warnings"]))
 
 
+class Background(ServerTestCase):
+    """background=true returns the rest of the project — never a requirement in scope."""
+
+    async def background(self, **kwargs):
+        kwargs.setdefault("root_ids", [ROOT])
+        kwargs.setdefault("item_type_filter", ["Requirement"])
+        return await self.requirements(background=True, **kwargs)
+
+    async def test_it_is_everything_outside_the_roots(self):
+        payload = await self.background()
+        self.assertEqual(self.ids(payload), ["CWA-REQ-7", "CWA-REQ-8"])
+        by_id = {r["id"]: r for r in payload["requirements"]}
+        self.assertEqual({r["type"] for r in payload["requirements"]}, {"background"})
+        self.assertEqual(by_id["CWA-REQ-7"]["feature"], "Alarms")
+        self.assertEqual(by_id["CWA-REQ-7"]["raw_fields"]["folder_path"], "Product / Alarms")
+        self.assertEqual(by_id["CWA-REQ-8"]["raw_fields"]["folder_path"], "")
+        self.assertIn("2 background items — the rest of the project, beside the 6 requirements in scope (Requirement 2)", payload["summary"])
+
+    async def test_other_item_types_inside_the_roots_are_background_too(self):
+        payload = await self.background(item_type_exclude=["Test Case"])
+        self.assertEqual(self.ids(payload), ["CWA-TXT-1", "CWA-REQ-7", "CWA-REQ-8"])
+        self.assertEqual(payload["requirements"][0]["raw_fields"]["folder_path"], "Product / Software Requirements / Patient Monitoring")
+
+    async def test_excluded_types_and_subtrees_stay_out_of_it(self):
+        self.assertEqual(self.ids(await self.background(exclude_ids=[1300])), ["CWA-REQ-8"])
+        inside_root = await self.background(item_type_exclude=["Test Case"], exclude_ids=[1100])
+        self.assertEqual(self.ids(inside_root), ["CWA-REQ-7", "CWA-REQ-8"])
+
+    async def test_without_roots_it_is_the_other_item_types(self):
+        payload = await self.background(root_ids=None, item_type_exclude=["Test Case"])
+        self.assertEqual(self.ids(payload), ["CWA-TXT-1"])
+
+    async def test_a_scope_is_ignored_and_says_so(self):
+        payload = await self.background(scope="Alarms")
+        self.assertEqual(self.ids(payload), ["CWA-REQ-7", "CWA-REQ-8"])
+        self.assertTrue(any("ignored: background is always read whole" in w for w in payload["warnings"]))
+
+
 class ScopeProposal(ServerTestCase):
     async def propose(self, keys, **kwargs):
         return await self.call("jama_get_scope_proposal", project_id=PROJECT, document_keys=keys, **kwargs)
+
+    def add_documents(self):
+        """A document as deep as a real SRS, an archived copy of its type, and another document beside it.
+
+        Design Inputs (component)
+          Mobile SRS (set)
+            Scope (folder) — SRS-TXT-1 (text)
+            REQUIREMENTS (folder)
+              Functional (folder)
+                Alerts (folder) — SRS-1, SRS-2
+                Setup (folder) — SRS-3
+              Non-Functional (folder) — SRS-4      <- no test links to it
+          System Requirements (set) — SYS-1, SYS-2
+        Archive (component)
+          Archived SRS (set) — SRS-90
+        """
+        for args in (
+            (5000, 34, "Design Inputs", None, "3", "CWA-CMP-5"),
+            (5100, 33, "Mobile SRS", 5000, "3.1", "CWA-SET-5"),
+            (5110, 31, "Scope", 5100, "3.1.1", "CWA-FLD-51"),
+            (5111, 32, "Purpose", 5110, "3.1.1.1", "SRS-TXT-1"),
+            (5120, 31, "REQUIREMENTS", 5100, "3.1.2", "CWA-FLD-52"),
+            (5130, 31, "Functional", 5120, "3.1.2.1", "CWA-FLD-53"),
+            (5140, 31, "Alerts", 5130, "3.1.2.1.1", "CWA-FLD-54"),
+            (5141, 92, "Sound an alert", 5140, "3.1.2.1.1.1", "SRS-1"),
+            (5142, 92, "Snooze an alert", 5140, "3.1.2.1.1.2", "SRS-2"),
+            (5150, 31, "Setup", 5130, "3.1.2.1.2", "CWA-FLD-55"),
+            (5151, 92, "Pair a sensor", 5150, "3.1.2.1.2.1", "SRS-3"),
+            (5160, 31, "Non-Functional", 5120, "3.1.2.2", "CWA-FLD-56"),
+            (5161, 92, "Start within 2 seconds", 5160, "3.1.2.2.1", "SRS-4"),
+            (5200, 33, "System Requirements", 5000, "3.2", "CWA-SET-6"),
+            (5201, 91, "Alarm volume", 5200, "3.2.1", "SYS-1"),
+            (5202, 91, "Battery life", 5200, "3.2.2", "SYS-2"),
+            (6000, 34, "Archive", None, "4", "CWA-CMP-6"),
+            (6100, 33, "Archived SRS", 6000, "4.1", "CWA-SET-7"),
+            (6101, 92, "Old alert tone", 6100, "4.1.1", "SRS-90"),
+        ):
+            self.fake.items[args[0]] = _item(*args)
 
     async def test_links_inside_one_set_propose_that_set(self):
         payload = await self.propose([f"CWA-REQ-{n}" for n in range(1, 7)])
         self.assertEqual([r["path"] for r in payload["roots"]], ["Product / Software Requirements"])
         self.assertEqual(payload["coverage"], 1.0)
         self.assertEqual(payload["proposed_item_types"], ["Requirement"])
+        self.assertEqual(payload["feature_depth"], 1)
         self.assertEqual(
             [f["name"] for f in payload["features"]["list"]], ["Software Requirements", "Patient Monitoring", "Alarms"]
         )
-        self.assertEqual(payload["requirements"], {"in_roots": 6, "of_type_outside_roots": 2})
-
-    async def test_links_inside_one_folder_descend_into_it(self):
-        payload = await self.propose(["CWA-REQ-1", "CWA-REQ-2", "CWA-REQ-3", "CWA-REQ-4"])
-        self.assertEqual([r["path"] for r in payload["roots"]], ["Product / Software Requirements / Patient Monitoring"])
         self.assertEqual(
-            [(f["name"], f["requirements"], f["linked"]) for f in payload["features"]["list"]],
-            [("Patient Monitoring", 2, 2), ("Vitals", 2, 2)],
+            payload["requirements"],
+            {"in_roots": 6, "of_type_outside_roots": 2,
+             "of_type_outside_where": [{"path": "Product / Alarms", "count": 1}, {"path": "", "count": 1}]},
         )
 
-    async def test_links_split_across_a_component_become_two_roots(self):
+    async def test_links_inside_one_folder_widen_to_their_whole_set_and_keep_its_features(self):
+        payload = await self.propose(["CWA-REQ-1", "CWA-REQ-2", "CWA-REQ-3", "CWA-REQ-4"])
+        self.assertEqual([r["path"] for r in payload["roots"]], ["Product / Software Requirements"])
+        self.assertEqual(
+            payload["linked_folders"],
+            [{"id": 1100, "path": "Product / Software Requirements / Patient Monitoring", "linked": 4}],
+        )
+        self.assertEqual(payload["feature_depth"], 2)
+        self.assertEqual(
+            [(f["name"], f["requirements"], f["linked"]) for f in payload["features"]["list"]],
+            [("Software Requirements", 1, 0), ("Patient Monitoring", 2, 2), ("Vitals", 2, 2), ("Alarms", 1, 0)],
+        )
+        self.assertEqual(payload["features"]["without_links"], ["Software Requirements", "Alarms"])
+
+    async def test_links_split_across_a_component_become_two_documents(self):
         payload = await self.propose(["CWA-REQ-5", "CWA-REQ-7"])
         self.assertEqual(
-            [r["path"] for r in payload["roots"]], ["Product / Software Requirements / Alarms", "Product / Alarms"]
+            [r["path"] for r in payload["roots"]], ["Product / Software Requirements", "Product / Alarms"]
         )
         self.assertEqual(
             [f["name"] for f in payload["features"]["list"]],
-            ["Product / Software Requirements / Alarms", "Product / Alarms"],
+            ["Software Requirements", "Patient Monitoring", "Vitals", "Product / Software Requirements / Alarms",
+             "Product / Alarms"],
+        )
+
+    async def test_a_deep_document_is_taken_whole_with_the_features_where_the_links_are(self):
+        self.add_documents()
+        payload = await self.propose(["SRS-1", "SRS-2", "SRS-3"], item_type_exclude=NON_REQUIREMENT_TYPES)
+        self.assertEqual(payload["roots"], [{"id": 5100, "path": "Design Inputs / Mobile SRS", "kind": "set", "linked": 3}])
+        self.assertEqual(
+            payload["linked_folders"],
+            [{"id": 5130, "path": "Design Inputs / Mobile SRS / REQUIREMENTS / Functional", "linked": 3}],
+        )
+        self.assertEqual(payload["feature_depth"], 3)
+        self.assertEqual(
+            [(f["name"], f["requirements"], f["linked"]) for f in payload["features"]["list"]],
+            [("Alerts", 2, 2), ("Setup", 1, 1), ("Non-Functional", 1, 0)],
+        )
+        self.assertEqual(payload["features"]["without_links"], ["Non-Functional"])
+        self.assertEqual(
+            payload["requirements"],
+            {"in_roots": 4, "of_type_outside_roots": 1,
+             "of_type_outside_where": [{"path": "Archive / Archived SRS", "count": 1}]},
+        )
+        self.assertEqual(payload["background"]["items"], 11)
+        self.assertEqual(
+            payload["background"]["item_types"],
+            [{"display": "Requirement", "count": 8}, {"display": "System Requirement", "count": 2},
+             {"display": "Mobile SRS Requirement", "count": 1}],
+        )
+        self.assertIn("features 3 levels below it with 4 requirements", payload["summary"])
+        self.assertIn("11 background items elsewhere in the project", payload["summary"])
+
+        read = await self.requirements(root_ids=[5100], feature_depth=3, item_type_filter=["Mobile SRS Requirement"])
+        self.assertEqual(
+            [(r["id"], r["feature"]) for r in read["requirements"]],
+            [("SRS-1", "Alerts"), ("SRS-2", "Alerts"), ("SRS-3", "Setup"), ("SRS-4", "Non-Functional")],
         )
 
     async def test_stray_links_are_outliers_not_a_wider_root(self):
@@ -1159,8 +1299,18 @@ class SaveToRunFolder(ServerTestCase):
         self.assertEqual(
             args,
             {"item_type_filter": [], "item_type_exclude": NON_REQUIREMENT_TYPES, "root_ids": [ROOT], "exclude_ids": [],
-             "feature_depth": 2, "feature_item_type": "Folder", "field_mapping": {"status": "Status"}},
+             "feature_depth": 2, "feature_item_type": "Folder", "field_mapping": {"status": "Status"}, "background": False},
         )
+
+    async def test_background_is_written_with_its_own_kind(self):
+        target = str(self.run_dir / "background.json")
+        payload = await self.requirements(root_ids=[ROOT], item_type_filter=["Requirement"], background=True, save_to=target)
+        self.assertEqual(payload["total"], 2)
+        self.assertIn("2 background items — the rest of the project, beside the 6 requirements in scope", payload["summary"])
+        written = json.loads(Path(target).read_text())
+        self.assertEqual((written["kind"], written["count"], written["scope"]["kind"]), ("background", 2, "background"))
+        self.assertTrue(written["args"]["background"])
+        self.assertEqual([r["id"] for r in written["requirements"]], ["CWA-REQ-7", "CWA-REQ-8"])
 
     async def test_paths_outside_a_run_folder_are_refused_before_jama_is_read(self):
         outside = Path(self.tmp.name, "proj", "requirements.json")

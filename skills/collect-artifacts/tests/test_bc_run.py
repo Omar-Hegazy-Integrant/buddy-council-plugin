@@ -337,6 +337,24 @@ def jama_file(reqs, scope="", **args):
             "summary": "3 requirements across 2 features", "args": {**base, **args}, "requirements": reqs}
 
 
+def background_item(bid, title, description, folder, item_type="System Requirement", status="Approved"):
+    return {"type": "background", "id": bid, "title": title, "description": description, "rationale": "",
+            "feature": folder.split(" / ")[-1], "status": status, "linked_ids": [],
+            "raw_fields": {"item_type": item_type, "folder_path": folder, "url": f"https://jama.test/{bid}"}}
+
+
+BACKGROUND = [
+    background_item("SYS-1", "Alarm audibility", "The system shall keep alarms audible during sensor warm-up.", "Design Inputs / System RS / Alarms"),
+    background_item("RISK-4", "Missed alarm", "A muted alarm can hide a low reading.", "Design Inputs / Risk", item_type="Risk"),
+]
+
+
+def background_file(items, **args):
+    data = jama_file(items, **args)
+    return {**data, "kind": "background", "scope": {"input": "", "kind": "background"},
+            "summary": f"{len(items)} background items — the rest of the project", "args": {**data["args"], "background": True}}
+
+
 def testrail_file(cases, **overrides):
     return {"kind": "test_cases", "source": "testrail", "project_id": 1, "suite_id": 9,
             "requirement_field": "custom_jama_req_id", "filter": {"requirement_ids": [], "section": "", "unlinked": False},
@@ -348,13 +366,15 @@ class Checks(RunFolderTest):
         super().setUp()
         (self.project / ".buddy-council" / "sources.json").write_text(json.dumps(JAMA_CONFIG))
 
-    def link(self, requirements_file, cases_file, docs=None, scope=""):
-        run = self.new_run(scope=scope)
+    def link(self, requirements_file, cases_file, docs=None, scope="", command="coverage", background=None):
+        run = self.new_run(command=command, scope=scope)
         self.write(run, "requirements.json", requirements_file)
         if cases_file is not None:
             self.write(run, "test_cases.json", cases_file)
         if docs is not None:
             self.write(run, "docs.json", docs)
+        if background is not None:
+            self.write(run, "background.json", background)
         return bc_run.cmd_link(str(run))
 
     def test_a_run_that_matches_the_config_passes_and_reports_from_the_files(self):
@@ -401,6 +421,31 @@ class Checks(RunFolderTest):
         result = self.link(REQUIREMENTS, testrail_file(CASES))
         self.assertEqual(result["mismatches"], [])
         self.assertEqual(result["lines"][0], "Fetch: requirements → 5 from the Excel export")
+
+    def test_a_lookup_on_jama_reports_its_background_and_never_counts_it(self):
+        result = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), command="lookup", background=background_file(BACKGROUND))
+        self.assertEqual((result["mismatches"], result["missing"]), ([], []))
+        self.assertEqual(
+            result["lines"][1],
+            "Fetch: background → 2 items from the rest of Jama project 42, context for answers, never counted "
+            "(2 background items — the rest of the project)",
+        )
+        self.assertEqual((result["counts"]["background"], result["counts"]["requirements"]), (2, 5))
+
+    def test_a_lookup_on_jama_without_its_background_is_missing_a_source(self):
+        result = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), command="lookup")
+        self.assertEqual(result["missing"], ["background"])
+        self.assertIn("Fetch: background → FAILED — no background file in the run", result["lines"])
+        self.assertEqual(self.link(jama_file(REQUIREMENTS), testrail_file(CASES))["missing"], [], "only lookups read it")
+
+    def test_background_read_with_other_arguments_is_named(self):
+        wrong = background_file(BACKGROUND, root_ids=[], item_type_exclude=["Text"])
+        result = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), command="lookup", background=wrong)
+        self.assertIn("background items were read with root_ids=none, but the config says [7].", result["mismatches"])
+        self.assertIn("background items were read with item_type_exclude=['text'], but the config says none.", result["mismatches"])
+        unmarked = {**background_file(BACKGROUND), "kind": "requirements"}
+        result = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), command="lookup", background=unmarked)
+        self.assertIn("background.json was not written by the Jama server with background=true.", result["mismatches"])
 
 
 def lookup_requirement(rid, description, folder, status="Approved", title=""):
@@ -546,16 +591,46 @@ class Search(RunFolderTest):
         self.assertIn("   Expected: No alert sounds until warm-up completes", text)
         self.assertTrue(text.rstrip().endswith("Not in this run: R-99"))
 
+    def test_background_is_searched_and_shown_apart_from_the_requirements(self):
+        before = [t["id"] for t in self.search()["top"]]
+        self.write(self.run, "background.json", background_file(BACKGROUND))
+        result = self.search()
+        self.assertEqual([t["id"] for t in result["top"]], before, "background never enters the requirement ranking")
+        self.assertEqual((result["searched"]["background"], result["matched"]["background"]), (2, 2))
+        self.assertEqual({b["id"] for b in result["top_background"]}, {"SYS-1", "RISK-4"})
+        text = self.text(result)
+        self.assertIn("and 2 background items elsewhere in the project", text)
+        self.assertIn("## Elsewhere in the project — background, not requirements in scope: 2 match, the top 2 shown", text)
+        self.assertIn(
+            "- SYS-1 — Alarm audibility · System Requirement · Status: Approved · Folder: Design Inputs / System RS / Alarms · matches:",
+            text,
+        )
+        self.assertIn("  > The system shall keep alarms audible during sensor warm-up.\n  Link: https://jama.test/SYS-1", text)
+        shown = bc_run.cmd_show(str(self.run), "SYS-1, R-1")
+        self.assertIn("## SYS-1 — Alarm audibility — background, not a requirement in scope\nStatus: Approved · Type: System Requirement", shown)
+        self.assertIn("## R-1\n", shown)
+
+    def test_background_answers_when_no_requirement_does(self):
+        self.write(self.run, "background.json", background_file(BACKGROUND))
+        result = self.search("missed reading risk", ["missed|hide", "reading"])
+        self.assertEqual(result["matched"]["requirements"], 0)
+        self.assertEqual(result["top_background"][0]["id"], "RISK-4")
+        text = self.text(result)
+        self.assertIn("## No requirement matches any of the concepts", text)
+        self.assertIn("- RISK-4 — Missed alarm · Risk", text)
+
 
 class Recent(RunFolderTest):
     def setUp(self):
         super().setUp()
         (self.project / ".buddy-council" / "sources.json").write_text(json.dumps(JAMA_CONFIG))
 
-    def complete_run(self, scope="", requirements=None, cases=None):
-        run = self.new_run(scope=scope)
+    def complete_run(self, scope="", requirements=None, cases=None, background=True):
+        run = self.new_run(command="lookup", scope=scope)
         self.write(run, "requirements.json", requirements or jama_file(REQUIREMENTS, scope=scope))
         self.write(run, "test_cases.json", cases or testrail_file(CASES))
+        if background:
+            self.write(run, "background.json", background_file(BACKGROUND))
         bc_run.cmd_link(str(run))
         return run
 
@@ -598,6 +673,17 @@ class Recent(RunFolderTest):
         changed = {**JAMA_CONFIG, "requirements": {**JAMA_CONFIG["requirements"], "item_type_filter": ["Other"]}}
         (self.project / ".buddy-council" / "sources.json").write_text(json.dumps(changed))
         self.assertIsNone(bc_run.cmd_recent(str(self.project), 30)["run_dir"])
+
+    def test_a_jama_run_without_background_is_not_reused_for_a_lookup(self):
+        coverage = self.new_run(command="coverage")
+        self.write(coverage, "requirements.json", jama_file(REQUIREMENTS))
+        self.write(coverage, "test_cases.json", testrail_file(CASES))
+        bc_run.cmd_link(str(coverage))
+        self.age(coverage, 1)
+        self.assertIsNone(bc_run.cmd_recent(str(self.project), 30)["run_dir"])
+        lookup = self.complete_run()
+        self.age(lookup, 2)
+        self.assertEqual(bc_run.cmd_recent(str(self.project), 30)["run_dir"], str(lookup))
 
     def test_a_project_without_runs_has_none(self):
         self.assertEqual(bc_run.cmd_recent(str(self.project), 30), {"run_dir": None, "reason": "no runs yet"})

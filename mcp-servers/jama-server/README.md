@@ -39,10 +39,10 @@ Behind a TLS-inspecting corporate proxy, set `SSL_CERT_FILE` in the server's env
 | `jama_get_projects` | Readable projects: id, key, name |
 | `jama_get_item_types` | Item types and their fields; with `project_id`, only the types in that project, with counts |
 | `jama_get_features` | The project's features with paths and requirement counts |
-| `jama_get_requirements` | Requirements in the plugin's canonical schema, optionally scoped to a feature |
+| `jama_get_requirements` | Requirements in the plugin's canonical schema, optionally scoped to a feature — or, with `background=true`, the rest of the project as context |
 | `jama_get_item` | One item by document key or id, with upstream/downstream relationships |
 | `jama_get_items` | Many items in one call, by document key or id — each shaped like `jama_get_item`, in request order, paged |
-| `jama_get_scope_proposal` | From the requirement IDs a test suite links to: the proposed root(s), item types, and feature preview |
+| `jama_get_scope_proposal` | From the requirement IDs a test suite links to: the proposed root (the whole document holding them), feature depth, item types, feature preview, and background size |
 
 ### Roots and features
 
@@ -58,11 +58,22 @@ Without roots, the whole project is in scope and a requirement's `feature` is it
 (`feature_item_type` picks another type), falling back to the nearest Set or Component, then `"Unknown"`.
 
 `jama_get_scope_proposal` chooses roots from evidence. Given the requirement IDs the test suite links to, it
-walks down from the project while one container holds at least 95% of them; a Set or Folder reached that way
-is the root. Above set level — the project, or a Component grouping several documents — it splits into the
-few children that together hold 95%. Links outside the result are reported as outliers rather than widening
-the root, and features with no linked IDs are listed, because only a person can tell an untested feature from
-an archive.
+first finds where they concentrate: it walks down from the project while one container holds at least 95% of
+them, and above set level — the project, or a Component grouping several documents — splits into the few
+children that together hold 95% (`linked_folders`). It then widens each to its whole **document** — the Jama
+Set holding it — so the document's other chapters come into scope and a requirement without a linked case
+shows as untested instead of vanishing. `feature_depth` is counted from that root, so the features stay the
+folders where the links sit. Links outside the result are reported as outliers rather than widening the
+root; same-type requirements elsewhere (often an archive) are counted with where they sit; features with no
+linked IDs are listed, because only a person can tell an untested feature from an archive; and `background`
+previews how much of the project is left as context.
+
+**Background.** `jama_get_requirements` with `background=true` and the same arguments returns the rest of the
+project instead of the requirements: every item outside the roots, or of another item type inside them,
+minus `item_type_exclude` types and `exclude_ids` subtrees. Each item has type `"background"`, its nearest
+folder as `feature`, and its location in `raw_fields.folder_path`. The plugin's `/bc:ask` lookups search it
+to enrich their answers — system requirements, risks, labeling, standards, design — and never count it as a
+requirement. It is read from the cached tree, so it costs no extra Jama requests beyond pick-list names.
 
 `jama_get_requirements` takes a `scope`:
 

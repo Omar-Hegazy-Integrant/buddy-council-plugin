@@ -14,11 +14,16 @@ ever retyped by a model.
 ```
 <project>/.buddy-council/runs/<run-id>/
   requirements.json  test_cases.json   full canonical records (written by the Jama/TestRail servers)
+  background.json                      lookups on Jama only: the rest of the project, context for answers
   docs/  docs.json                     GitHub docs the requirements link to (gh CLI strategy)
   links.json                           counts, untested, orphans, stranded links, per-feature rows — computed by code
   bundles/NN-<feature>-<p>.md          each feature's requirements with their test cases, verbatim, in small parts
   manifest.json
 ```
+
+`background.json` holds every Jama item outside the requirements in scope — system requirements, risks,
+standards, design — for `/bc:ask` lookups to search. It is never a requirement: no count, bundle, or report
+includes it.
 
 The newest 5 runs are kept, none longer than a week. The folder sits inside `.buddy-council/`, which
 `/bc:setup` keeps out of git.
@@ -60,7 +65,7 @@ reply — is what you trust:
    `Collect: the run did not match the config — collecting again inline` and the mismatches, then collect
    inline once. If the inline run still mismatches, STOP and show them.
 3. **Print every entry of `lines`, exactly** — the `Fetch:`, `Enrichment:`, and `Readiness:` lines, built by
-   code from the files themselves.
+   code from the files themselves (a lookup on Jama adds a `Fetch: background` line).
 4. **`missing` is not empty** → a configured source could not be fetched; the collector's `failed` has the
    error. STOP: name each missing source and its error, and ask whether to continue with partial data or
    abort. Continue only on an explicit yes, and mark the final output **PARTIAL** with the missing source

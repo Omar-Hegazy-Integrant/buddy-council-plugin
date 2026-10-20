@@ -35,8 +35,8 @@ The caller's prompt gives:
 - Run each shell command exactly as shown, one per call: `python3`, the script's absolute path, the
   subcommand, then the options. Wrap any value that contains a space or a special character in single quotes.
   No `cd`, `&&`, `;`, pipes, `$(...)`, or redirects — the only exception is the Excel step.
-- Never open `requirements.json`, `test_cases.json`, `docs/`, or `bundles/` — they are large, and they are for
-  the caller.
+- Never open `requirements.json`, `background.json`, `test_cases.json`, `docs/`, or `bundles/` — they are
+  large, and they are for the caller.
 - When a call fails, retry it at most twice. Then record the failure and move on to the next step. Never
   substitute another tool, and never invent data.
 
@@ -56,7 +56,7 @@ The caller's prompt gives:
    python3 <script> new --project <project> --command <command> --scope '<scope>'
    ```
 
-   It prints JSON with `run_dir`, `requirements`, and `test_cases` — the exact paths to use below.
+   It prints JSON with `run_dir`, `requirements`, `background`, and `test_cases` — the exact paths to use below.
 
 4. **Requirements.**
    - Provider `jama`: call `jama_get_requirements` with `project_id`, `scope`, and `save_to` = the
@@ -65,6 +65,10 @@ The caller's prompt gives:
      (`feature_inference.folder_item_type`), `item_type_filter`, `item_type_exclude`, `field_mapping`.
      If it answers `"loading": true`, call it again with the same arguments — that joins the read already
      running. Keep calling until it answers with `saved_to` (a large project takes a minute or two).
+   - Provider `jama` and `command` `lookup` — then also the **background**, the rest of the project that
+     lookups search to enrich their answers: call `jama_get_requirements` again with exactly the same
+     arguments plus `background: true`, and `save_to` = the `background` path. It reuses the tree the first
+     call read, so it answers in seconds.
    - Provider `excel`: run the parser exactly as `<plugin_root>/providers/excel/fetch.md` shows ("How to
      Fetch"), with `BC_SCOPE` set to the scope, and add ` > '<requirements path>'` to the end of the parser
      line so its JSON goes into the run folder. Its `Summary:` line arrives on stderr — keep it.
@@ -99,8 +103,8 @@ Your final message is exactly one JSON object and nothing else:
 }
 ```
 
-- `failed` lists each step that could not be completed, as `{"source": "requirements" | "test cases" |
-  "enrichment" | "link", "error": "<the error text, verbatim>"}`. Empty when everything worked.
+- `failed` lists each step that could not be completed, as `{"source": "requirements" | "background" |
+  "test cases" | "enrichment" | "link", "error": "<the error text, verbatim>"}`. Empty when everything worked.
 - `notes` holds anything else the caller should know, such as a tool that answered `loading` many times.
 - Do not restate counts, summaries, or lines: the link step writes them to `links.json`, and the caller reads
   them there.

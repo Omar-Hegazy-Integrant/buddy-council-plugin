@@ -1,5 +1,5 @@
 ---
-description: Internal (used by /bc:ask) — Find where a behavior or business rule the user describes in their own words is already specified. Code ranks every requirement in scope against the ask (BM25 over concepts the model words — no embeddings), and the model judges which requirements cover it, partly cover it, conflict with it, or relate to it.
+description: Internal (used by /bc:ask) — Find where a behavior or business rule the user describes in their own words is already specified. Code ranks every requirement in scope against the ask (BM25 over concepts the model words — no embeddings) and, on Jama, the rest of the project as background, and the model judges which requirements cover it, partly cover it, conflict with it, or relate to it.
 user-invocable: false
 ---
 
@@ -8,7 +8,9 @@ user-invocable: false
 Answers "Do we already have this? Where is it specified? Which requirements cover it?" for an ask in the
 user's own words, without reading every requirement. The work splits three ways: you word the ask as
 concepts, code searches every requirement in scope (plus the test cases and linked docs) in about a second,
-and you judge only the top matches, reading their text verbatim.
+and you judge only the top matches, reading their text verbatim. With Jama, the same search also runs over
+the **rest of the project** — system requirements, risks, labeling, standards, design — which enriches the
+answer as background but never counts as a requirement in scope.
 
 `<script>` below is `<plugin_root>/skills/collect-artifacts/bc_run.py`, where `<plugin_root>` is the absolute
 plugin path — `${CLAUDE_PLUGIN_ROOT}`, else `plugin_root` in `.buddy-council/sources.json`. Always pass the
@@ -67,6 +69,9 @@ run folder. Read every file in `files`, in order. They hold:
   that link to it.
 - **Test cases that mention it**, with their links — `Links: none` means no requirement is behind the case —
   and **linked docs that mention it**, each with the best-matching line.
+- **Elsewhere in the project** (Jama) — the top 10 background items: each with its item type, status,
+  folder, best-matching line, and Jama link. They are not requirements in scope. `top_background` in the
+  JSON summary names the best five.
 - **Next candidates** — ranks 26–50 by title, and **the words the top results use** that you didn't search.
 
 ## Step 4: Search again when one search can't settle it
@@ -97,7 +102,12 @@ Rules:
   cover "during warm-up" — it excludes it, and that may be the answer.
 - A **Deprecated** or **Deferred** requirement never covers; mention it as history ("was specified by X, now
   Deprecated"). A **Draft** requirement covers, labelled Draft.
-- To read a candidate's neighbours, or one from Next candidates, print them by ID:
+- **Background never covers.** An item from *Elsewhere in the project* is not a requirement in scope, so it
+  cannot make the ask specified. Use it to enrich the answer: what a system requirement, risk, labeling
+  item, standard, or design item says about the ask — including where it **conflicts** with the requirements
+  in scope, or states what they leave out. Treat an item whose folder or status says Archive, Old,
+  Obsolete, or Deprecated as history.
+- To read a candidate's neighbours, one from Next candidates, or a background item in full, print them by ID:
 
   ```
   python3 <script> show --run '<run_dir>' --ids 'ID, ID'
@@ -123,6 +133,8 @@ keep it short.
 - **Already specified** — at least one active requirement covers the ask.
 - **Partly specified** — requirements cover part of it; name the part that no requirement states.
 - **Not specified** — only after Step 4; name the closest requirements and the folder where it would belong.
+  When background states it, say where: "not in the requirements in scope — but H-GMS-31 in the System
+  Requirements says …".
 - Lead with **Conflicts with <ID>** whenever an active requirement conflicts — it matters most.
 
 ```
@@ -135,6 +147,8 @@ Conflicts
 - CWA-REQ-87 · Alerts — "Once the warm-up has completed, …" — <why it conflicts>
 Related
 - CWA-REQ-90 — <one line>
+Background elsewhere in the project
+- H-GMS-31 · GMS Requirement · System Requirements / GMS RS — "<the line that bears on the ask, verbatim>" · <link>
 Where it lives: Alerts / Alert Triggers (12 of the top 25), Patient Onboarding / Sensor Warm-up (2)
 In flight: PROJ-1234 — <title> (In Progress) — touches CWA-REQ-87
 Tested without a requirement: TC-789 — "<title>"

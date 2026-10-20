@@ -98,11 +98,12 @@ skills/normalize-artifacts/ → clean text, normalize IDs, cross-link
 | File | Written by | Holds |
 |---|---|---|
 | `requirements.json` | Jama server (`save_to`) or Excel parser | canonical requirements in scope |
+| `background.json` | Jama server (`save_to`, `background: true`) — lookups only | the rest of the Jama project: every item outside the requirements in scope, minus excluded item types and subtrees — context for answers, never counted |
 | `test_cases.json` | TestRail server (`save_to`) | every case in the suite, canonical — the link step scopes them |
 | `docs/`, `docs.json` | `bc_run.py enrich` | the GitHub docs requirements link to, verbatim, truncated at `max_doc_chars`, split into parts of at most 18 KB |
 | `links.json` | `bc_run.py link` | counts, untested (Deprecated/Deferred left out), orphans, stranded links, unknown linked IDs, per-feature rows with their bundles and docs; the `Fetch:`/`Enrichment:`/`Readiness:` lines; missing sources; and every mismatch between the run and `sources.json` |
 | `bundles/*.md` | `bc_run.py link` | per feature: each requirement verbatim with its custom fields, then the cases that link to it with theirs; parts of at most 18 KB |
-| `search/NN-<ask>-<p>.md` | `bc_run.py search` | a lookup's results: where the matches are, the top 25 requirements verbatim with what they matched, the test cases and docs that mention the ask, the next 25 candidates, and the project's own wording for a second search |
+| `search/NN-<ask>-<p>.md` | `bc_run.py search` | a lookup's results: where the matches are, the top 25 requirements verbatim with what they matched, the test cases and docs that mention the ask, the top background items elsewhere in the project, the next 25 candidates, and the project's own wording for a second search |
 | `manifest.json` | `bc_run.py` | command, scope, timestamps, counts |
 
 A run folder is created by `bc_run.py new`, never by a server: `save_to` only writes a `.json` file directly
