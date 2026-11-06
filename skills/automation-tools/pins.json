@@ -1,0 +1,52 @@
+{
+  "_comment": "What /bc:setup installs into ~/.buddy-council/tools, pinned by version and checksum. Change a pin only in a plugin release whose device check passed: the next /bc:setup installs the new pin by itself, keeps the old one until the new server answers, then removes it.",
+  "node": {
+    "version": "26.13.0",
+    "why": "appium-mcp needs Node 22 or newer. 26.13.0 is Node 26 LTS (Lithium), supported until 30 April 2029.",
+    "base_url": "https://nodejs.org/dist",
+    "mirror_env": "NODEJS_ORG_MIRROR",
+    "disk_mb": 240,
+    "files": {
+      "darwin-arm64": [
+        { "name": "node-v26.13.0-darwin-arm64.tar.xz", "sha256": "6f5b3187d9df9fc007e881167905bc7d69ad26450ddc377c83d63256a2495b6e", "mb": 31 },
+        { "name": "node-v26.13.0-darwin-arm64.tar.gz", "sha256": "d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6", "mb": 58 }
+      ],
+      "darwin-x64": [
+        { "name": "node-v26.13.0-darwin-x64.tar.xz", "sha256": "8bd636bc981a92e1ab930c02340eece2076eb1aaf94d14e421cdeeddc1292298", "mb": 32 },
+        { "name": "node-v26.13.0-darwin-x64.tar.gz", "sha256": "525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e", "mb": 60 }
+      ]
+    }
+  },
+  "appium_mcp": {
+    "version": "1.99.2",
+    "why": "Installed exactly as appium-mcp/package-lock.json says, with npm ci --ignore-scripts, so two installs a day apart are identical. Bundles the xcuitest and uiautomator2 drivers.",
+    "lockfile_dir": "appium-mcp",
+    "entry": "node_modules/appium-mcp/dist/index.js",
+    "mb": 380,
+    "disk_mb": 380,
+    "tools": 32
+  },
+  "jdk": {
+    "version": "21.0.13+9",
+    "why": "Only for Android on appium-mcp's built-in drivers, on a Mac without a working JDK. Eclipse Temurin 21 LTS.",
+    "disk_mb": 330,
+    "files": {
+      "darwin-arm64": [
+        { "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.13_9.tar.gz", "sha256": "bf036b35b071bfb2f54f2c0af8ee8d88afa95ee6eb3dce02c0f94cfc2524d04a", "mb": 191 }
+      ],
+      "darwin-x64": [
+        { "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_mac_hotspot_21.0.13_9.tar.gz", "sha256": "9aa1d1c17ae5467a022679e7e0af5c00797d94ac462ed1a46f4db07a8a34a6dd", "mb": 185 }
+      ]
+    }
+  },
+  "android_sdk": {
+    "version": "platform-tools 37.0.1, build-tools 37.0.0",
+    "why": "Only for Android on appium-mcp's built-in drivers, on a Mac without a working Android SDK: adb, plus apksigner to sign the driver's server app. Saying yes to setup accepts the Android Software Development Kit License Agreement.",
+    "license": "https://developer.android.com/studio/terms",
+    "disk_mb": 240,
+    "parts": [
+      { "dir": "platform-tools", "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-darwin.zip", "sha256": "ee39ad5967e95c2a07f04dbcbde96b1a0c916ba376096db5d2f498b7727a5d1d", "mb": 16 },
+      { "dir": "build-tools/37.0.0", "url": "https://dl.google.com/android/repository/build-tools_r37_macosx.zip", "sha256": "b5b1ac529028a49f11b596b89d9b34252e0f39388ee7dbd16ae3110f1c9c5722", "mb": 79 }
+    ]
+  }
+}

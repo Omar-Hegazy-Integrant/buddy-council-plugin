@@ -40,6 +40,16 @@
     "mcp__atlassian__jira_search_fields",
     "mcp__atlassian__jira_get_transitions",
     "mcp__atlassian__jira_get_link_types",
-    "mcp__atlassian__jira_search_assignable_users"
+    "mcp__atlassian__jira_search_assignable_users",
+    "mcp__appium__appium_mobile_device_info",
+    "mcp__appium__appium_find_element",
+    "mcp__appium__appium_find_elements",
+    "mcp__appium__appium_get_text",
+    "mcp__appium__appium_get_element_attribute",
+    "mcp__appium__appium_get_active_element",
+    "mcp__appium__appium_get_window_size",
+    "mcp__appium__generate_locators",
+    "mcp__appium__appium_get_page_source",
+    "mcp__appium__appium_screenshot"
   ]
 }

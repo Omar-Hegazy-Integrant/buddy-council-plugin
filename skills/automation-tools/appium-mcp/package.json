@@ -1,0 +1,13 @@
+{
+  "name": "bc-appium-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The appium-mcp that Buddy-Council installs into ~/.buddy-council/tools with npm ci --ignore-scripts. Change it only in a plugin release whose device check passed.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "appium-mcp": "1.99.2"
+  }
+}

@@ -25,6 +25,8 @@ buddy_council_plugin/
 │   ├── fetch-requirements/      # Router: delegates to configured provider
 │   ├── fetch-test-cases/        # Router: delegates to configured provider
 │   ├── collect-artifacts/       # Run folders: launches data-collector; bc_run.py new/enrich/link (stdlib, Python 3.9+)
+│   ├── automation-tools/        # /bc:setup's automation part: bc_tools.py detect/ensure/… (stdlib, Python 3.9+);
+│   │                            #   pins.json (Node by version + SHA-256) and appium-mcp/package-lock.json
 │   ├── normalize-artifacts/     # Clean, normalize IDs, cross-link
 │   ├── detect-contradictions/   # Core analysis (7 contradiction types)
 │   ├── analyze-coverage/        # Coverage gap detection and metrics

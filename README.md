@@ -21,7 +21,7 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 
 | Command | Description |
 |---------|-------------|
-| `/bc:setup` | Configure Buddy-Council data sources and credentials in four steps with a single review-and-save |
+| `/bc:setup` | Configure Buddy-Council data sources and credentials in four steps with a single review-and-save, and install the automation tools when it finds a test project |
 | `/bc:contradiction` | Detect contradictions, inconsistencies, and alignment gaps between requirements and test cases |
 | `/bc:coverage` | Find untested requirements, orphan test cases, and coverage gaps |
 | `/bc:validate` | Validate a ticket description against requirements and test cases, then draft and create a Jira ticket |
@@ -40,6 +40,7 @@ These descriptions are the `description:` frontmatter in `commands/*.md` — the
 - Requirements from **either** Jama Connect — a Jama API client ID and secret (Jama → profile menu → **Set API Credentials**), on an account allowed to use the REST API (Admin → REST API → Managed Access Control, when your site restricts it) — **or** an Excel export from Jama. A read-only Jama account is recommended; the plugin never writes to Jama either way
 - Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your sheet links GitHub docs
 - A Jira account with access to your team's dev board, on **either Atlassian Cloud or Jira Server/Data Center** — plus a token: an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) on Cloud, or a Personal Access Token (profile menu → **Personal Access Tokens**) on Server/DC. `/bc:setup` requires the board — it feeds in-flight work into contradiction and coverage analysis, and is where `/bc:validate` files tickets. Nothing needs enabling by a site admin. If the connection test fails (a self-hosted Jira usually needs your corporate VPN), setup records the board as *pending* and finishes — the requirements-vs-test-cases commands work without it
+- For the automation tools (`/bc:automate`): **nothing to install by hand**. When `/bc:setup` runs inside an Appium or WebdriverIO test project, it installs its own Node and appium-mcp — see [Automation tools](#automation-tools-only-inside-a-test-project). iPhone tests need Xcode from the App Store, and setup's final check needs a phone connected over USB
 
 ## Installation
 
@@ -101,7 +102,7 @@ copilot plugin install bc
 
 ### Copilot CLI — fewer permission prompts
 
-The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/hooks.json`, Copilot CLI (1.0.7x and later) loads the plugin-root `hooks.json` — same scripts, same behavior. On either CLI they auto-approve the plugin's curated read-only operations (the Excel parser, `jq`, `gh api` reads, the TestRail connection test, read-only MCP fetches) and writes to the plugin's own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`). Write operations like Jira ticket creation always prompt.
+The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/hooks.json`, Copilot CLI (1.0.7x and later) loads the plugin-root `hooks.json` — same scripts, same behavior. On either CLI they auto-approve the plugin's curated read-only operations (the Excel parser, `jq`, `gh api` reads, the TestRail connection test, read-only MCP fetches, appium-mcp's screen reads, and the automation script's install and checks) and writes to the plugin's own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`). Write operations like Jira ticket creation always prompt.
 
 If your Copilot version still prompts for MCP reads (MCP tool naming in hooks varies by version), pre-approve them at launch with `--allow-tool`:
 
@@ -114,8 +115,9 @@ Append the read-only tools for any other sources you configured:
 - **Jira** (board reads, ticket validation, V&V sprint prep): `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)`
 - **GitHub MCP** (doc enrichment): `github(get_file_contents)`
 - **Jama** (requirements): `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — the server's whole tool list, since it has no write tools
+- **appium-mcp** (automation — reading the phone's screen only): `appium(appium_mobile_device_info),appium(appium_find_element),appium(appium_find_elements),appium(appium_get_text),appium(appium_get_element_attribute),appium(appium_get_active_element),appium(appium_get_window_size),appium(generate_locators),appium(appium_get_page_source),appium(appium_screenshot)`
 
-**Never add the Jira write tools** — `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, `jira_add_issues_to_sprint`. They are left out on purpose so ticket creation, label changes, links, and comments on the dev team's stories always prompt. The same goes for the TestRail write tools — `testrail_add_case`, `testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, `testrail_update_cases` — which create and change cases in the team's suite.
+**Never add the Jira write tools** — `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, `jira_add_issues_to_sprint`. They are left out on purpose so ticket creation, label changes, links, and comments on the dev team's stories always prompt. The same goes for the TestRail write tools — `testrail_add_case`, `testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, `testrail_update_cases` — which create and change cases in the team's suite, and for every other appium-mcp tool (`appium_session_management`, `appium_gesture`, `appium_set_value`, `appium_app_lifecycle`, …), which taps, types, opens sessions, or launches apps on the phone.
 
 On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when the Excel parser or the TestRail connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
 
@@ -149,6 +151,8 @@ Three layers of visibility, in order of reach:
 1. **In-transcript trace (both platforms).** Every analysis command follows a mandatory Data Contract: it prints `Fetch: requirements → N` / `Fetch: test cases → M` (plus `Enrichment: fetched K of N` when GitHub enrichment is configured) before analyzing, and stops to ask before continuing if any configured source failed. If you don't see these lines in a run, the run violated the contract — that itself is the bug to report. The Excel parser additionally prints a one-line `Summary:` to stderr on every invocation.
 2. **Tool log (both platforms).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran. Under Copilot each line additionally carries a `result` status (`success` or a failure kind), and failed calls are logged too.
 3. **Native session logs (Copilot CLI).** For deeper Copilot internals beyond the tool log, launch with `copilot --log-level debug` (logs land in `~/.copilot/logs/`, or set `--log-dir`).
+
+**Automation tools.** Their logs are in `~/.buddy-council/automation/logs/`: npm's install, appium-mcp's own log from each check, the project's Appium server, and the project's setup script. To see what is installed and what is pending without changing anything, run `python3 <plugin>/skills/automation-tools/bc_tools.py status --project '<test project>'`.
 
 #### Jama on a large project
 
@@ -202,6 +206,16 @@ The wizard runs in four steps with a single review-and-save confirmation at the 
 4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
 
 Re-running `/bc:setup` shows the current configuration and changes only what you ask. After setup, restart your CLI tool or toggle the MCP server for it to take effect.
+
+### Automation tools (only inside a test project)
+
+When you run `/bc:setup` in an Appium or WebdriverIO test project — such as ApolloAutomation — it also gets the tools that `/bc:automate` drives the app with. **It adds no questions:** the step-4 recap lists what it found and what it will install (the stack, the phone, the app build, the download size), your one "yes" covers it, and "leave out automation" there skips it. Analysis-only projects download nothing.
+
+- **Your project's own setup comes first.** Setup runs the project's check-only mode, such as `./setup --check` — the one command it asks permission for, since it runs your project's code — and shows the result. If it finds problems, the project's own fix runs after you save. What still needs you — a password, tapping Trust on the phone, choosing a signing profile — comes back as "run ./setup in a terminal".
+- **bc keeps its own copies, the way `uv` provides Python.** It installs Node 26 LTS and appium-mcp into `~/.buddy-council/tools` (about 620 MB), pinned by version and checksum. They are never on your PATH and never shared, and setup never edits your shell profile, `JAVA_HOME`, or `ANDROID_HOME`. A tool your Mac already has is never replaced; for Android on appium-mcp's built-in drivers, a missing JDK or Android SDK is installed beside yours, only when the recap said so.
+- **The phone is driven through your project's own Appium** when the Mac has it — so screens are read on the same Appium and WebDriverAgent your tests run on — and through appium-mcp's built-in drivers otherwise.
+- **It proves it works.** Setup registers the `appium` MCP server in both CLIs, then checks that it answers and reads one page source from the phone, without launching any app. No phone connected? Automation is saved as *pending* and checked again on the next `/bc:setup`, like a pending Jira board. Once a phone passes, unplugging it later doesn't undo that. The phone is the one your project's setting names (such as `APOLLO_UDID`), else the first one connected over USB.
+- **It keeps itself current.** When a plugin release changes a pinned version, the next `/bc:setup` installs it by itself, keeps the old one until the new server answers, then removes it. Downloads use your Mac's own proxy, npm registry, and certificates — plus `NODEJS_ORG_MIRROR` for Node — and the checksums keep any mirror safe. A download that still fails is retried on the next run.
 
 ### Manual Configuration
 
@@ -402,6 +416,32 @@ TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
         "--transport", "stdio"
       ],
       "tools": ["*"]
+    }
+  }
+}
+```
+
+**6. Automation tools — not by hand.** Run `/bc:setup` inside the test project, or the script it uses:
+`python3 <plugin>/skills/automation-tools/bc_tools.py ensure --project '<test project>'`. It installs the pinned
+Node and appium-mcp, then writes the `appium` entry into both MCP configs — absolute paths, so it works whatever
+your PATH is — and records an `automation` block in that project's `.buddy-council/sources.json`. The Copilot
+entry looks like this:
+
+```json
+{
+  "mcpServers": {
+    "appium": {
+      "type": "local",
+      "command": "/Users/<you>/.buddy-council/tools/node/v26.13.0-darwin-arm64/bin/node",
+      "args": ["--use-system-ca", "/Users/<you>/.buddy-council/tools/appium-mcp/1.99.2-<lock>/node_modules/appium-mcp/dist/index.js"],
+      "tools": ["*"],
+      "env": {
+        "NO_UI": "true",
+        "ALLOW_REMOTE_APP_URLS": "false",
+        "REMOTE_SERVER_URL_ALLOW_REGEX": "^https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:[0-9]{1,5})?(/[^?#]*)?$",
+        "PAGE_SOURCES_DIR": "/Users/<you>/.buddy-council/automation/page-sources",
+        "SCREENSHOTS_DIR": "/Users/<you>/.buddy-council/automation/screenshots"
+      }
     }
   }
 }
@@ -609,7 +649,7 @@ Command → Agent → Skills (fetch → normalize → analyze) → Report
 - **Agents** — orchestrate the analysis workflow end-to-end
 - **Skills** — reusable capabilities (fetching, normalization, analysis)
 - **Providers** — platform-specific data fetching (TestRail, Excel, Jama, GitHub)
-- **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — they use the vendors' own servers (Atlassian's hosted remote server, and `github-mcp-server`)
+- **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — they use the vendors' own servers (Atlassian's hosted remote server, and `github-mcp-server`). Neither is appium-mcp, the server `/bc:automate` drives the phone with: `/bc:setup` installs it on each Mac from the lockfile in `skills/automation-tools/appium-mcp/`, on bc's own pinned Node. To move a pin, change `skills/automation-tools/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed
 - **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and the plugin-root `hooks.json` (Copilot CLI) register the same four runtime-agnostic scripts
 
 Agents never call providers directly — they go through router skills, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
@@ -644,9 +684,11 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - **Updates guard what was there.** The update tools read every case first and send only what differs, refuse to remove a requirement link unless the user asked for that explicitly, refuse to overwrite a case edited since it was read, verify every field against what TestRail stored (it silently discards unknown custom fields), and never move a case or change its template. No path deletes a test case
 - **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes or updates no test cases; `--apply` executes after one batch confirmation per phase
 - The Jira token lives in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `sources.json`, not in `secrets.json`, not in either MCP config, which reference it only by absolute path. That file is the single place to rotate or revoke it
+- **The automation tools are pinned and kept apart.** Node is checked against its SHA-256 and every npm package against the lockfile's integrity hash, so a mirror or proxy can never change what gets installed; `npm ci --ignore-scripts` runs no package's install scripts. They live in `~/.buddy-council/tools` — never on PATH, never shared — and setup never edits a shell profile, `JAVA_HOME`, or `ANDROID_HOME`. The `appium` server may only talk to Appium servers on this Mac (`REMOTE_SERVER_URL_ALLOW_REGEX`) and never downloads an app from a URL (`ALLOW_REMOTE_APP_URLS=false`)
+- **On the phone, only reading is auto-approved**: appium-mcp's eight read-only tools, plus page sources and screenshots, which it saves in `~/.buddy-council/automation`. Everything that taps, types, opens a session, or launches an app always prompts. Setup's own check of the phone opens one session without launching any app, reads one screen, and closes it
 - Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
-  - the same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches), and the run-folder script `bc_run.py` — but only as one plain command: `python3`, the plugin's own copy by absolute path, a known subcommand, and arguments that are bare or single-quoted, so nothing can be chained onto it
+  - the same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches), the run-folder script `bc_run.py`, and the automation script `bc_tools.py` — but only as one plain command: `python3`, the plugin's own copy by absolute path, a known subcommand, and arguments that are bare or single-quoted, so nothing can be chained onto it. `bc_tools.py project` (which runs your project's own setup script) and `bc_tools.py remove` always prompt
   - a second PreToolUse hook auto-approves writes **only** to the plugin's own generated files (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's own `.mcp.json`) — all other writes still prompt
   - a PostToolUse hook writes the redacted tool log described under [Debugging a bc run](#debugging-a-bc-run) — metadata only, credentials masked, never file contents or responses
 

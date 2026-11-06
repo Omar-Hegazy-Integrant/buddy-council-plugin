@@ -1,5 +1,5 @@
 ---
-description: Configure Buddy-Council data sources and credentials in four steps with a single review-and-save.
+description: Configure Buddy-Council data sources and credentials in four steps with a single review-and-save, and install the automation tools when it finds a test project.
 ---
 
 # /bc:setup — Configure Buddy-Council Data Sources
@@ -23,11 +23,22 @@ Buddy-Council is already configured in this project:
   Jira board:    PROJ board 42 (or: NOT VERIFIED — re-testing this run)
   Enrichment:    cli
   Code mapping:  enabled
+  Automation:    ready — appium-mcp 1.99.2, checked 2026-11-05
+                 (or: pending — no phone is connected over USB yet (re-checking this run))
 
-What would you like to change? [requirements / test cases / jira / everything / nothing]: _
+What would you like to change? [requirements / test cases / jira / automation / everything / nothing]: _
 ```
 
+The `Automation:` line is the `line` that `python3 '<plugin_root>/skills/automation-tools/bc_tools.py' status --project '<cwd>'`
+prints (resolve `<plugin_root>` first, per Step 4a-bis); omit it when that `line` is `null` (no test project here).
+
 Only walk the steps for the sections the user names; carry every other section over unchanged when writing config in Step 4.
+
+**A test project found for the first time joins this run without a question.** When `status` reports
+`"enabled": null` with `"test_project": true` — a test project, and no `automation` block yet — its line already
+says so. Whatever the user answers, even "nothing", run the **Automation** section below and include it in the
+Step 4 recap and its single save question; "leave out automation" there skips it. Once left out, setup only
+mentions it (`Automation: left out — say "automation" to add it`) and never brings it up again by itself.
 
 **Two exceptions, because the Jira board is required** — both run even when the user answers "nothing":
 
@@ -61,6 +72,23 @@ Updated plugin path after version change:
 ```
 
 This repair happens **even when the user answers "nothing"** to the question above — answer the question after the check, and if they say "nothing", stop *after* the paths are fixed. If the paths already match, say nothing and continue silently.
+
+**Then the automation tools** — only when `.buddy-council/sources.json` has `automation.enabled: true`, and also
+before answering "nothing". After the repair above (so the new plugin path's `.mcp.json` exists), run `status`
+(the same command as in Step 0). When its `needs` is empty, do nothing and say nothing. Otherwise — a plugin
+update changed a pin (`install`), a config lost or holds a stale `appium` entry (`wire`), or something was
+pending (`retry`) — run the same two calls as 4d steps 2–3, each with a 10-minute timeout:
+
+```bash
+python3 '<plugin_root>/skills/automation-tools/bc_tools.py' ensure --project '<cwd>'
+python3 '<plugin_root>/skills/automation-tools/bc_tools.py' smoke --project '<cwd>'
+```
+
+`smoke` only when `ensure` reported `"phone_check": "due"`. `ensure` installs a pin a plugin update changed —
+keeping the old version wired, in both CLIs, until the new server answers, then removing it — re-adds the
+`appium` entry to a `.mcp.json` that a plugin update replaced, and retries a failed download. Both ask nothing,
+and the bash hook approves both. Show their `lines`, then use a fresh `status` line in the summary. A pending
+result never blocks the rest of setup.
 
 ## Step 1 of 4: Requirements (Jama or Excel)
 
@@ -747,6 +775,44 @@ Never write `"pending": true` when verification actually succeeded, and never le
 entirely — an absent block now means "the user has not been through Step 3", which the re-run flow treats
 as unfinished setup.
 
+## Automation — automatic, no questions
+
+`/bc:automate` turns TestRail cases into automated tests by driving the app on a phone through **appium-mcp**.
+This section gets the tools for that ready **without a single extra question**: it detects, plans, and puts the
+plan in the Step 4 recap, where the one save confirmation covers it. It runs after Step 3 so every question is
+answered before the slower checks start. Follow `${CLAUDE_PLUGIN_ROOT}/skills/automation-tools/SKILL.md`; the
+steps here are the setup-specific part.
+
+1. **Detect.** Run, from the current working directory:
+
+   ```bash
+   python3 '<plugin_root>/skills/automation-tools/bc_tools.py' detect --project '<cwd>'
+   ```
+
+   - `test_project: false`, or `applies: false` → **skip this section silently**: no recap line, nothing
+     downloaded. Analysis-only projects never hear about automation.
+   - Otherwise keep the result: its `lines` go into the recap as they are, `plan.shared` says which shared
+     tools the Mac is missing, and `setup_script` names the project's own setup script, if it has one.
+
+2. **The project's own check.** When `setup_script` is not `null`, run its check-only mode:
+
+   ```bash
+   python3 '<plugin_root>/skills/automation-tools/bc_tools.py' project --project '<cwd>' --mode check
+   ```
+
+   This one reaches the normal permission prompt — it runs the project's own code — and can take a few
+   minutes: give it a 10-minute timeout. The script stops the project's script itself after 9 minutes. Add its `line` to the recap and, when it reports `problems`, up to four of them, then the line
+   `its fix runs after you save` (the fix runs in 4d). A check that finds nothing wrong adds only its `line`.
+
+3. **Recap.** The automation lines go last in the Step 4 recap, followed by
+   `(say "leave out automation" to skip it)`. They already say what will be installed, how big it is, which
+   phone and app it found, and what only the user can do — plugging in the phone, `sudo`, the App Store,
+   signing. Add nothing that implies a question.
+
+On **"leave out automation"**, write `"automation": { "enabled": false }` in 4a and skip 4d. Anything else the
+user says about automation in the save answer — "don't install the Android tools" — is applied before saving,
+like any other correction to the recap.
+
 ## Step 4 of 4: Review & Save
 
 Before writing anything, show one compact recap of everything collected and ask a **single** save question — this replaces all per-section save prompts:
@@ -769,6 +835,14 @@ Ready to save:
                  (labels/approval phrases: edit jira.vnv_workflow in .buddy-council/sources.json)
   Code mapping:  enabled — detected Node project; ID patterns CWA-REQ-\d+, TC-\d+
                  (extra ignore dirs: edit project.ignore_dirs in .buddy-council/sources.json)
+  Automation:    Appium test project (Java, TestNG, Gradle) — iOS and Android
+                 drives the phone through the project's own Appium 2.19.0 (uiautomator2 4.2.9, xcuitest 9.10.5)
+                 phone: QA iPhone (APOLLO_UDID) · app: ~/Desktop/apollo.ipa · language: the phone's own
+                 installs bc's own Node 26.13.0 and appium-mcp 1.99.2 into ~/.buddy-council/tools — about 620 MB on disk, never on PATH
+                 the project's ./setup --check: 31 OK, 1 warning, 1 problem
+                   ❌ WebDriverAgent isn't signed for QA iPhone
+                 its fix runs after you save
+                 (say "leave out automation" to skip it)
 
 Save? [y]: _
 ```
@@ -786,8 +860,8 @@ When the requirements source is **Jama**, the first lines read instead:
   Field mapping: status ← Status, rationale ← Rationale, GitHub doc URL ← Linked to Github
 ```
 
-On yes, write all files (4a–4c below). On no, ask what to change — unless the answer already says — fix it,
-and re-show the recap.
+On yes, write all files (4a–4c below), then install the automation tools (4d) when the recap included them. On
+no, ask what to change — unless the answer already says — fix it, and re-show the recap.
 
 ### 4a: Write source config
 
@@ -892,6 +966,10 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 ```
 
 The `"jira"` section is **always written** — Step 3 is required. If the connection test failed, write it with `"pending": true`. `board.id` and `vnv_board.id` are integers, not strings. `deployment` is `"cloud"` or `"server"`, detected from the host. `vnv_board.project_key` **may equal** `project_key` — that is a supported layout, and `discriminator` is what keeps the two boards apart; set it to `null` when the V&V board has its own project. There is no `cloud_id`: `mcp-atlassian` is bound to one site by `JIRA_URL` in the env file, so no site id is ever passed to a tool. If a `cloud_id` survives from a pre-0.21.1 config, drop it. If no `github_url` column (Excel) or field (Jama) was mapped, or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the source has none of the excluded types (Excel: no `Text` rows in the Item Type sample). If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
+
+**Never write the `automation` block yourself** — `bc_tools.py ensure` writes it in 4d, from what it actually
+installed and proved, and every later `ensure` keeps it current. On a re-run, carry an existing block over
+verbatim. The one exception is "leave out automation", which writes `"automation": { "enabled": false }`.
 
 When the requirements source is **Jama**, the `requirements` block is written like this instead — no
 credentials, ever; those went to `~/.buddy-council/secrets.json` in Step 1a:
@@ -1184,6 +1262,51 @@ re-run setup.
 **Jama needs no browser authorization either.** The `jama` server exchanges the API client ID/secret for a
 token itself, on the first call, and renews it when it expires.
 
+### 4d: Automation tools (only when the recap included them)
+
+Skip this step when the Automation section found no test project, or the user said "leave out automation".
+Otherwise, in this order, with no further questions:
+
+1. **The project's fix, when its check reported problems.** Run:
+
+   ```bash
+   python3 '<plugin_root>/skills/automation-tools/bc_tools.py' project --project '<cwd>' --mode fix
+   ```
+
+   It reaches the normal permission prompt (it runs the project's own code). Without a terminal, a script like
+   ApolloAutomation's `./setup` fixes what needs no answer and reports the rest. Show its `line`; when it
+   returns `needs_you`, show that too, in its own words — `run ./setup in a terminal for what needs you: …` —
+   because a password, tapping Trust on the phone, or choosing a signing profile can only be done there.
+
+2. **Install, wire, and prove the server answers:**
+
+   ```bash
+   python3 '<plugin_root>/skills/automation-tools/bc_tools.py' ensure --project '<cwd>'
+   ```
+
+   Add `--shared jdk`, `--shared android-sdk`, or `--shared jdk,android-sdk` only for what the recap said it
+   would install. The first run installs about 620 MB and usually takes one to three minutes — say so before
+   running it, and give the call a 10-minute timeout (Claude Code's limit; under Copilot CLI, wait for it). The
+   bash hook approves it, so it asks nothing. It records `pending` before installing, so a run stopped early is
+   finished by the next `/bc:setup`. It wires the `appium` server into **both** MCP configs itself
+   (`<plugin_root>/.mcp.json` and `~/.copilot/mcp-config.json`, by absolute paths), merging like 4c, and never
+   replaces an `appium` server the user added themselves. It records the result in `.buddy-council/sources.json`.
+
+3. **Read one screen from the phone** — only when `ensure` reported `"phone_check": "due"`:
+
+   ```bash
+   python3 '<plugin_root>/skills/automation-tools/bc_tools.py' smoke --project '<cwd>'
+   ```
+
+   Also a 10-minute timeout: the first session on an iPhone builds WebDriverAgent, which can take a few
+   minutes. It opens one session without launching any app, saves one page source, and closes it.
+
+4. **Show the `lines` of each call as they are.** `ready` means the server answered and a page source was read
+   from the phone. `pending` names what is missing — most often the phone — and what to do; the next
+   `/bc:setup` checks again by itself (Step 0a), the way it re-tests a pending Jira board. A phone that passed
+   once stays `ready` when it is unplugged later; a check that fails on a connected phone makes it `pending`
+   again. A pending result never makes the rest of setup fail.
+
 ## After saving: validate
 
 - Confirm `.buddy-council/sources.json` was written
@@ -1197,8 +1320,9 @@ token itself, on the first call, and renews it when it expires.
 - If a V&V board was configured, confirm its `id` differs from the dev board's, and that `discriminator` is set whenever the two share a `project_key`
 - If Excel was configured, confirm the file is readable
 - If Jama was configured, confirm: `requirements.provider` is `"jama"` with an integer `project_id`, and any `roots`/`exclude` entries carry integer `id`s; `~/.buddy-council/secrets.json` has a `jama` section with exactly one auth style; both MCP configs have a `jama` entry whose `--directory` is `<plugin_root>/mcp-servers/jama-server` and whose env holds only `JAMA_BASE_URL` and `BC_SECRETS_FILE`. If Excel was configured, confirm neither MCP config still carries a `jama` entry
+- If automation was included, confirm `ensure` (and `smoke`, when it ran) returned `"ok": true` with a `status` — `ready` or `pending` — and that `.buddy-council/sources.json` now has an `automation` block. The script itself checks the rest (the server answered before it was wired, both `appium` entries use absolute paths that exist); do not re-check it by hand
 - Tell the user:
-  1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate
+  1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate — the `appium` server, too, when automation was set up
   2. Then run `/bc:contradiction` to detect contradictions or `/bc:validate` to create tickets
 
 ## After saving: reduce permission prompts (Copilot CLI)
@@ -1212,6 +1336,7 @@ Because MCP tool naming in Copilot's hooks varies by version, MCP reads may stil
 - If Jira was configured, also add the Atlassian read tools: `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)` — deliberately **none** of `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, or `jira_add_issues_to_sprint`, which must keep prompting
 - If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
 - If Jama is the requirements source, also add the Jama tools: `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — that is every tool the server has, because it has no write tools
+- If automation was set up, also add appium-mcp's read tools: `appium(appium_mobile_device_info),appium(appium_find_element),appium(appium_find_elements),appium(appium_get_text),appium(appium_get_element_attribute),appium(appium_get_active_element),appium(appium_get_window_size),appium(generate_locators),appium(appium_get_page_source),appium(appium_screenshot)` — deliberately **none** of `appium_session_management`, `appium_gesture`, `appium_set_value`, `appium_app_lifecycle`, or anything else that taps, types, opens a session, or launches an app, which must keep prompting
 
 Present it as a single command, e.g.:
 
@@ -1234,3 +1359,6 @@ If the user's Copilot version predates plugin hooks, tell them to also append th
 - A V&V board **may** share a project with the dev board. Refuse only a duplicate board *id*, and record a `discriminator` when the projects match
 - Jama is read **only** through the plugin's read-only `jama` server. Its credential goes in the `jama` section of `~/.buddy-council/secrets.json` (`chmod 600`) and nowhere else; `JAMA_BASE_URL` is the only Jama value in either MCP config. The one direct call setup makes is the server's own `--check` mode, before the server is registered
 - Never register Jama's hosted MCP server (Jama Connect MCP via `mcp-remote`) in place of the vendored one: it exposes write tools and no bulk reads
+- Automation adds **no question** of its own: it is detected, planned, and shown in the Step 4 recap, and the one save confirmation covers it. Never install anything the recap didn't list, and pass `--shared` only for what it named
+- bc's automation tools live only in `~/.buddy-council/tools`: never on PATH, never shared, and setup never edits a shell profile, `JAVA_HOME`, or `ANDROID_HOME`, and never replaces a working tool the Mac already has. Only `bc_tools.py` writes the `appium` MCP entry and the `automation` block
+- What only a person can do — `sudo`, the App Store, signing, the phone — is passed on in the recap and the result lines, never attempted

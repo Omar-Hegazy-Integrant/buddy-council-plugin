@@ -48,10 +48,29 @@ except Exception:
 # read-only by construction — every tool is jama_get_*, its HTTP client can only
 # issue GET, and its test suite fails if a write-capable call appears. Never add
 # a Jama write tool; if one is ever needed, it must not be named jama_get_*.
+#
+# The appium entries are the tools of appium-mcp, the server /bc:setup installs for /bc:automate: its eight
+# read-only tools, plus page sources and screenshots, which it writes into ~/.buddy-council/automation. They are
+# enumerated for the same reason the Jira ones are: everything that taps, types, swipes, opens or closes a
+# session, installs or launches an app, or changes the phone (appium_gesture, appium_set_value,
+# appium_session_management, appium_app_lifecycle, appium_mobile_permissions, …) must keep prompting.
+# skills/automation-tools/bc_tools.py keeps the same list in READ_TOOLS, and its tests fail if the two differ.
+# Copilot names an MCP tool <server>-<tool> in its hook payload (e.g. appium-appium_find_element), so each
+# appium tool is matched in all three spellings.
 case "$TOOL" in
   mcp__testrail__testrail_get_* | mcp__github__get_file_contents | \
   testrail_get_* | get_file_contents | \
   mcp__jama__jama_get_* | jama_get_* | \
+  mcp__appium__appium_mobile_device_info | appium-appium_mobile_device_info | appium_mobile_device_info | \
+  mcp__appium__appium_find_element | appium-appium_find_element | appium_find_element | \
+  mcp__appium__appium_find_elements | appium-appium_find_elements | appium_find_elements | \
+  mcp__appium__appium_get_text | appium-appium_get_text | appium_get_text | \
+  mcp__appium__appium_get_element_attribute | appium-appium_get_element_attribute | appium_get_element_attribute | \
+  mcp__appium__appium_get_active_element | appium-appium_get_active_element | appium_get_active_element | \
+  mcp__appium__appium_get_window_size | appium-appium_get_window_size | appium_get_window_size | \
+  mcp__appium__generate_locators | appium-generate_locators | \
+  mcp__appium__appium_get_page_source | appium-appium_get_page_source | appium_get_page_source | \
+  mcp__appium__appium_screenshot | appium-appium_screenshot | appium_screenshot | \
   mcp__atlassian__jira_get_user_profile | jira_get_user_profile | \
   mcp__atlassian__jira_get_issue | jira_get_issue | \
   mcp__atlassian__jira_search | jira_search | \
