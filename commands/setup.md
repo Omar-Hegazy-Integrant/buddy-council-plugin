@@ -47,7 +47,7 @@ mentions it (`Automation: left out — say "automation" to add it`) and never br
 
 **Pre-0.21.1 config migration** — also unconditional, because these configs cannot work as written:
 
-- **`jira.cloud_id` present, or `jira.deployment` missing** → the config targets Atlassian's hosted Cloud-only server. Drop `cloud_id`, detect `deployment` from `base_url`, and walk Step 3a to collect the credential the `uvx` server needs. Explain in one line why: the hosted server is gone, and it never worked against Jira Server/Data Center at all.
+- **`jira.cloud_id` present, or `jira.deployment` missing** → the config targets Atlassian's hosted Cloud-only server. Drop `cloud_id`, detect `deployment` from `base_url`, and walk Step 3a to collect the credential the `uvx` server needs. Explain in one line why: the plugin no longer uses the hosted server, and it never worked against Jira Server/Data Center at all.
 - **`~/.buddy-council/atlassian.env` missing while a `jira` block exists** → same thing; the credential was never collected. Walk Step 3a.
 
 **If it does not exist**, run all steps in order.
@@ -511,9 +511,9 @@ against requirements and test cases, and `/bc:validate` files new tickets onto i
 
 Jira runs on **`mcp-atlassian`** (<https://github.com/sooperset/mcp-atlassian>), launched with `uvx` as a
 local stdio server pinned to `mcp-atlassian@0.23.1`. Nothing needs installing ahead of time — `uvx`
-provisions it on first launch. It speaks to **both Atlassian Cloud and Jira Server/Data Center**, and unlike
-Atlassian's hosted server it exposes real **board and sprint tools**, which is what lets this plugin address
-a board by id instead of approximating it with a project-wide JQL.
+provisions it on first launch. It speaks to **both Atlassian Cloud and Jira Server/Data Center** — Atlassian's
+hosted server is Cloud-only — and it exposes real **board and sprint tools**, which is what lets this plugin
+address a board by id instead of approximating it with a project-wide JQL.
 
 Unlike the plugin's earlier Jira integration, this step **does collect a credential** — `mcp-atlassian`
 authenticates as the user, not by browser OAuth. It goes into `~/.buddy-council/atlassian.env` (`chmod 600`),
@@ -1228,8 +1228,9 @@ The TestRail and Jama servers read their credentials (`testrail.username`/`api_k
   exists and the entry fails to start.
 - An `"atlassian"` server with `"type": "http"` and the `mcp.atlassian.com` URL (0.17.0–0.20.x) — replace it
   with the `uvx` entry above. That hosted server serves **Atlassian Cloud only**, so on a Jira Server/Data
-  Center site it could never connect no matter how the OAuth flow went. If the user is on Cloud it did work,
-  and it is still worth replacing: the hosted server exposes no board or sprint tools.
+  Center site it could never connect no matter how the OAuth flow went. On Cloud it did work, but it must
+  still be replaced: every skill and the auto-approve hook name `mcp-atlassian`'s `jira_*` tools, which the
+  hosted server does not expose.
 
 **GitHub exception.** If GitHub enrichment was configured with `strategy: "mcp"`, add a `github` server entry. The external `github-mcp-server` (NOT vendored — install it externally per `.mcp.example.json`) reads `GITHUB_TOKEN` from its env and cannot read the secrets file, so this is the one place a token still lives in `.mcp.json`:
 

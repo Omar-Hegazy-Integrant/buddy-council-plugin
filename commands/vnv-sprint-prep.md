@@ -118,10 +118,9 @@ one found with several is repaired to the furthest-along, and the repair is repo
 
 ## Known Platform Limits
 
-One thing `mcp-atlassian` cannot do, surfaced here so the output is never misleading:
-
-- **It cannot attach files.** `jira_download_attachments` has no upload counterpart, so scenarios go into the
-  V&V ticket's description rather than an attached `.md`.
+Scenarios go into the V&V ticket's description rather than an attached `.md`. That is a choice, not a limit:
+`mcp-atlassian` can upload files (`jira_update_issue` takes local paths in `attachments`), but the description
+is always present, readable by reviewers in Jira, and editable through `jira_update_issue`.
 
 Issue links **do** work (`jira_create_issue_link`), so each clone is linked to its dev story as well as
 carrying the `src-<DEV-KEY>` label. If a site restricts link creation the clone still succeeds and the run

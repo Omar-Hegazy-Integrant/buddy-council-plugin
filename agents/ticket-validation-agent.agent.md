@@ -233,7 +233,7 @@ After creating the file, tell the user:
 
 ### Step 9: Create Jira Ticket
 
-**If `--dry-run` was passed, STOP here.** The official Atlassian MCP server has no dry-run mode, so
+**If `--dry-run` was passed, STOP here.** `mcp-atlassian` has no dry-run mode, so
 dry-run is handled entirely on this side: do **not** call `jira_create_issue` at all. Report:
 
 > Dry-run successful! No ticket was created. Draft saved to `ticket-draft-[timestamp].md`.

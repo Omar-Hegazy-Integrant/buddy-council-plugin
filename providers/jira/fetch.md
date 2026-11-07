@@ -136,7 +136,7 @@ Example link extraction:
 
 Extract `["PROJ-456", "PROJ-789"]` into `linked_ids`.
 
-Unlike Atlassian's hosted server, this one can **create** links too — `jira_create_issue_link` with
+This server can **create** links too — `jira_create_issue_link` with
 `link_type`, `inward_issue_key`, and `outward_issue_key`; `jira_get_link_types` lists what the site accepts.
 That is a write tool and always prompts. Remote links (Confluence pages, external URLs) come back inside
 `jira_get_issue` when requested, and `jira_create_remote_issue_link` creates them.

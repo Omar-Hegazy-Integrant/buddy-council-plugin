@@ -16,7 +16,7 @@ is the board's actual rows. That holds even for a board whose filter spans sever
 issue types, and it is what makes two boards in the *same* project distinguishable.
 
 Versions before 0.21.1 reconstructed board scope from `project = <key>` JQL, because Atlassian's hosted
-server had no board tools. Nothing here should reconstruct anything any more. If you find yourself building
+server had no board tools then. Nothing here should reconstruct anything any more. If you find yourself building
 a `project = …` query to answer "what is on the board", you are on the old path — use `jira_get_board_issues`
 with `jira.board.id`.
 

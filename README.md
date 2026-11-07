@@ -541,10 +541,9 @@ Jira, Jira wins.
 plan. `--apply` executes it, confirming once per phase. This is deliberate: the workflow comments on stories
 the dev team owns.
 
-One limit the workflow states rather than works around: `mcp-atlassian` cannot **attach files**, so scenarios
-are written into the V&V ticket's description instead of an attached `.md`. Issue links do work, so each
-clone is linked to its dev story and also carries a `src-<DEV-KEY>` label — the label is what the duplicate
-guard searches on when you re-run.
+Scenarios are written into the V&V ticket's description rather than an attached `.md`, so reviewers read and
+edit them right in Jira. Each clone is linked to its dev story and also carries a `src-<DEV-KEY>` label — the
+label is what the duplicate guard searches on when you re-run.
 
 The V&V board **may** share a Jira project with the dev board; only a duplicate board *id* is refused. When
 they share one, the run stamps each clone with whatever the V&V board's filter keys off (a label, component,
@@ -641,6 +640,8 @@ Same code mapping as the onboarding phase, standalone: the feature's files, comm
 
 ## Architecture
 
+> **Visual reference:** the [Plugin Architecture board](https://lucid.app/lucidspark/9ed93500-df15-4b68-9fff-84a1f2e23afc/edit?page=h0VJK6ky~xWh) shows every command, how the parts talk to each other, what each one can change, and where the code could be better. Start with its "Start here" frame.
+
 ```
 Command → Agent → Skills (fetch → normalize → analyze) → Report
 ```
@@ -649,7 +650,7 @@ Command → Agent → Skills (fetch → normalize → analyze) → Report
 - **Agents** — orchestrate the analysis workflow end-to-end
 - **Skills** — reusable capabilities (fetching, normalization, analysis)
 - **Providers** — platform-specific data fetching (TestRail, Excel, Jama, GitHub)
-- **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — they use the vendors' own servers (Atlassian's hosted remote server, and `github-mcp-server`). Neither is appium-mcp, the server `/bc:automate` drives the phone with: `/bc:setup` installs it on each Mac from the lockfile in `skills/automation-tools/appium-mcp/`, on bc's own pinned Node. To move a pin, change `skills/automation-tools/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed
+- **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — Jira/Confluence run on the community [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) server (launched with `uvx`, serving Cloud and Server/Data Center alike), and GitHub on the official `github-mcp-server` or the `gh` CLI. Neither is appium-mcp, the server `/bc:automate` drives the phone with: `/bc:setup` installs it on each Mac from the lockfile in `skills/automation-tools/appium-mcp/`, on bc's own pinned Node. To move a pin, change `skills/automation-tools/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed
 - **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and the plugin-root `hooks.json` (Copilot CLI) register the same four runtime-agnostic scripts
 
 Agents never call providers directly — they go through router skills, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.

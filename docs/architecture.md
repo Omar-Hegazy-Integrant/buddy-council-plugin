@@ -1,5 +1,7 @@
 # Buddy-Council Plugin Architecture
 
+> **Out of date.** This document predates several commands and the Copilot CLI support. The current reference is the [Plugin Architecture board](https://lucid.app/lucidspark/9ed93500-df15-4b68-9fff-84a1f2e23afc/edit?page=h0VJK6ky~xWh), checked against version 0.26.0 on 5 Nov 2026.
+
 ## Overview
 
 Buddy-Council is a Claude Code plugin that detects contradictions, inconsistencies, and alignment gaps between requirements and test cases. It fetches data live from external systems — no RAG, no embeddings, no vector storage.
@@ -262,9 +264,12 @@ run as a local stdio server via `uvx mcp-atlassian@0.23.1` and authenticated by 
 no plugin manifest declares it, because a `uvx` server needs absolute paths a committed manifest cannot hold.
 
 It replaced Atlassian's hosted `mcp.atlassian.com` server in 0.21.1. That server is Cloud-only, so a Jira
-Server/Data Center team could never reach it, and it exposed no board or sprint tools — which is why board
-reads used to be approximated by a project-wide JQL. Boards are now addressed by id, so two boards in one
-project are fully distinguishable.
+Server/Data Center team could never reach it, and it then exposed no board or sprint tools — which is why
+board reads used to be approximated by a project-wide JQL. Boards are now addressed by id, so two boards in
+one project are fully distinguishable. The hosted server's v2 (`/v2/mcp`) has since added board, sprint, and
+attachment tools, but it is still Cloud-only, and a hosted server cannot be version-pinned — v2 swapped the
+tool set under existing v1 connections — while the skills and the auto-approve hook name `mcp-atlassian`'s
+`jira_*` tools exactly.
 
 The vendored MCP servers are configured in `.mcp.json` (gitignored) and read credentials from
 `~/.buddy-council/secrets.json` (via `BC_SECRETS_FILE`), not the `env` block — see Credential Management

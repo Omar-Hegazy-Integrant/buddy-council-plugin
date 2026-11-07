@@ -13,9 +13,9 @@ former: the next stage of the pipeline is a human writing cases in TestRail.
 
 In the **V&V ticket's description**, under a marked section.
 
-Attachments were the obvious home, but `mcp-atlassian` can only *download* attachments, not upload them —
-`jira_download_attachments` has no write counterpart. The description is the one place that is always
-present, always readable by reviewers in Jira, and editable through `jira_update_issue`.
+Not an attachment, even though `mcp-atlassian` can upload one (`jira_update_issue` takes local file paths in
+`attachments`): the description is the one place that is always present, always readable by reviewers in
+Jira, and editable through `jira_update_issue`.
 
 ## Input
 
