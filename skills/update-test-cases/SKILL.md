@@ -130,7 +130,7 @@ Input: findings of types 1, 2, 4, or 7 whose **Fix** line names the test case si
 step or field in conflict, and the requirement text it conflicts with.
 
 - **Only the case side.** When a finding's fix is the requirement, or it needs a decision, propose no case
-  change. Say that requirements live in Jama or the Excel export, and that this plugin never writes them.
+  change. Say that requirements live in Jama, and that this plugin never writes them.
 - **Minimal edit.** Change only the conflicting precondition, step, or expected result, so it states what the
   requirement states. Quote the requirement next to the before → after. Leave every other step as it is.
 - **Never on this path:** links, title (unless the title itself states the contradicted value), type,

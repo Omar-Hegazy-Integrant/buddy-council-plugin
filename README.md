@@ -10,7 +10,6 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 |--------|------|--------|
 | **TestRail** | Test cases | Supported (via MCP server) |
 | **Jama** | Requirements | Supported (live, via the plugin's read-only Jama MCP server — features are Jama folders) |
-| **Excel** (Jama export) | Requirements | Supported (alternative to live Jama) |
 | **GitHub** | Requirement doc enrichment | Supported (`gh` CLI or external GitHub MCP server) |
 | **Jira** | Dev board (in-flight work) | Supported (required — feeds contradiction and coverage analysis) |
 | **Jira** | Ticket creation | Supported (via `mcp-atlassian` — Cloud **and** Server/Data Center) |
@@ -35,10 +34,10 @@ These descriptions are the `description:` frontmatter in `commands/*.md` — the
 ## Prerequisites
 
 - [Claude Code](https://claude.ai/code) **or** [Copilot CLI](https://docs.github.com/en/copilot)
-- [uv](https://docs.astral.sh/uv/) — runs the MCP servers **and** the Excel parser; it provisions a compatible Python and all dependencies automatically, so no host Python installation or `pip install` is needed
+- [uv](https://docs.astral.sh/uv/) — runs the MCP servers; it provisions a compatible Python and all dependencies automatically, so no host Python installation or `pip install` is needed
 - A TestRail account with API access (for test cases)
-- Requirements from **either** Jama Connect — a Jama API client ID and secret (Jama → profile menu → **Set API Credentials**), on an account allowed to use the REST API (Admin → REST API → Managed Access Control, when your site restricts it) — **or** an Excel export from Jama. A read-only Jama account is recommended; the plugin never writes to Jama either way
-- Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your sheet links GitHub docs
+- Requirements from Jama Connect — a Jama API client ID and secret (Jama → profile menu → **Set API Credentials**), on an account allowed to use the REST API (Admin → REST API → Managed Access Control, when your site restricts it). A read-only Jama account is recommended; the plugin never writes to Jama
+- Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your requirements link GitHub docs
 - A Jira account with access to your team's dev board, on **either Atlassian Cloud or Jira Server/Data Center** — plus a token: an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) on Cloud, or a Personal Access Token (profile menu → **Personal Access Tokens**) on Server/DC. `/bc:setup` requires the board — it feeds in-flight work into contradiction and coverage analysis, and is where `/bc:validate` files tickets. Nothing needs enabling by a site admin. If the connection test fails (a self-hosted Jira usually needs your corporate VPN), setup records the board as *pending* and finishes — the requirements-vs-test-cases commands work without it
 - For the automation tools (`/bc:automate`): **nothing to install by hand**. When `/bc:setup` runs inside an Appium or WebdriverIO test project, it installs its own Node and appium-mcp — see [Automation tools](#automation-tools-only-inside-a-test-project). iPhone tests need Xcode from the App Store, and setup's final check needs a phone connected over USB
 
@@ -102,7 +101,7 @@ copilot plugin install bc
 
 ### Copilot CLI — fewer permission prompts
 
-The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/hooks.json`, Copilot CLI (1.0.7x and later) loads the plugin-root `hooks.json` — same scripts, same behavior. On either CLI they auto-approve the plugin's curated read-only operations (the Excel parser, `jq`, `gh api` reads, the TestRail connection test, read-only MCP fetches, appium-mcp's screen reads, and the automation script's install and checks) and writes to the plugin's own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`). Write operations like Jira ticket creation always prompt.
+The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/hooks.json`, Copilot CLI (1.0.7x and later) loads the plugin-root `hooks.json` — same scripts, same behavior. On either CLI they auto-approve the plugin's curated read-only operations (`jq`, `gh api` reads, the TestRail connection test, read-only MCP fetches, appium-mcp's screen reads, and the automation script's install and checks) and writes to the plugin's own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`). Write operations like Jira ticket creation always prompt.
 
 If your Copilot version still prompts for MCP reads (MCP tool naming in hooks varies by version), pre-approve them at launch with `--allow-tool`:
 
@@ -119,7 +118,7 @@ Append the read-only tools for any other sources you configured:
 
 **Never add the Jira write tools** — `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, `jira_add_issues_to_sprint`. They are left out on purpose so ticket creation, label changes, links, and comments on the dev team's stories always prompt. The same goes for the TestRail write tools — `testrail_add_case`, `testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, `testrail_update_cases` — which create and change cases in the team's suite, and for every other appium-mcp tool (`appium_session_management`, `appium_gesture`, `appium_set_value`, `appium_app_lifecycle`, …), which taps, types, opens sessions, or launches apps on the phone.
 
-On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when the Excel parser or the TestRail connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
+On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when the TestRail connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
 
 ### Development & release flow (maintainers)
 
@@ -142,13 +141,13 @@ claude --plugin-dir /path/to/buddy-council-plugin
 copilot --plugin-dir /path/to/buddy-council-plugin
 ```
 
-Edit → start a new session with the flag → test `/bc:…` commands. No commit, push, or version bump is needed while iterating; the MCP servers and the Excel parser resolve their own dependencies via `uv` on first launch. If the plugin is *also* installed on your machine, disable or uninstall the installed `bc` first (`/plugin` in Claude Code; `copilot plugin uninstall bc`) so the dev and installed copies don't both answer `/bc:` commands. A normal session without the flag runs the installed copy — that's your production reference.
+Edit → start a new session with the flag → test `/bc:…` commands. No commit, push, or version bump is needed while iterating; the MCP servers resolve their own dependencies via `uv` on first launch. If the plugin is *also* installed on your machine, disable or uninstall the installed `bc` first (`/plugin` in Claude Code; `copilot plugin uninstall bc`) so the dev and installed copies don't both answer `/bc:` commands. A normal session without the flag runs the installed copy — that's your production reference.
 
 ### Debugging a bc run
 
 Three layers of visibility, in order of reach:
 
-1. **In-transcript trace (both platforms).** Every analysis command follows a mandatory Data Contract: it prints `Fetch: requirements → N` / `Fetch: test cases → M` (plus `Enrichment: fetched K of N` when GitHub enrichment is configured) before analyzing, and stops to ask before continuing if any configured source failed. If you don't see these lines in a run, the run violated the contract — that itself is the bug to report. The Excel parser additionally prints a one-line `Summary:` to stderr on every invocation.
+1. **In-transcript trace (both platforms).** Every analysis command follows a mandatory Data Contract: it prints `Fetch: requirements → N` / `Fetch: test cases → M` (plus `Enrichment: fetched K of N` when GitHub enrichment is configured) before analyzing, and stops to ask before continuing if any configured source failed. If you don't see these lines in a run, the run violated the contract — that itself is the bug to report.
 2. **Tool log (both platforms).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran. Under Copilot each line additionally carries a `result` status (`success` or a failure kind), and failed calls are logged too.
 3. **Native session logs (Copilot CLI).** For deeper Copilot internals beyond the tool log, launch with `copilot --log-level debug` (logs land in `~/.copilot/logs/`, or set `--log-dir`).
 
@@ -176,7 +175,7 @@ The `atlassian` server follows the same table as the others — `/bc:setup` writ
 
 **Release to the team:**
 
-1. Bump `version` in all four manifests, keeping them identical: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.plugin/plugin.json`, `.plugin/marketplace.json`.
+1. Bump `version` in `.claude-plugin/plugin.json`, the only manifest that carries one.
 2. Merge `dev` → `main` (bumping first keeps the two branches identical afterwards).
 3. Push `main`.
 4. Everyone refreshes their installed copy — no other action needed:
@@ -195,12 +194,8 @@ After installation, run the setup command to configure your data sources:
 
 The wizard runs in four steps with a single review-and-save confirmation at the end:
 
-1. **Requirements (Jama or Excel)** — one question picks the source.
-   - **Jama**: the base URL and an API client ID/secret. The connection is tested before moving on (by the Jama server's own `--check` mode, since the server isn't registered yet), then you pick the project. Setup reads the project tree once to report its folders — **features are Jama folders** — excludes `Text` and test-case item types automatically, and confirms the Status / Rationale / GitHub-link field mapping in one question.
-   - **Excel**: point it at your Jama export. The column mapping is auto-guessed and confirmed in one question; item types are sampled automatically (narrative `Text` rows are excluded even though they carry IDs).
-
-   Either way, GitHub doc enrichment is auto-configured when a GitHub-link column or field is mapped (`gh` CLI preferred, MCP fallback).
-2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on. With Jama as the requirements source, setup then **anchors Jama on your test suite, without asking**: it reads which requirement IDs your cases link to, finds the **document** they live in (a Jama set, such as `Mobile App SRS`), and takes that whole document as the requirements in scope — so a requirement in it with no linked case shows up as untested instead of vanishing. The features stay the folders your linked requirements sit in, however deep the document nests them, and only the item types the tests link to count. The rest of the project — system requirements, risks, labeling, standards, design, archives — is **background**: `/bc:ask` searches it to enrich answers, and no report counts it. The review in step 4 shows this in plain words; say "leave out <folder>", "only <folder>", or "the whole project" to change it, then or on any re-run. The same step picks where generated test cases go **without asking**: **beside the existing cases for the same requirement or feature** when your cases already carry requirement IDs, so no parallel folder tree appears — otherwise in a `V&V` folder, one subfolder per feature. The review in step 4 shows the choice in one line; say where you'd rather have them, then or on any re-run. Whatever the setting, every command that creates cases shows each case's folder before writing anything.
+1. **Requirements (Jama)** — the base URL and an API client ID/secret. The connection is tested before moving on (by the Jama server's own `--check` mode, since the server isn't registered yet), then you pick the project. Setup reads the project tree once to report its folders — **features are Jama folders** — excludes `Text` and test-case item types automatically, and confirms the Status / Rationale / GitHub-link field mapping in one question. GitHub doc enrichment is auto-configured when a GitHub-link field is mapped (`gh` CLI preferred, MCP fallback).
+2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on. Setup then **anchors Jama on your test suite, without asking**: it reads which requirement IDs your cases link to, finds the **document** they live in (a Jama set, such as `Mobile App SRS`), and takes that whole document as the requirements in scope — so a requirement in it with no linked case shows up as untested instead of vanishing. The features stay the folders your linked requirements sit in, however deep the document nests them, and only the item types the tests link to count. The rest of the project — system requirements, risks, labeling, standards, design, archives — is **background**: `/bc:ask` searches it to enrich answers, and no report counts it. The review in step 4 shows this in plain words; say "leave out <folder>", "only <folder>", or "the whole project" to change it, then or on any re-run. The same step picks where generated test cases go **without asking**: **beside the existing cases for the same requirement or feature** when your cases already carry requirement IDs, so no parallel folder tree appears — otherwise in a `V&V` folder, one subfolder per feature. The review in step 4 shows the choice in one line; say where you'd rather have them, then or on any re-run. Whatever the setting, every command that creates cases shows each case's folder before writing anything.
 3. **Jira (required)** — the base URL, a token, and your team's board URL. Cloud vs Server/Data Center is detected from the host, so you're only asked for the credential that deployment actually uses. **The connection is tested before moving on**, exactly like TestRail: by MCP tool if the server is already loaded, otherwise by a direct REST call. The board URL is parsed for the board id and project key — and when a classic RapidBoard URL carries no key, it's derived from the board's own issues rather than asked for. If the test fails (usually a self-hosted Jira needing the VPN), the answers are saved as *pending*, setup finishes, and it re-tests on the next run — `/bc:contradiction` and `/bc:coverage` keep working meanwhile, only `/bc:validate` waits.
    The same step then offers the **V&V board** plus its platform field and scenario reviewer, for `/bc:vnv-sprint-prep`. That part *is* skippable — the command can collect it itself on first run. **The V&V board may live in the same project as the dev board**; only a duplicate board *id* is refused. When they share a project, setup samples both boards to work out what the V&V board's filter keys off — a label, component, or issue type — confirms it in one question, and stamps it on every clone.
 4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
@@ -226,17 +221,12 @@ If you prefer to configure manually instead of using `/bc:setup`:
 ```json
 {
   "requirements": {
-    "provider": "excel",
-    "excel_path": "/absolute/path/to/requirements.xls",
-    "column_mapping": {
-      "id": "ID",
-      "title": "Name",
-      "description": "Description",
-      "rationale": "Rationale",
-      "item_type": "Item Type",
-      "github_url": "Linked to Github"
-    },
-    "item_type_exclude": ["Text"]
+    "provider": "jama",
+    "base_url": "https://company.jamacloud.com",
+    "project_id": 42,
+    "feature_inference": { "strategy": "hierarchical_folder", "folder_item_type": "Folder" },
+    "item_type_exclude": ["Text", "Test Case"],
+    "field_mapping": { "status": "Status", "rationale": "Rationale" }
   },
   "test_cases": {
     "provider": "testrail",
@@ -248,7 +238,7 @@ If you prefer to configure manually instead of using `/bc:setup`:
 }
 ```
 
-This is the minimal shape — the full schema (feature inference, enrichment, code-mapping settings) is documented in [CLAUDE.md](CLAUDE.md) under "Configuration Schema Additions". Without `column_mapping` the parser falls back to legacy positional mode.
+This is the minimal shape — the full schema (feature inference, enrichment, code-mapping settings) is documented in [AGENTS.md](AGENTS.md) under "Configuration Schema Additions".
 
 **2. Create `~/.buddy-council/secrets.json`**:
 
@@ -284,7 +274,7 @@ chmod 600 ~/.buddy-council/secrets.json
 
 The `atlassian` entry belongs here too — see the `mcp-atlassian` block further down; its token stays in `~/.buddy-council/atlassian.env`, never in this file.
 
-**Jama instead of Excel.** To read requirements live from Jama, the `requirements` block becomes:
+**Scoping Jama.** A large project is usually narrowed to the document your test cases link to:
 
 ```json
 {
@@ -457,7 +447,7 @@ entry looks like this:
 /bc:contradiction "Patient Monitoring"   # Analyze a specific feature
 ```
 
-With Jama as the requirements source, a feature is a **Jama folder** — by default one of the folders your linked requirements sit in, inside the document `/bc:setup` anchored on your test suite, with deeper folders rolled into it. The scope covers everything under it; a sub-folder name narrows to just that part, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`. Test cases are found by their requirement links, whatever their TestRail folders are called.
+A feature is a **Jama folder** — by default one of the folders your linked requirements sit in, inside the document `/bc:setup` anchored on your test suite, with deeper folders rolled into it. The scope covers everything under it; a sub-folder name narrows to just that part, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`. Test cases are found by their requirement links, whatever their TestRail folders are called.
 
 The agent fetches requirements, test cases, and the in-flight issues on your Jira dev board, normalizes and cross-links them, then analyzes for 7 types of contradictions:
 
@@ -471,7 +461,7 @@ The agent fetches requirements, test cases, and the in-flight issues on your Jir
 | Temporal/state conflicts | MEDIUM |
 | Missing alignment | LOW |
 
-Every requirement-versus-test finding names the side to fix. When at least one says **the test case** is wrong, the report ends with a one-line offer to update those cases so they match the requirement — only the conflicting precondition, step, or expected result, never the requirement links. Answer `all`, `pick some`, or `no`; you see every before → after change before anything is written. Findings where the requirement looks wrong, or that need a decision, are never offered: requirements live in Jama or the Excel export, and the plugin never writes them.
+Every requirement-versus-test finding names the side to fix. When at least one says **the test case** is wrong, the report ends with a one-line offer to update those cases so they match the requirement — only the conflicting precondition, step, or expected result, never the requirement links. Answer `all`, `pick some`, or `no`; you see every before → after change before anything is written. Findings where the requirement looks wrong, or that need a decision, are never offered: requirements live in Jama, and the plugin never writes them.
 
 ### Check Coverage
 
@@ -649,7 +639,7 @@ Command → Agent → Skills (fetch → normalize → analyze) → Report
 - **Commands** — user-facing entry points
 - **Agents** — orchestrate the analysis workflow end-to-end
 - **Skills** — reusable capabilities (fetching, normalization, analysis)
-- **Providers** — platform-specific data fetching (TestRail, Excel, Jama, GitHub)
+- **Providers** — platform-specific data fetching (TestRail, Jama, Jira, GitHub)
 - **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — Jira/Confluence run on the community [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) server (launched with `uvx`, serving Cloud and Server/Data Center alike), and GitHub on the official `github-mcp-server` or the `gh` CLI. Neither is appium-mcp, the server `/bc:automate` drives the phone with: `/bc:setup` installs it on each Mac from the lockfile in `skills/automation-tools/appium-mcp/`, on bc's own pinned Node. To move a pin, change `skills/automation-tools/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed
 - **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and the plugin-root `hooks.json` (Copilot CLI) register the same four runtime-agnostic scripts
 
@@ -689,7 +679,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - **On the phone, only reading is auto-approved**: appium-mcp's eight read-only tools, plus page sources and screenshots, which it saves in `~/.buddy-council/automation`. Everything that taps, types, opens a session, or launches an app always prompts. Setup's own check of the phone opens one session without launching any app, reads one screen, and closes it
 - Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
-  - the same hook **auto-approves** the plugin's curated read-only operations (the Excel parser, `gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches), the run-folder script `bc_run.py`, and the automation script `bc_tools.py` — but only as one plain command: `python3`, the plugin's own copy by absolute path, a known subcommand, and arguments that are bare or single-quoted, so nothing can be chained onto it. `bc_tools.py project` (which runs your project's own setup script) and `bc_tools.py remove` always prompt
+  - the same hook **auto-approves** the plugin's curated read-only operations (`gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches), the run-folder script `bc_run.py`, and the automation script `bc_tools.py` — but only as one plain command: `python3`, the plugin's own copy by absolute path, a known subcommand, and arguments that are bare or single-quoted, so nothing can be chained onto it. `bc_tools.py project` (which runs your project's own setup script) and `bc_tools.py remove` always prompt
   - a second PreToolUse hook auto-approves writes **only** to the plugin's own generated files (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's own `.mcp.json`) — all other writes still prompt
   - a PostToolUse hook writes the redacted tool log described under [Debugging a bc run](#debugging-a-bc-run) — metadata only, credentials masked, never file contents or responses
 

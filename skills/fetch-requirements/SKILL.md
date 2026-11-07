@@ -1,5 +1,5 @@
 ---
-description: Internal (used by all analysis commands) — Fetch requirements from the configured source (Excel or Jama). Reads .buddy-council/sources.json and delegates to the correct provider.
+description: Internal (used by all analysis commands) — Fetch requirements from the configured source (Jama). Reads .buddy-council/sources.json and delegates to the provider.
 user-invocable: false
 ---
 
@@ -15,13 +15,14 @@ Fetch requirements from the configured source. This skill reads the user's confi
 
 | Provider | Delegate To |
 |----------|-------------|
-| `excel` | Follow instructions in `${CLAUDE_PLUGIN_ROOT}/providers/excel/fetch.md` — a Jama Excel export |
 | `jama` | Follow instructions in `${CLAUDE_PLUGIN_ROOT}/providers/jama/fetch.md` — live from Jama Connect through the plugin's read-only `jama` MCP server; features are Jama folders |
+
+Any other provider, such as `excel` in a project set up before requirements came only from Jama: stop, and tell the user to run `/bc:setup` with a link to their Jama project.
 
 4. **Enrichment step (MANDATORY when enabled)** — if `requirements.enrichment.enabled === true`, you **must** follow `${CLAUDE_PLUGIN_ROOT}/skills/enrich-requirements/SKILL.md` to fetch any GitHub-hosted docs referenced via the provider's transient `_enrichment_urls` field. Do not skip this when it is enabled. After it runs, print a one-line status — `Enrichment: fetched K of N GitHub-linked requirement docs` (or the failure/abort summary the skill returns). The enrich skill attaches `extended_context` per requirement and removes the transient field.
 5. **Enrichment visibility** — always make the enrichment outcome observable so the user is never left guessing:
    - `enabled === true` and docs were fetched → the Step 4 status line already reported the counts.
-   - `enabled === true` but the provider produced no `_enrichment_urls` (e.g. no `github_url` column or field mapped, or no GitHub links in the requirements) → print: "Note: enrichment is on, but no GitHub doc links were found in the requirements source."
+   - `enabled === true` but the provider produced no `_enrichment_urls` (e.g. no `github_url` field mapped, or no GitHub links in the requirements) → print: "Note: enrichment is on, but no GitHub doc links were found in the requirements source."
    - `enabled === false` but the provider produced any `_enrichment_urls` → print: "Note: the requirements source has GitHub doc links but enrichment is disabled. Run `/bc:setup` to enable." Strip the field before returning.
    In all cases, do NOT block the fetch.
 6. Return the results in canonical schema format.

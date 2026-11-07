@@ -480,7 +480,7 @@ class Ensure(FakeServer):
 
     def project(self):
         root = self.tmp / "project"
-        self.write("project/.buddy-council/sources.json", json.dumps({"requirements": {"provider": "excel"}}))
+        self.write("project/.buddy-council/sources.json", json.dumps({"requirements": {"provider": "jama"}}))
         return root
 
     def block(self, root):
@@ -524,7 +524,7 @@ class Ensure(FakeServer):
         self.assertIn("saved a page source from QA iPhone (4,321 bytes)", result["lines"][0])
         block = self.block(root)
         self.assertEqual((block["status"], block["proof"]["page_source"], block["proof"]["udid"]), ("ready", "/tmp/page-source-1.xml", "U1"))
-        self.assertEqual(json.loads((root / ".buddy-council" / "sources.json").read_text())["requirements"], {"provider": "excel"})
+        self.assertEqual(json.loads((root / ".buddy-council" / "sources.json").read_text())["requirements"], {"provider": "jama"})
 
     def test_a_passed_check_survives_an_unplugged_phone_but_not_a_failure(self):
         root = self.project()

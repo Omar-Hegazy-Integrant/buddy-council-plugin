@@ -34,7 +34,7 @@ The caller's prompt gives:
 - Use only the tools named below. You have no tool that writes to Jama, TestRail, or Jira — do not look for one.
 - Run each shell command exactly as shown, one per call: `python3`, the script's absolute path, the
   subcommand, then the options. Wrap any value that contains a space or a special character in single quotes.
-  No `cd`, `&&`, `;`, pipes, `$(...)`, or redirects — the only exception is the Excel step.
+  No `cd`, `&&`, `;`, pipes, `$(...)`, or redirects.
 - Never open `requirements.json`, `background.json`, `test_cases.json`, `docs/`, or `bundles/` — they are
   large, and they are for the caller.
 - When a call fails, retry it at most twice. Then record the failure and move on to the next step. Never
@@ -69,9 +69,6 @@ The caller's prompt gives:
      lookups search to enrich their answers: call `jama_get_requirements` again with exactly the same
      arguments plus `background: true`, and `save_to` = the `background` path. It reuses the tree the first
      call read, so it answers in seconds.
-   - Provider `excel`: run the parser exactly as `<plugin_root>/providers/excel/fetch.md` shows ("How to
-     Fetch"), with `BC_SCOPE` set to the scope, and add ` > '<requirements path>'` to the end of the parser
-     line so its JSON goes into the run folder. Its `Summary:` line arrives on stderr — keep it.
 
 5. **Test cases.** Call `testrail_get_canonical_cases` with `project_id` and `suite_id` from `test_cases`,
    `requirement_field` = `test_cases.authoring.requirement_field` (else `custom_jama_req_id`), and `save_to` =

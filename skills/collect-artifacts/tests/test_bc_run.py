@@ -211,7 +211,7 @@ class Link(RunFolderTest):
         links = json.loads((run / "links.json").read_text())
         self.assertEqual([o["id"] for o in links["orphans"]], ["TC-17"])
 
-    def test_an_excel_array_uses_the_run_scope(self):
+    def test_a_requirements_array_uses_the_run_scope(self):
         run = self.new_run(scope="Vitals")
         self.write(run, "requirements.json", [r for r in REQUIREMENTS if r["feature"] == "Vitals"])
         self.write(run, "test_cases.json", {"test_cases": CASES})
@@ -415,12 +415,13 @@ class Checks(RunFolderTest):
         self.assertIn("enrichment", result["missing"])
         self.assertIn("Enrichment: not run — 1 GitHub-linked docs were not fetched", result["lines"])
 
-    def test_an_excel_run_is_not_held_to_jama_arguments(self):
+    def test_a_project_still_set_up_for_excel_is_sent_to_setup(self):
         config = {**JAMA_CONFIG, "requirements": {"provider": "excel", "enrichment": {"enabled": False}}}
         (self.project / ".buddy-council" / "sources.json").write_text(json.dumps(config))
         result = self.link(REQUIREMENTS, testrail_file(CASES))
-        self.assertEqual(result["mismatches"], [])
-        self.assertEqual(result["lines"][0], "Fetch: requirements → 5 from the Excel export")
+        self.assertEqual(len(result["mismatches"]), 1)
+        self.assertIn("run /bc:setup with a link to the Jama project", result["mismatches"][0])
+        self.assertEqual(result["lines"][0], "Fetch: requirements → 5")
 
     def test_a_lookup_on_jama_reports_its_background_and_never_counts_it(self):
         result = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), command="lookup", background=background_file(BACKGROUND))

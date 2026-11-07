@@ -16,9 +16,8 @@ Before anything else, check whether `.buddy-council/sources.json` exists in the 
 
 ```
 Buddy-Council is already configured in this project:
-  Requirements:  excel — /path/to/requirements.xls (7 columns mapped)
-                 (or: jama — https://company.jamacloud.com, project CWA (42),
-                  root Mobile Software Requirements, 23 features)
+  Requirements:  jama — https://company.jamacloud.com, project CWA (42),
+                 root Mobile Software Requirements, 23 features
   Test cases:    testrail — https://company.testrail.io (project 1, authoring configured)
   Jira board:    PROJ board 42 (or: NOT VERIFIED — re-testing this run)
   Enrichment:    cli
@@ -45,6 +44,9 @@ mentions it (`Automation: left out — say "automation" to add it`) and never br
 - **Missing `jira` block** → the config predates the requirement, or an earlier run was abandoned. Say so and walk Step 3 regardless of what they asked to change.
 - **`jira.pending` is `true`** → re-test now, using the full 3a-bis procedure (MCP tool if live, `curl` otherwise). On success drop `pending` and report `Jira board: PROJ board 42 — verified`. If it still fails, leave `pending` as it is and remind them `/bc:validate` stays blocked until it clears. Never silently keep a stale `pending: true` that would now verify — and never leave it set without having attempted a call this run.
 
+**Excel configs** — also unconditional: when `requirements.provider` is `excel`, say in one line that
+requirements now come only from Jama, and walk Step 1 for the Jama project, whatever the user answered.
+
 **Pre-0.21.1 config migration** — also unconditional, because these configs cannot work as written:
 
 - **`jira.cloud_id` present, or `jira.deployment` missing** → the config targets Atlassian's hosted Cloud-only server. Drop `cloud_id`, detect `deployment` from `base_url`, and walk Step 3a to collect the credential the `uvx` server needs. Explain in one line why: the plugin no longer uses the hosted server, and it never worked against Jira Server/Data Center at all.
@@ -52,7 +54,7 @@ mentions it (`Automation: left out — say "automation" to add it`) and never br
 
 **If it does not exist**, run all steps in order.
 
-In both cases, resolve the **plugin install path** now, using the procedure in Step 4a-bis — Step 1 runs the bundled Excel parser from it (`<plugin_root>/providers/excel/parse.py`, invoked with `uv run`; its PEP 723 header lets uv provision Python and dependencies automatically, so nothing needs to be installed). Reuse the resolved value when writing `plugin_root` in Step 4.
+In both cases, resolve the **plugin install path** now, using the procedure in Step 4a-bis — Step 1 runs the Jama server's connection check from it (`uv run` provisions Python and its dependencies automatically, so nothing needs to be installed). Reuse the resolved value when writing `plugin_root` in Step 4.
 
 ### Step 0a: Path health check (runs on every re-run, including "nothing")
 
@@ -90,71 +92,10 @@ keeping the old version wired, in both CLIs, until the new server answers, then 
 and the bash hook approves both. Show their `lines`, then use a fresh `status` line in the summary. A pending
 result never blocks the rest of setup.
 
-## Step 1 of 4: Requirements (Jama or Excel)
+## Step 1 of 4: Requirements (Jama)
 
-Requirements come from one of two sources. Ask **one** question:
-
-> Where should requirements come from?
-> - **Jama** — read live from Jama Connect through the plugin's read-only Jama server (needs Jama API credentials)
-> - **Excel** — a Jama export file
-
-Recommend Jama when the user can create Jama API credentials — the data is live rather than as old as the last
-export. Then:
-
-- **Excel** → ask for the absolute file path, verify it exists using the Read tool, confirm it looks like a Jama
-  export (columns like ID, Description, Item Type, Folder structure), and run **Step 1a (Excel)**.
-- **Jama** → run **Step 1a (Jama)**.
-- Either way, then run **GitHub enrichment detection** (Step 1b) if a GitHub doc-link column or field was mapped.
-
-### Step 1a (Excel): Column mapping (one confirmation, not six questions)
-
-Read the Excel file's header row to detect actual column names, using the bundled parser:
-
-```bash
-BC_EXCEL_PATH="<excel_path>" uv run "<plugin_root>/providers/excel/parse.py" headers
-```
-
-`BC_SKIP_ROWS` defaults to 3 (the Jama metadata header height); set it only if the detected headers look wrong.
-
-Guess the mapping for every canonical field using smart defaults from header names (case-insensitive substring match — e.g., a header named "ID" maps to `id`, "Linked to Github" maps to `github_url`). Then show the whole guessed mapping as a table and ask **one** question:
-
-```
-Reading <excel_path>... found 10 columns.
-
-Proposed mapping:
-  Requirement ID   ← ID
-  Title            ← Name
-  Description      ← Description
-  Rationale        ← Rationale
-  Status           ← Status
-  Item Type        ← Item Type
-  GitHub doc URL   ← Linked to Github
-
-Look right? [Enter to accept, or tell me what to change —
-  e.g. "title is the Summary column", "there's no GitHub column"]: _
-```
-
-If the user corrects something, apply the correction and re-show the table for one more confirmation. Do **not** walk field-by-field prompts unless the guesses are mostly wrong or the user asks for that.
-
-Persist the mapping in `column_mapping` in `.buddy-council/sources.json`.
-
-Feature grouping is **not a question** — always write `feature_inference: { "strategy": "hierarchical_folder", "folder_item_type": "Folder" }` (rows under a "Folder" row belong to that folder). The Item Type column mapping above is what lets the parser detect those folder rows.
-
-#### Item types — sampled, decided automatically, never asked
-
-After the mapping is confirmed, sample the distinct values of the mapped Item Type column:
-
-```bash
-BC_EXCEL_PATH="<excel_path>" uv run "<plugin_root>/providers/excel/parse.py" distinct "<Item Type column>"
-```
-
-Decide inclusion automatically — do **not** ask:
-
-- `Folder` rows are feature boundaries (handled by `feature_inference` above), never emitted as requirements.
-- **`Text` rows are narrative content, not requirements** — they usually carry IDs, so the parser's ID guard alone won't drop them. When the sample contains `Text`, write `item_type_exclude: ["Text"]`.
-- Every other item type is included.
-
-Surface the decision in the Step 4 recap (the `Item types:` line) so the user can veto it at the single save prompt — e.g. "keep Text" or "also exclude X". `item_type_filter` (an include list) also remains supported for hand-edited configs, but the wizard never prompts for either field.
+Requirements come from Jama, read live through the plugin's read-only Jama server. Run **Step 1a (Jama)**,
+then **GitHub enrichment detection** (Step 1b) if a GitHub doc-link field was mapped.
 
 ### Step 1a (Jama): Connection, project, and features
 
@@ -204,8 +145,8 @@ Features are Jama **folders** — each requirement belongs to its nearest folder
    | redirected … single sign-on | The base URL is wrong, or the REST API sits behind SSO. Confirm the URL. |
    | Could not reach | The host is unreachable from here — **ask whether it needs the corporate VPN**. Behind a TLS-inspecting proxy, `SSL_CERT_FILE` must point at the company CA bundle. |
 
-   Offer one retry. If it still fails, Jama cannot be verified this run: say so and offer Excel for now. There
-   is no `pending` state for the requirements source — every analysis command needs requirements.
+   Offer one retry. If it still fails, Jama cannot be verified this run: say so, and stop here — every analysis
+   command needs requirements, so there is nothing useful to save until Jama answers.
 
 4. **Project.** List the projects from the check (or `jama_get_projects`) and ask which one — unless the pasted
    URL named a project id that is in the list, in which case use it and show it in the recap instead of asking.
@@ -225,7 +166,7 @@ Features are Jama **folders** — each requirement belongs to its nearest folder
    - **Item types.** Folders, Sets, and Components are never requirements — the server drops them itself.
      Write `item_type_exclude` with `Text` (narrative) plus any test-management type present, such as
      `Test Case` — this plugin reads test cases from TestRail. Every other type is included.
-   - **Field mapping** — one confirmation, the Jama counterpart of the Excel column table. Fill the rows from
+   - **Field mapping** — one confirmation. Fill the rows from
      `field_candidates`, and leave a row as `(none)` when nothing matched:
 
      ```
@@ -245,7 +186,7 @@ Features are Jama **folders** — each requirement belongs to its nearest folder
 
 ### Step 1b: GitHub enrichment (auto-detected — no strategy question)
 
-**Only run this step if a `github_url` column (Excel, Step 1a) or field (Jama, Step 1a) was mapped.** Otherwise skip silently and proceed to Step 2.
+**Only run this step if a `github_url` field was mapped in Step 1a.** Otherwise skip silently and proceed to Step 2.
 
 Detect available GitHub access strategies in parallel:
 
@@ -266,13 +207,7 @@ Pick the strategy automatically — do **not** ask the user to choose:
 
 #### Smoke test
 
-After the strategy is chosen, pull one example URL from the requirements source and try fetching it end-to-end. For **Jama**, use the `first_url` the Step 1a check reported for the mapped field. For **Excel**, use the column you just mapped:
-
-```bash
-BC_EXCEL_PATH="<excel_path>" uv run "<plugin_root>/providers/excel/parse.py" first-github-url "<GitHub URL column>"
-```
-
-If a URL is found, fetch it via the chosen strategy (CLI: `gh api repos/.../contents/...` and base64-decode; MCP: call `mcp__github__get_file_contents`). Show the user the first 200 chars of the decoded content as a preview:
+After the strategy is chosen, try fetching one example URL end-to-end: the `first_url` the Step 1a check reported for the mapped field. If a URL is found, fetch it via the chosen strategy (CLI: `gh api repos/.../contents/...` and base64-decode; MCP: call `mcp__github__get_file_contents`). Show the user the first 200 chars of the decoded content as a preview:
 
 ```
 Smoke test: fetching <first URL from sheet>...
@@ -374,7 +309,7 @@ else a feature folder), `"feature"` (folder path from each requirement's feature
 `create_missing_sections` defaults to `true`; set it to `false` only if the user says their suite structure
 is fixed and a missing folder should be an error.
 
-### Step 2b: Anchor the requirements on the test suite (Jama only — no questions)
+### Step 2b: Anchor the requirements on the test suite (no questions)
 
 A large Jama project holds far more than the requirements this team tests — other documents, system
 requirements, risk analyses, archives. The test suite already knows which part matters: its cases link to
@@ -388,7 +323,7 @@ Decide all of it from the evidence, **without asking**. Roots, depths, and ancho
 can weigh in the abstract — and they don't need to: the Step 4 recap shows the result in plain words, and the
 user changes it there or on any later run.
 
-Run this when the requirements source is Jama, the TestRail tools are live, and Step 2a resolved a
+Run this when the TestRail tools are live and Step 2a resolved a
 `requirement_field`. Otherwise skip it with a visible line — `Requirements root: not anchored yet — re-run
 /bc:setup once the TestRail tools are live` — and save without `roots`: everything still works on the whole
 project, with every folder a feature.
@@ -483,17 +418,13 @@ If at least one marker is present, enable code mapping **without asking** — `p
 
 #### Requirement ID pattern — infer from the requirements source
 
-Do **not** ask the user to type the ID pattern blind. Infer it from real IDs. For **Jama**, use the `document_key_samples` the Step 1a project check returned (a few keys per item type — e.g. `CWA-REQ-85`, `CWA-SRS-12`), keeping only the types that were not excluded. For **Excel**, sample the column they mapped to `id` in Step 1a (set `BC_SKIP_ROWS` only if a non-default value was used there):
-
-```bash
-BC_EXCEL_PATH="<excel_path>" uv run "<plugin_root>/providers/excel/parse.py" sample "<ID column>"
-```
+Do **not** ask the user to type the ID pattern blind. Infer it from real IDs. For **Jama**, use the `document_key_samples` the Step 1a project check returned (a few keys per item type — e.g. `CWA-REQ-85`, `CWA-SRS-12`), keeping only the types that were not excluded.
 
 From the sample values, derive a grep regex: escape the literal prefix and generalize the numeric part to `\d+` (e.g. samples `CWA-REQ-85, CWA-REQ-86, CWA-REQ-92` → `CWA-REQ-\d+`). Then:
 
 - **Exactly one prefix detected** (the normal case) → accept it automatically, no prompt. Show it in the Step 4 review summary (`ID patterns: CWA-REQ-\d+, TC-\d+`).
 - **Multiple distinct prefixes** → produce one pattern per prefix and confirm them with the user in a single question.
-- **Sampling fails** (no `id` column mapped, unreadable sheet, no Jama samples) → ask, with the default `CWA-REQ-\d+, TC-\d+`.
+- **Sampling fails** (no Jama samples) → ask, with the default `CWA-REQ-\d+, TC-\d+`.
 
 Always also append a test-case ID pattern for code references (default `TC-\d+`; adjust if the team uses a different convention).
 
@@ -819,9 +750,15 @@ Before writing anything, show one compact recap of everything collected and ask 
 
 ```
 Ready to save:
-  Requirements:  excel — /path/to/requirements.xls (skip_rows 3, 7 columns mapped)
-  Features:      hierarchical folders (Item Type = "Folder")
-  Item types:    Requirement, MAS Software Requirement Specification (Text excluded — narrative)
+  Requirements:  jama — https://company.jamacloud.com, project CWA "Clinical Window App" (42) — read-only
+                 connected as Jane Doe (OAuth API credentials)
+  In scope:      the whole "Software Requirements" document — the one your test cases link to
+                 1,512 requirements in 23 features (Login, Patient Monitoring, Alarms, …)
+                 not tested yet: Release 3 Drafts (40) — say "leave out Release 3 Drafts" if it is an archive
+  Background:    the rest of the project — 2,900 items (system requirements, hazards, design, …) —
+                 is searched to enrich answers, never counted in reports
+  Field mapping: status ← Status, rationale ← Rationale, GitHub doc URL ← Linked to Github
+  Item types:    Mobile SRS (Text and Test Case excluded)
   Enrichment:    cli (gh CLI, smoke test OK)
   Test cases:    testrail — https://company.testrail.io, project 1
   Case authoring: template "Test Case (Steps)", type "Functional", priority "Medium"
@@ -847,19 +784,6 @@ Ready to save:
 Save? [y]: _
 ```
 
-When the requirements source is **Jama**, the first lines read instead:
-
-```
-  Requirements:  jama — https://company.jamacloud.com, project CWA "Clinical Window App" (42) — read-only
-                 connected as Jane Doe (OAuth API credentials)
-  In scope:      the whole "Software Requirements" document — the one your test cases link to
-                 1,512 requirements in 23 features (Login, Patient Monitoring, Alarms, …)
-                 not tested yet: Release 3 Drafts (40) — say "leave out Release 3 Drafts" if it is an archive
-  Background:    the rest of the project — 2,900 items (system requirements, hazards, design, …) —
-                 is searched to enrich answers, never counted in reports
-  Field mapping: status ← Status, rationale ← Rationale, GitHub doc URL ← Linked to Github
-```
-
 On yes, write all files (4a–4c below), then install the automation tools (4d) when the recap included them. On
 no, ask what to change — unless the answer already says — fix it, and re-show the recap.
 
@@ -875,28 +799,30 @@ mkdir -p .buddy-council
 
 **Migration:** if an older `config/sources.json` exists inside the plugin directory (from before this move), copy its contents into `.buddy-council/sources.json` and tell the user it was migrated.
 
-Write `.buddy-council/sources.json` with the selected providers and non-secret settings. Include the column-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and the code-mapping section:
+Write `.buddy-council/sources.json` with the selected providers and non-secret settings. Include the field-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and the code-mapping section. No credentials, ever — those went to `~/.buddy-council/secrets.json` in Step 1a:
 
 ```json
 {
   "requirements": {
-    "provider": "excel",
-    "excel_path": "/absolute/path/to/requirements.xls",
-    "skip_rows": 3,
-    "column_mapping": {
-      "id": "ID",
-      "title": "Name",
-      "description": "Description",
-      "rationale": "Rationale",
-      "status": "Status",
-      "item_type": "Item Type",
-      "github_url": "Linked to Github"
-    },
+    "provider": "jama",
+    "base_url": "https://company.jamacloud.com",
+    "project_id": 42,
+    "project_key": "CWA",
+    "project_name": "Clinical Window App",
+    "roots": [{ "id": 1001, "path": "Product / Software Requirements" }],
+    "exclude": [{ "id": 1950, "path": "Product / Software Requirements / Archive" }],
     "feature_inference": {
       "strategy": "hierarchical_folder",
-      "folder_item_type": "Folder"
+      "folder_item_type": "Folder",
+      "depth": 1
     },
-    "item_type_exclude": ["Text"],
+    "item_type_filter": ["Mobile SRS"],
+    "item_type_exclude": ["Text", "Test Case"],
+    "field_mapping": {
+      "status": "Status",
+      "rationale": "Rationale",
+      "github_url": "Linked to Github"
+    },
     "enrichment": {
       "enabled": true,
       "strategy": "cli",
@@ -965,54 +891,19 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 }
 ```
 
-The `"jira"` section is **always written** — Step 3 is required. If the connection test failed, write it with `"pending": true`. `board.id` and `vnv_board.id` are integers, not strings. `deployment` is `"cloud"` or `"server"`, detected from the host. `vnv_board.project_key` **may equal** `project_key` — that is a supported layout, and `discriminator` is what keeps the two boards apart; set it to `null` when the V&V board has its own project. There is no `cloud_id`: `mcp-atlassian` is bound to one site by `JIRA_URL` in the env file, so no site id is ever passed to a tool. If a `cloud_id` survives from a pre-0.21.1 config, drop it. If no `github_url` column (Excel) or field (Jama) was mapped, or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the source has none of the excluded types (Excel: no `Text` rows in the Item Type sample). If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
+The `"jira"` section is **always written** — Step 3 is required. If the connection test failed, write it with `"pending": true`. `board.id` and `vnv_board.id` are integers, not strings. `deployment` is `"cloud"` or `"server"`, detected from the host. `vnv_board.project_key` **may equal** `project_key` — that is a supported layout, and `discriminator` is what keeps the two boards apart; set it to `null` when the V&V board has its own project. There is no `cloud_id`: `mcp-atlassian` is bound to one site by `JIRA_URL` in the env file, so no site id is ever passed to a tool. If a `cloud_id` survives from a pre-0.21.1 config, drop it. If no `github_url` field was mapped, or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the project has none of the excluded types. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
 
 **Never write the `automation` block yourself** — `bc_tools.py ensure` writes it in 4d, from what it actually
 installed and proved, and every later `ensure` keeps it current. On a re-run, carry an existing block over
 verbatim. The one exception is "leave out automation", which writes `"automation": { "enabled": false }`.
 
-When the requirements source is **Jama**, the `requirements` block is written like this instead — no
-credentials, ever; those went to `~/.buddy-council/secrets.json` in Step 1a:
-
-```json
-{
-  "requirements": {
-    "provider": "jama",
-    "base_url": "https://company.jamacloud.com",
-    "project_id": 42,
-    "project_key": "CWA",
-    "project_name": "Clinical Window App",
-    "roots": [{ "id": 1001, "path": "Product / Software Requirements" }],
-    "exclude": [{ "id": 1950, "path": "Product / Software Requirements / Archive" }],
-    "feature_inference": {
-      "strategy": "hierarchical_folder",
-      "folder_item_type": "Folder",
-      "depth": 1
-    },
-    "item_type_filter": ["Mobile SRS"],
-    "item_type_exclude": ["Text", "Test Case"],
-    "field_mapping": {
-      "status": "Status",
-      "rationale": "Rationale",
-      "github_url": "Linked to Github"
-    },
-    "enrichment": {
-      "enabled": true,
-      "strategy": "cli",
-      "max_doc_chars": 50000
-    }
-  }
-}
-```
-
 `project_id` is an integer. `base_url` is the normalized root (no `/rest/v1`, no `/perspective.req…`).
 `roots`, `exclude`, `feature_inference.depth`, and `item_type_filter` come from Step 2b; omit all four when
-the requirements were not anchored, and every folder in the project is then a feature. When switching from
-Jama to Excel or back, replace the whole `requirements` block rather than merging the two shapes.
+the requirements were not anchored, and every folder in the project is then a feature.
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
-The MCP servers and the Excel parser live **inside the plugin's install directory**, which must be referenced by an absolute path that works on the current machine — `${CLAUDE_PLUGIN_ROOT}` only resolves under Claude Code, not Copilot CLI. Determine the absolute install path and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
+The MCP servers live **inside the plugin's install directory**, which must be referenced by an absolute path that works on the current machine — `${CLAUDE_PLUGIN_ROOT}` only resolves under Claude Code, not Copilot CLI. Determine the absolute install path and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
 
 1. If `${CLAUDE_PLUGIN_ROOT}` resolves to an existing directory that contains `mcp-servers/` → use it (Claude Code).
 2. Otherwise auto-detect: search Copilot's real install locations for a directory containing `mcp-servers/testrail-server/server.py` — in this order:
@@ -1053,8 +944,7 @@ tell the user.
 
 If the GitHub enrichment strategy is **not** `mcp` (e.g., CLI was chosen, or enrichment is disabled), omit the `"github"` section — `gh` CLI handles its own credentials.
 
-When the requirements source is **Jama**, the file also carries the `jama` section written in Step 1a — keep
-it, with exactly one auth style:
+The file also carries the `jama` section written in Step 1a — keep it, with exactly one auth style:
 
 ```json
 {
@@ -1066,9 +956,7 @@ it, with exactly one auth style:
 ```
 
 (`username` + `password` replace the pair only on instances without API credentials.) The `jama` MCP server
-reads this section itself; the base URL is not a secret and lives in `JAMA_BASE_URL` instead. When the source
-is switched away from Jama, leave the section alone unless the user asks to remove it — it is inert without
-the server.
+reads this section itself; the base URL is not a secret and lives in `JAMA_BASE_URL` instead.
 
 Set restrictive permissions on the secrets file:
 
@@ -1123,10 +1011,9 @@ same server twice. That no longer applies: the manifest declares no MCP servers 
 in a committed manifest. `atlassian` is now wired exactly like `testrail` — written by setup into both
 runtime configs, with real paths resolved on this machine.
 
-**The `jama` entry — only when the requirements source is Jama.** It is wired exactly like `testrail`: the
+**The `jama` entry.** It is wired exactly like `testrail`: the
 vendored server under `<plugin_root>/mcp-servers/jama-server`, the non-secret `JAMA_BASE_URL`, and
-`BC_SECRETS_FILE` pointing at the secrets file whose `jama` section holds the credential. When the source is
-Excel, remove any `jama` entry left from an earlier run, in both files, and say so.
+`BC_SECRETS_FILE` pointing at the secrets file whose `jama` section holds the credential.
 
 ```json
 {
@@ -1186,7 +1073,7 @@ and leave every other server the user has configured untouched. Create the file 
 of its own (the credential is in the env file it points at), and having it present means Jira works the
 moment the user gets on the VPN or fixes the token, with no second setup run.
 
-**When the requirements source is Jama**, add the `jama` entry here as well, in Copilot's shape.
+Add the `jama` entry here as well, in Copilot's shape.
 `"tools": ["*"]` is safe for this server in particular: it has no write tools to expose.
 
 ```json
@@ -1218,7 +1105,7 @@ Three differences from the Claude Code file, all required:
 - **`"tools": ["*"]`** — the per-server tool allowlist. Without it the server loads but exposes nothing.
 - **Fully expanded `$HOME`** in `BC_SECRETS_FILE` and in the atlassian `--env-file` — write `/Users/<you>/...`, not `~/...`. The tilde is not expanded here.
 
-Same rules as the Claude Code copy: no credentials in the file itself (base URLs, `BC_SECRETS_FILE`, and the `--env-file` path only), add `github` only under `strategy: "mcp"`, and add `jama` only when Jama is the requirements source.
+Same rules as the Claude Code copy: no credentials in the file itself (base URLs, `BC_SECRETS_FILE`, and the `--env-file` path only), and add `github` only under `strategy: "mcp"`.
 
 The TestRail and Jama servers read their credentials (`testrail.username`/`api_key`, `jama.client_id`/`client_secret`) from `~/.buddy-council/secrets.json`. `BC_SECRETS_FILE` is optional — both default to `~/.buddy-council/secrets.json` — but write it explicitly for clarity. TestRail env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working; the Jama server deliberately reads its credential from the secrets file only.
 
@@ -1319,8 +1206,7 @@ Otherwise, in this order, with no further questions:
 - Confirm `.buddy-council/sources.json` has a `jira` block with `deployment`, `board.id`, and `board.url`, and that `pending` is `false` whenever the connection test actually succeeded
 - Confirm the `command` in both files is an absolute `uv`/`uvx` path that exists on disk, and that the atlassian `--env-file` argument is an absolute path with no `~`
 - If a V&V board was configured, confirm its `id` differs from the dev board's, and that `discriminator` is set whenever the two share a `project_key`
-- If Excel was configured, confirm the file is readable
-- If Jama was configured, confirm: `requirements.provider` is `"jama"` with an integer `project_id`, and any `roots`/`exclude` entries carry integer `id`s; `~/.buddy-council/secrets.json` has a `jama` section with exactly one auth style; both MCP configs have a `jama` entry whose `--directory` is `<plugin_root>/mcp-servers/jama-server` and whose env holds only `JAMA_BASE_URL` and `BC_SECRETS_FILE`. If Excel was configured, confirm neither MCP config still carries a `jama` entry
+- Confirm `requirements.provider` is `"jama"` with an integer `project_id`, and any `roots`/`exclude` entries carry integer `id`s; `~/.buddy-council/secrets.json` has a `jama` section with exactly one auth style; both MCP configs have a `jama` entry whose `--directory` is `<plugin_root>/mcp-servers/jama-server` and whose env holds only `JAMA_BASE_URL` and `BC_SECRETS_FILE`
 - If automation was included, confirm `ensure` (and `smoke`, when it ran) returned `"ok": true` with a `status` — `ready` or `pending` — and that `.buddy-council/sources.json` now has an `automation` block. The script itself checks the rest (the server answered before it was wired, both `appium` entries use absolute paths that exist); do not re-check it by hand
 - Tell the user:
   1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate — the `appium` server, too, when automation was set up
@@ -1336,7 +1222,7 @@ Because MCP tool naming in Copilot's hooks varies by version, MCP reads may stil
   `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates),testrail(testrail_get_requirement_ids),testrail(testrail_get_linked_cases),testrail(testrail_get_canonical_cases)` — deliberately **not** `testrail(testrail_add_case)`, `testrail(testrail_add_cases)`, `testrail(testrail_add_section)`, `testrail(testrail_update_case)`, or `testrail(testrail_update_cases)`, which must keep prompting
 - If Jira was configured, also add the Atlassian read tools: `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)` — deliberately **none** of `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, or `jira_add_issues_to_sprint`, which must keep prompting
 - If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
-- If Jama is the requirements source, also add the Jama tools: `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — that is every tool the server has, because it has no write tools
+- Also add the Jama tools: `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — that is every tool the server has, because it has no write tools
 - If automation was set up, also add appium-mcp's read tools: `appium(appium_mobile_device_info),appium(appium_find_element),appium(appium_find_elements),appium(appium_get_text),appium(appium_get_element_attribute),appium(appium_get_active_element),appium(appium_get_window_size),appium(generate_locators),appium(appium_get_page_source),appium(appium_screenshot)` — deliberately **none** of `appium_session_management`, `appium_gesture`, `appium_set_value`, `appium_app_lifecycle`, or anything else that taps, types, opens a session, or launches an app, which must keep prompting
 
 Present it as a single command, e.g.:
@@ -1345,7 +1231,7 @@ Present it as a single command, e.g.:
 copilot --allow-tool='<comma-separated list from above>'
 ```
 
-If the user's Copilot version predates plugin hooks, tell them to also append the entries the hooks would otherwise cover — `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json),write(<plugin_root>/.mcp.json)` (substitute the real `<plugin_root>` recorded in config) — and to choose **"always allow"** when the Excel parser or TestRail connection test first prompts. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
+If the user's Copilot version predates plugin hooks, tell them to also append the entries the hooks would otherwise cover — `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json),write(<plugin_root>/.mcp.json)` (substitute the real `<plugin_root>` recorded in config) — and to choose **"always allow"** when the TestRail connection test first prompts. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
 
 ## Important
 

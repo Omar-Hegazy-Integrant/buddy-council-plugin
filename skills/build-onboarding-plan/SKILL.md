@@ -40,7 +40,7 @@ Skip features that should not appear in onboarding:
 In priority order:
 
 1. **Explicit override**: if `.buddy-council/sources.json` contains a top-level `feature_order: ["Feature A", "Feature B", ...]`, use that order. Features in the array but not in the data → drop with a warning. Features in the data but not in the array → append at the end in source order with a note.
-2. **Source order fallback**: if no override, use the order in which features first appear in the input requirements list. Jama and Excel exports usually have intentional ordering.
+2. **Source order fallback**: if no override, use the order in which features first appear in the input requirements list. Jama projects usually have intentional ordering.
 3. **Persist the chosen order** to the progress log's `feature_order` field on first run. Subsequent resumes use the persisted order, not a recomputation, to keep the journey deterministic.
 
 ### 4. Order Steps Within a Feature

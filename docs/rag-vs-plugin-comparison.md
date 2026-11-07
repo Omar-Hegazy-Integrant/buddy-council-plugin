@@ -17,7 +17,7 @@
 
 | | RAG | Plugin |
 |--|-----|--------|
-| **Pros** | Fast retrieval after indexing — sub-second lookups | Always current — fetches live from TestRail/Excel every time |
+| **Pros** | Fast retrieval after indexing — sub-second lookups | Always current — fetches live from TestRail/Jama every time |
 | **Cons** | Data goes stale the moment you index. If someone updates a requirement in Jama or adds a test case in TestRail, the system doesn't know until you re-run the preprocessing pipeline | Every request hits the API — slower for large datasets, susceptible to rate limits |
 | **Verdict** | Good for stable, infrequently-changing data | Better for actively evolving requirements/test suites |
 

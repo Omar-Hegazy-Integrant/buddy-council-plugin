@@ -5,7 +5,7 @@ user-invocable: false
 
 # Enrich Requirements — Skill
 
-After requirements have been fetched from their provider (Excel, Jama) but before normalization, fetch any externally-referenced documentation (GitHub-hosted markdown today) and merge it into each requirement as `extended_context`. Every downstream consumer (`/bc:contradiction`, `/bc:coverage`, `/bc:onboarding`, `/bc:validate`) gets richer reasoning input without changes.
+After requirements have been fetched from their provider (Jama) but before normalization, fetch any externally-referenced documentation (GitHub-hosted markdown today) and merge it into each requirement as `extended_context`. Every downstream consumer (`/bc:contradiction`, `/bc:coverage`, `/bc:onboarding`, `/bc:validate`) gets richer reasoning input without changes.
 
 ## When to Use
 
