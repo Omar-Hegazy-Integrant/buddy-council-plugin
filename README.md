@@ -1,6 +1,6 @@
 # Buddy-Council
 
-A multi-agent plugin for detecting contradictions, coverage gaps, and alignment issues between **requirements** and **test cases**. Works with both **Claude Code** and **Copilot CLI**.
+A multi-agent plugin for detecting contradictions, coverage gaps, and alignment issues between **requirements** and **test cases**. Installs in **Copilot CLI**, **Claude Code**, **VS Code**, **Codex**, and **Cursor** — see [Installation](#installation).
 
 Data is fetched live from external systems via MCP — no RAG, no embeddings, no vector storage.
 
@@ -29,11 +29,11 @@ Data is fetched live from external systems via MCP — no RAG, no embeddings, no
 | `/bc:codemap "<feature>"` | Map a feature to where it lives in the current codebase: files, communication flow, and per-requirement locations |
 | `/bc:vnv-sprint-prep` | V&V (Validation and Verification) sprint preparation — check cross-platform parity on the dev board, clone sprint stories to the V&V board, validate them against requirements and test cases, drive them through scenario review, and write the approved scenarios into TestRail as test cases |
 
-These descriptions are the `description:` frontmatter in `commands/*.md` — the same text both CLIs show in their `/` menus. Keep the table and the frontmatter in sync when either changes.
+These descriptions are the `description:` frontmatter in `skills/<command>/SKILL.md` — the same text the assistants show in their `/` menus. Keep the table and the frontmatter in sync when either changes.
 
 ## Prerequisites
 
-- [Claude Code](https://claude.ai/code) **or** [Copilot CLI](https://docs.github.com/en/copilot)
+- One of the AI coding assistants in the [install table](#installation)
 - [uv](https://docs.astral.sh/uv/) — runs the MCP servers; it provisions a compatible Python and all dependencies automatically, so no host Python installation or `pip install` is needed
 - A TestRail account with API access (for test cases)
 - Requirements from Jama Connect — a Jama API client ID and secret (Jama → profile menu → **Set API Credentials**), on an account allowed to use the REST API (Admin → REST API → Managed Access Control, when your site restricts it). A read-only Jama account is recommended; the plugin never writes to Jama
@@ -43,57 +43,40 @@ These descriptions are the `description:` frontmatter in `commands/*.md` — the
 
 ## Installation
 
-### Claude Code
+Install the plugin with your assistant's own plugin command:
 
-**Step 1: Add the marketplace**
+| Assistant | Install | Tested |
+|---|---|---|
+| Copilot CLI | `copilot plugin marketplace add Omar-Hegazy-Integrant/buddy-council-plugin`, then `copilot plugin install bc@buddy-council` | Yes |
+| Claude Code | `/plugin marketplace add Omar-Hegazy-Integrant/buddy-council-plugin`, then `/plugin install bc@buddy-council` and `/reload-plugins` | Not tested yet |
+| VS Code | Command Palette → **Chat: Install Plugin From Source**, then `https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin` | Not tested yet |
+| Codex | `codex plugin marketplace add Omar-Hegazy-Integrant/buddy-council-plugin`, then `codex plugin add bc@buddy-council` | Not tested yet |
+| Cursor | Add this repository to your team marketplace (Teams and Enterprise plans), or clone it into a folder under `~/.cursor/plugins/local/` | Not tested yet |
 
-```
-/plugin marketplace add https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin
-```
+Every assistant gets the eight commands. Copilot CLI, Claude Code, and VS Code also load the plugin's agents and
+hooks. Codex and Cursor load neither yet: there, each command runs its agents' steps itself, and nothing is
+auto-approved, so expect more permission prompts.
 
-**Step 2: Install the plugin**
+**Keep Copilot CLI current.** Copilot updates a marketplace plugin at the start of each session only when its
+marketplace opts in. Add this to `~/.copilot/settings.json` once — or run `copilot plugin update bc` after each
+release:
 
-```
-/plugin install bc
-```
-
-**Step 3: Reload**
-
-```
-/reload-plugins
-```
-
-**Step 4: Jira — nothing to authorize**
-
-`/bc:setup` wires up **[`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian)** for you, launched via
-`uvx` with the token you gave it. There is no browser consent step and no site-admin switch to flip. Restart
-your CLI after setup so the server loads; the first launch downloads the package, which takes a few seconds.
-
-To confirm it's live on Claude Code:
-
-```
-/mcp
+```json
+{
+  "extraKnownMarketplaces": {
+    "buddy-council": {
+      "source": { "source": "github", "repo": "Omar-Hegazy-Integrant/buddy-council-plugin" },
+      "autoUpdate": true
+    }
+  }
+}
 ```
 
-**atlassian** should be listed and connected. If it isn't, the usual causes are a runtime that hasn't been
-restarted since setup, or a first-run `uvx` download still in progress. Your token lives in
-`~/.buddy-council/atlassian.env` — re-run `/bc:setup` to change it.
+**Then run `/bc:setup`** (where your assistant lists skills by name, pick **setup**), and restart the assistant
+afterwards so it picks up the MCP servers setup registered. Copilot CLI must be fully exited and relaunched;
+Claude Code can also toggle the servers with `/mcp`.
 
-### Copilot CLI
-
-**Step 1: Add the marketplace**
-
-```
-copilot plugin marketplace add https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin
-```
-
-**Step 2: Install the plugin**
-
-```
-copilot plugin install bc
-```
-
-**Step 3: Run `/bc:setup`, then fully restart Copilot** — exit the session and relaunch, so it picks up the MCP servers. Toggling is not enough on Copilot.
+> **Jira — nothing to authorize.** `/bc:setup` wires up **[`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian)** for you, launched via `uvx` with the token you gave it. There is no browser consent step and no site-admin switch to flip; the first launch downloads the package, which takes a few seconds. To confirm it's live on Claude Code, run `/mcp`: **atlassian** should be listed and connected. If it isn't, the usual causes are a runtime that hasn't been restarted since setup, or a first-run `uvx` download still in progress. Your token lives in `~/.buddy-council/atlassian.env` — re-run `/bc:setup` to change it.
 
 > **Jira on both runtimes.** `/bc:setup` writes the `atlassian` server into `.mcp.json` (Claude Code) and `~/.copilot/mcp-config.json` (Copilot CLI), exactly as it does for TestRail. No plugin manifest declares it: a `uvx` server needs an absolute interpreter path and an absolute env-file path, and a committed manifest can hold neither. Copilot couldn't use a manifest entry regardless — it doesn't merge plugin-declared MCP servers into its runtime config ([#2709](https://github.com/github/copilot-cli/issues/2709)).
 
@@ -101,7 +84,7 @@ copilot plugin install bc
 
 ### Copilot CLI — fewer permission prompts
 
-The plugin's bundled hooks run on **both runtimes**: Claude Code loads `hooks/hooks.json`, Copilot CLI (1.0.7x and later) loads the plugin-root `hooks.json` — same scripts, same behavior. On either CLI they auto-approve the plugin's curated read-only operations (`jq`, `gh api` reads, the TestRail connection test, read-only MCP fetches, appium-mcp's screen reads, and the automation script's install and checks) and writes to the plugin's own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`). Write operations like Jira ticket creation always prompt.
+The plugin's bundled hooks run in Claude Code, which loads `hooks/hooks.json`, and in Copilot CLI and VS Code, which load `com.github.copilot/hooks/hooks.json` — same scripts, same behavior. In each they auto-approve the plugin's curated read-only operations (`jq`, `gh api` reads, the TestRail connection test, read-only MCP fetches, appium-mcp's screen reads, and the automation script's install and checks) and writes to the plugin's own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`). Write operations like Jira ticket creation always prompt.
 
 If your Copilot version still prompts for MCP reads (MCP tool naming in hooks varies by version), pre-approve them at launch with `--allow-tool`:
 
@@ -141,17 +124,25 @@ claude --plugin-dir /path/to/buddy-council-plugin
 copilot --plugin-dir /path/to/buddy-council-plugin
 ```
 
+To try a build in Copilot without touching your own Copilot profile — its settings, MCP servers, and installed plugins — give the session a throwaway home:
+
+```bash
+COPILOT_HOME="$(mktemp -d)" copilot --plugin-dir /path/to/buddy-council-plugin
+```
+
+A fresh home has no sign-in of its own: Copilot uses `GH_TOKEN` or `GITHUB_TOKEN` when one is set, else run `/login` in it. Start commands in an interactive session — `copilot -p "/bc:coverage"` sends the text to the model as it is, and the model can't start a command itself.
+
 Edit → start a new session with the flag → test `/bc:…` commands. No commit, push, or version bump is needed while iterating; the MCP servers resolve their own dependencies via `uv` on first launch. If the plugin is *also* installed on your machine, disable or uninstall the installed `bc` first (`/plugin` in Claude Code; `copilot plugin uninstall bc`) so the dev and installed copies don't both answer `/bc:` commands. A normal session without the flag runs the installed copy — that's your production reference.
 
 ### Debugging a bc run
 
 Three layers of visibility, in order of reach:
 
-1. **In-transcript trace (both platforms).** Every analysis command follows a mandatory Data Contract: it prints `Fetch: requirements → N` / `Fetch: test cases → M` (plus `Enrichment: fetched K of N` when GitHub enrichment is configured) before analyzing, and stops to ask before continuing if any configured source failed. If you don't see these lines in a run, the run violated the contract — that itself is the bug to report.
-2. **Tool log (both platforms).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran. Under Copilot each line additionally carries a `result` status (`success` or a failure kind), and failed calls are logged too.
+1. **In-transcript trace (every assistant).** Every analysis command follows a mandatory Data Contract: it prints `Fetch: requirements → N` / `Fetch: test cases → M` (plus `Enrichment: fetched K of N` when GitHub enrichment is configured) before analyzing, and stops to ask before continuing if any configured source failed. If you don't see these lines in a run, the run violated the contract — that itself is the bug to report.
+2. **Tool log (Claude Code, Copilot CLI, VS Code).** A bundled PostToolUse hook appends every tool call — timestamp, tool name, redacted target — to `.buddy-council/logs/tool-log-<date>.jsonl` in the project. It is active only in projects containing `.buddy-council/`, and never logs file contents, tool responses, or credentials. Read it to see exactly which tools ran, in what order — and which never ran. Under Copilot each line additionally carries a `result` status (`success` or a failure kind), and failed calls are logged too.
 3. **Native session logs (Copilot CLI).** For deeper Copilot internals beyond the tool log, launch with `copilot --log-level debug` (logs land in `~/.copilot/logs/`, or set `--log-dir`).
 
-**Automation tools.** Their logs are in `~/.buddy-council/automation/logs/`: npm's install, appium-mcp's own log from each check, the project's Appium server, and the project's setup script. To see what is installed and what is pending without changing anything, run `python3 <plugin>/skills/automation-tools/bc_tools.py status --project '<test project>'`.
+**Automation tools.** Their logs are in `~/.buddy-council/automation/logs/`: npm's install, appium-mcp's own log from each check, the project's Appium server, and the project's setup script. To see what is installed and what is pending without changing anything, run `python3 <plugin>/scripts/bc_tools.py status --project '<test project>'`.
 
 #### Jama on a large project
 
@@ -175,14 +166,15 @@ The `atlassian` server follows the same table as the others — `/bc:setup` writ
 
 **Release to the team:**
 
-1. Bump `version` in `.claude-plugin/plugin.json`, the only manifest that carries one.
+1. Bump `version` in the root `plugin.json` — the one place it is set — and run `python3 scripts/sync_version.py`, which copies it into `.claude-plugin/plugin.json`. The tests (`python3 -m unittest discover -s scripts/tests`) fail while the two differ, and `claude plugin validate . --strict` must pass.
 2. Merge `dev` → `main` (bumping first keeps the two branches identical afterwards).
 3. Push `main`.
 4. Everyone refreshes their installed copy — no other action needed:
    - Claude Code: `/plugin marketplace update buddy-council`
-   - Copilot CLI: `copilot plugin update bc`
+   - Copilot CLI: `copilot plugin update bc`, or nothing at all with [auto-update](#installation) on
+   - Codex: updates its plugins at startup
 
-Claude Code's install path contains the version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so every update moves the plugin. Nobody needs to re-run `/bc:setup` for that: commands resolve the install path from the runtime first, and `/bc:setup` repairs a drifted `plugin_root` and `.mcp.json` automatically if it is ever run again. Restarting the session (or toggling `/mcp`) is still needed for the MCP servers to reconnect.
+Claude Code's install path contains the version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so every update moves the plugin. Nobody needs to re-run `/bc:setup` for that: commands find the plugin root from their own skill folder, and `/bc:setup` repairs a drifted `plugin_root` and `.mcp.json` automatically if it is ever run again. Restarting the session (or toggling `/mcp`) is still needed for the MCP servers to reconnect.
 
 ## Setup
 
@@ -412,7 +404,7 @@ TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
 ```
 
 **6. Automation tools — not by hand.** Run `/bc:setup` inside the test project, or the script it uses:
-`python3 <plugin>/skills/automation-tools/bc_tools.py ensure --project '<test project>'`. It installs the pinned
+`python3 <plugin>/scripts/bc_tools.py ensure --project '<test project>'`. It installs the pinned
 Node and appium-mcp, then writes the `appium` entry into both MCP configs — absolute paths, so it works whatever
 your PATH is — and records an `automation` block in that project's `.buddy-council/sources.json`. The Copilot
 entry looks like this:
@@ -633,17 +625,19 @@ Same code mapping as the onboarding phase, standalone: the feature's files, comm
 > **Visual reference:** the [Plugin Architecture board](https://lucid.app/lucidspark/9ed93500-df15-4b68-9fff-84a1f2e23afc/edit?page=h0VJK6ky~xWh) shows every command, how the parts talk to each other, what each one can change, and where the code could be better. Start with its "Start here" frame.
 
 ```
-Command → Agent → Skills (fetch → normalize → analyze) → Report
+Command → Agent → How-tos (fetch → normalize → analyze) → Report
 ```
 
-- **Commands** — user-facing entry points
-- **Agents** — orchestrate the analysis workflow end-to-end
-- **Skills** — reusable capabilities (fetching, normalization, analysis)
+- **Manifests** — two of them (ADR 0007): the root `plugin.json` in the open Agent Plugins format, which Copilot CLI, VS Code, Codex, and Cursor read, and `.claude-plugin/plugin.json` for Claude Code. The root one holds the version
+- **Commands** — user-facing entry points, in `skills/<name>/SKILL.md`: skills only you can start, so none of them loads into a session until you type it (ADR 0006)
+- **Agents** — orchestrate the analysis workflow end-to-end, in `com.github.copilot/agents/`
+- **How-tos** — reusable capabilities (fetching, normalization, analysis), plain files in `howtos/` that the commands and agents read by path. They cost nothing until a command needs them
 - **Providers** — platform-specific data fetching (TestRail, Jama, Jira, GitHub)
-- **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — Jira/Confluence run on the community [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) server (launched with `uvx`, serving Cloud and Server/Data Center alike), and GitHub on the official `github-mcp-server` or the `gh` CLI. Neither is appium-mcp, the server `/bc:automate` drives the phone with: `/bc:setup` installs it on each Mac from the lockfile in `skills/automation-tools/appium-mcp/`, on bc's own pinned Node. To move a pin, change `skills/automation-tools/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed
-- **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and the plugin-root `hooks.json` (Copilot CLI) register the same four runtime-agnostic scripts
+- **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — Jira/Confluence run on the community [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) server (launched with `uvx`, serving Cloud and Server/Data Center alike), and GitHub on the official `github-mcp-server` or the `gh` CLI. Neither is appium-mcp, the server `/bc:automate` drives the phone with: `/bc:setup` installs it on each Mac from the lockfile in `scripts/automation/appium-mcp/`, on bc's own pinned Node. To move a pin, change `scripts/automation/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed
+- **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and `com.github.copilot/hooks/hooks.json` (Copilot CLI, VS Code) register the same four runtime-agnostic scripts
+- **Scripts** — `scripts/`: the run-folder and automation-tools scripts, `sync_version.py`, and every script, hook, and manifest test (`python3 -m unittest discover -s scripts/tests`)
 
-Agents never call providers directly — they go through router skills, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
+Agents never call providers directly — they go through router how-tos, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
 
 ### Low-cost collection for `/bc:coverage`, `/bc:contradiction`, and `/bc:ask` lookups
 
@@ -651,8 +645,8 @@ These commands read the most data, so they split the work by what it needs:
 
 | Work | Runs on |
 |---|---|
-| Fetching requirements, every test case in the suite, and the GitHub docs — for a lookup on Jama, the rest of the project as background too; waiting out a slow Jama read | the `data-collector` sub-agent on a **low-cost model** — `claude-haiku-4.5`, else `gpt-5-mini`, in Copilot CLI; Haiku in Claude Code |
-| Cross-linking IDs and counting untested requirements, orphans, stranded links, coverage per feature; ranking requirements and background against a lookup | **code** (`skills/collect-artifacts/bc_run.py`) — no model at all |
+| Fetching requirements, every test case in the suite, and the GitHub docs — for a lookup on Jama, the rest of the project as background too; waiting out a slow Jama read | the `data-collector` sub-agent on a **low-cost model** — `claude-haiku-4.5`, else `gpt-5-mini`, in Copilot CLI; Haiku in Claude Code; your session's model in assistants that don't load plugin agents |
+| Cross-linking IDs and counting untested requirements, orphans, stranded links, coverage per feature; ranking requirements and background against a lookup | **code** (`scripts/bc_run.py`) — no model at all |
 | Contradictions, weak coverage, severity, the report, every question to you, every write | **your session's model**, reading one feature at a time |
 
 The data travels as files, never as a model's retelling: the servers write it straight into a **run folder** in your project, `.buddy-council/runs/<run-id>/`, and your model reads `links.json` (the counts) and then each feature's bundle — its requirements, verbatim, with their custom fields (platform, product, version), each followed by the test cases that link to it with theirs (applicable OS, product version, CtQ, priority) — plus the GitHub docs the feature links to. The low-cost model is never taken at its word: the link step checks the run against your `sources.json` and writes the `Fetch:`, `Enrichment:` and `Readiness:` lines itself, and a run that doesn't match the config is collected again by your session's model. If the sub-agent can't run, you'll see `Collect: ran inline — …` and your session's model does the same steps itself.
@@ -667,7 +661,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
 - Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
 - `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
-- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section` — reached only through the one `draft-test-cases` skill, from `/bc:vnv-sprint-prep` phase 7, the `/bc:coverage` gap-fill offer, and `/bc:ask` scenario mapping — and `testrail_update_case` and `testrail_update_cases`, reached only through the one `update-test-cases` skill, from `/bc:ask` edits, the `/bc:coverage` orphan repair, the `/bc:contradiction` fix offer, and phase 7's refresh
+- Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section` — reached only through the one `draft-test-cases` how-to, from `/bc:vnv-sprint-prep` phase 7, the `/bc:coverage` gap-fill offer, and `/bc:ask` scenario mapping — and `testrail_update_case` and `testrail_update_cases`, reached only through the one `update-test-cases` how-to, from `/bc:ask` edits, the `/bc:coverage` orphan repair, the `/bc:contradiction` fix offer, and phase 7's refresh
 - **Jama is read-only by construction.** The vendored Jama server has no write tools at all: every tool is `jama_get_*`, its HTTP client can only issue GET requests, and its test suite fails if that ever changes. That is why the hook can auto-approve the `jama_get_*` glob. Jama's own hosted MCP server is deliberately not used — it exposes create/edit/move tools and has no bulk reads
 - The Jama credential lives in the `jama` section of `~/.buddy-council/secrets.json` and nowhere else — the server reads it only from that file, never from environment variables, so it cannot leak into an MCP config. Prefer an API client ID/secret on a read-only Jama account; it is revocable without touching the account password
 - The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*` or `testrail_update_*`. Never name a write tool `testrail_get_*` — the server's test suite fails if one is
@@ -677,7 +671,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - The Jira token lives in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `sources.json`, not in `secrets.json`, not in either MCP config, which reference it only by absolute path. That file is the single place to rotate or revoke it
 - **The automation tools are pinned and kept apart.** Node is checked against its SHA-256 and every npm package against the lockfile's integrity hash, so a mirror or proxy can never change what gets installed; `npm ci --ignore-scripts` runs no package's install scripts. They live in `~/.buddy-council/tools` — never on PATH, never shared — and setup never edits a shell profile, `JAVA_HOME`, or `ANDROID_HOME`. The `appium` server may only talk to Appium servers on this Mac (`REMOTE_SERVER_URL_ALLOW_REGEX`) and never downloads an app from a URL (`ALLOW_REMOTE_APP_URLS=false`)
 - **On the phone, only reading is auto-approved**: appium-mcp's eight read-only tools, plus page sources and screenshots, which it saves in `~/.buddy-council/automation`. Everything that taps, types, opens a session, or launches an app always prompts. Setup's own check of the phone opens one session without launching any app, reads one screen, and closes it
-- Bundled hooks run on **both runtimes** (Claude Code loads `hooks/hooks.json`; Copilot CLI loads the plugin-root `hooks.json` — same scripts). If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
+- Bundled hooks run in Claude Code, Copilot CLI, and VS Code (Claude Code loads `hooks/hooks.json`; Copilot CLI and VS Code load `com.github.copilot/hooks/hooks.json` — same scripts). Codex and Cursor don't run them yet, so there every one of these operations prompts. If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
   - the same hook **auto-approves** the plugin's curated read-only operations (`gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches), the run-folder script `bc_run.py`, and the automation script `bc_tools.py` — but only as one plain command: `python3`, the plugin's own copy by absolute path, a known subcommand, and arguments that are bare or single-quoted, so nothing can be chained onto it. `bc_tools.py project` (which runs your project's own setup script) and `bc_tools.py remove` always prompt
   - a second PreToolUse hook auto-approves writes **only** to the plugin's own generated files (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's own `.mcp.json`) — all other writes still prompt
@@ -686,11 +680,11 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 ## Adding a New Provider
 
 1. Create `providers/<name>/fetch.md` with fetch instructions
-2. Update the router skill (`skills/fetch-requirements/SKILL.md`, `skills/fetch-test-cases/SKILL.md`, or `skills/fetch-board-issues/SKILL.md`)
+2. Update the router how-to (`howtos/fetch-requirements.md`, `howtos/fetch-test-cases.md`, or `howtos/fetch-board-issues.md`)
 3. Update `/bc:setup` to offer the new provider as an option
 4. Optionally add an MCP server in `mcp-servers/<name>/`
 
-No changes to agents or analysis skills required.
+No changes to agents or analysis how-tos required.
 
 ## License
 

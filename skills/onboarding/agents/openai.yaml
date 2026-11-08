@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:onboarding"
+  short_description: "Walk a new teammate through the product"
+policy:
+  allow_implicit_invocation: false

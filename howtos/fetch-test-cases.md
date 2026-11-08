@@ -1,0 +1,34 @@
+# Fetch Test Cases — Router
+
+Fetch test cases from the configured source. This how-to reads the user's configuration and delegates to the correct provider.
+
+## How It Works
+
+1. Read `.buddy-council/sources.json` from the project root (the current working directory)
+2. Check the `test_cases.provider` field
+3. Delegate to the matching provider:
+
+| Provider | Delegate To |
+|----------|-------------|
+| `testrail` | Follow instructions in `providers/testrail/fetch.md` |
+
+4. **IMPORTANT**: The provider guide instructs you to use specific MCP tools. Use those MCP tools directly — do NOT use curl or Bash to call APIs.
+5. **Pass narrowing context** to the provider to avoid fetching all test cases:
+   - If you know the **requirement IDs** in scope — the feature's requirements you just fetched — pass them.
+     The provider finds the cases linked to them through the requirement field, which works whatever the
+     TestRail folders are called. This is the preferred narrowing.
+   - Pass the **feature name** too, so the provider also catches unlinked cases filed in a same-named folder
+   - The provider guide explains which fetch strategy to use based on available context
+6. Return the results in canonical schema format
+
+## Input
+
+- `scope`: Optional — test case ID, section/feature name, or "all", as the caller passes it.
+- `feature_name`: Optional — feature/section name to narrow the fetch (passed from the agent after fetching requirements)
+- `requirement_ids`: Optional — list of requirement IDs to find linked test cases for (passed from the agent)
+
+## Error Handling
+
+- If `.buddy-council/sources.json` does not exist → tell the user to run `/bc:setup` first
+- If the configured provider file does not exist → report which provider was expected and that it's not yet implemented
+- If MCP tools specified by the provider are not available → tell the user to check `.mcp.json` and restart Claude Code

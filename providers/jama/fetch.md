@@ -1,4 +1,4 @@
-# Jama Requirements Fetch — Provider Skill
+# Jama Requirements Fetch — Provider Guide
 
 Fetch requirements live from **Jama Connect** through the plugin's own `jama` MCP server
 (`mcp-servers/jama-server/`), which wraps Jama's REST API.
@@ -85,7 +85,7 @@ the response carries `next_offset`, call `jama_get_requirements` again with the 
 so they cost no Jama requests. Stopping early silently drops requirements — `total` says how many to expect.
 
 **`save_to`** writes every requirement in scope into a run folder instead of returning them, and the response
-carries only the counts and the file path. It is how `skills/collect-artifacts` collects for `/bc:coverage`
+carries only the counts and the file path. It is how `howtos/collect-artifacts.md` collects for `/bc:coverage`
 and `/bc:contradiction`; it accepts only a `.json` file directly inside an existing
 `<project>/.buddy-council/runs/<run>/` folder. Don't use it elsewhere.
 

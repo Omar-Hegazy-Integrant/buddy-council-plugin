@@ -1,4 +1,4 @@
-# Jira Issues Fetch — Provider Skill
+# Jira Issues Fetch — Provider Guide
 
 Fetch Jira issues using the **`mcp-atlassian`** MCP server (`atlassian`).
 
@@ -53,8 +53,8 @@ Call `jira_get_issue` with `issue_key`. Return a single issue. Useful extras:
 ### Strategy 2: The configured dev board
 
 When the caller wants a board's contents, do not reimplement the scoping here — follow
-`${CLAUDE_PLUGIN_ROOT}/skills/fetch-board-issues/SKILL.md`, which owns board resolution, sprint selection,
-and paging. This file owns the per-issue field mapping that skill reuses.
+`howtos/fetch-board-issues.md`, which owns board resolution, sprint selection,
+and paging. This file owns the per-issue field mapping that how-to reuses.
 
 ### Strategy 3: A set of issues (scope is "all", a feature name, or a JQL string)
 

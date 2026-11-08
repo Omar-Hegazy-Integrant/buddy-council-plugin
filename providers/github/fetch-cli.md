@@ -1,10 +1,10 @@
-# GitHub Fetch (CLI Strategy) — Provider Skill
+# GitHub Fetch (CLI Strategy) — Provider Guide
 
 Fetch a single GitHub-hosted file via the `gh` command-line tool. This is the default strategy when both `gh` and `github-mcp-server` are available.
 
 ## When to Use
 
-Invoked by `skills/enrich-requirements/SKILL.md` for each unique URL when `requirements.enrichment.strategy === "cli"`.
+Invoked by `howtos/enrich-requirements.md` for each unique URL when `requirements.enrichment.strategy === "cli"`.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ If `gh auth status` fails, return a structured auth error (do NOT prompt for cre
 
 ## Input
 
-A single URL string matching `^https://github\.com/...`. The orchestrator has already stripped query params (`?plain=1` etc.) before calling this skill.
+A single URL string matching `^https://github\.com/...`. The orchestrator has already stripped query params (`?plain=1` etc.) before following this guide.
 
 ## URL Parsing
 
@@ -136,8 +136,8 @@ For errors:
 
 ## Guidelines
 
-- **Never store credentials.** `gh` handles auth via its own keychain; this skill must not read or write any secret files.
-- **Preserve markdown verbatim.** Do NOT strip HTML, do NOT collapse whitespace, do NOT modify links. The enrich skill needs the raw content to resolve image refs.
+- **Never store credentials.** `gh` handles auth via its own keychain; this guide must not read or write any secret files.
+- **Preserve markdown verbatim.** Do NOT strip HTML, do NOT collapse whitespace, do NOT modify links. The enrichment how-to needs the raw content to resolve image refs.
 - **Preserve `ref` literally.** A SHA in the URL is intentional — don't substitute `main`.
 - **Don't follow redirects to other hosts.** `gh api` won't, but if a future version of `gh` adds that behavior, refuse to leave `github.com`.
 - **Do not write to disk.** All content stays in memory and is returned to the orchestrator.

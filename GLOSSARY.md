@@ -36,6 +36,14 @@ _Avoid_: project, workspace, repo
 The one summary of everything setup found and chose, shown before it saves.
 _Avoid_: summary, save prompt, review
 
+**Command**:
+What the user starts by name, such as `/bc:coverage`. Each is a skill only the user can start.
+_Avoid_: slash command
+
+**How-to**:
+A plain instruction file that a command or agent reads by path, such as `howtos/fetch-requirements.md`. It never loads on its own.
+_Avoid_: skill, internal skill
+
 ### Stories
 
 **Platform**:

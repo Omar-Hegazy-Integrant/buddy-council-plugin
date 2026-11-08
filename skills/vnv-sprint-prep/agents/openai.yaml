@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:vnv-sprint-prep"
+  short_description: "Prepare a sprint's stories for V&V"
+policy:
+  allow_implicit_invocation: false

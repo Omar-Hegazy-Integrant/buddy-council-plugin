@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:contradiction"
+  short_description: "Find where tests contradict requirements"
+policy:
+  allow_implicit_invocation: false

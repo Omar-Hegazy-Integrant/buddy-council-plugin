@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:codemap"
+  short_description: "Map a feature to where it lives in the code"
+policy:
+  allow_implicit_invocation: false
