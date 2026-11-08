@@ -20,6 +20,8 @@ Jira, and editable through `jira_update_issue`.
 - `platform` — `ios`, `android`, or `both`
 - `apply` — when false, render the scenarios and stop
 
+Every Jira call below passes `site`: `jira.base_url` from `.buddy-council/sources.json` (ADR 0008).
+
 ## What makes a good scenario here
 
 Each scenario is one provable behavior, named so a reader knows what it covers without opening it:

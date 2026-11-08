@@ -28,6 +28,7 @@ team's TestRail.
   `testrail_add_section` yourself — a second authoring path is how the requirement field gets forgotten. Those
   tools always raise a permission prompt; that is deliberate, so do not try to avoid it.
 - Read a file the user points at with the file-read tool. Never execute it.
+- Every connector call passes `site` — `requirements.base_url` for Jama, `test_cases.base_url` for TestRail, `jira.base_url` for Jira, from `.buddy-council/sources.json` — so each reaches this project's site with that site's key (ADR 0008).
 
 ## Data Contract (MANDATORY)
 
@@ -258,8 +259,8 @@ Mark the report **PARTIAL** when any source was missing, naming it.
 
 - Config missing → `/bc:setup`.
 - `test_cases.authoring` missing → stop before fetching (Step 1).
-- MCP tools unavailable → check `.mcp.json` (Claude Code) or `~/.copilot/mcp-config.json` (Copilot CLI) for
-  the `testrail` server, and `atlassian` when a Jira key was given, then restart the runtime.
+- MCP tools unavailable → the plugin's connectors didn't start — usually because `uv` isn't installed (README →
+  *Troubleshooting*); restart the assistant after installing it.
 - File unreadable or unsupported → say which, and ask for a supported format or pasted text.
 - Jira key not found or not readable → report it and ask for the scenarios another way.
 - A required TestRail custom field rejected (400) → relay the field name from the how-to's error and point at

@@ -1,4 +1,4 @@
-"""Tests for bc_tools.py — installing, wiring, and proving the automation tools. Standard library only.
+"""Tests for bc_tools.py — installing, recording, and proving the automation tools. Standard library only.
 
     python3 -m unittest discover -s scripts/tests -v
 
@@ -70,15 +70,13 @@ FAKE_SERVER = textwrap.dedent(
 
 
 class Sandbox(unittest.TestCase):
-    """Every test gets its own ~/.buddy-council, MCP configs, and pins file."""
+    """Every test gets its own home folder, ~/.buddy-council, and pins file."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp()).resolve()
         self.home = self.tmp / "bc"
-        self.claude = self.tmp / "claude.json"
-        self.copilot = self.tmp / "copilot.json"
-        env = {"BC_HOME": str(self.home), "BC_CLAUDE_MCP_CONFIG": str(self.claude), "BC_COPILOT_MCP_CONFIG": str(self.copilot),
-               "NPM_CONFIG_USERCONFIG": str(self.tmp / "npmrc")}
+        self.record = self.home / "tools" / "appium-mcp.json"
+        env = {"BC_HOME": str(self.home), "HOME": str(self.tmp), "NPM_CONFIG_USERCONFIG": str(self.tmp / "npmrc")}
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -212,49 +210,71 @@ class NodeInstall(Sandbox):
         self.assertFalse((self.home / "tools" / "node" / "v26.13.0-darwin-arm64").exists())
 
 
-class Wiring(Sandbox):
+class Record(Sandbox):
     ENTRY = {"command": "/bc/node", "args": ["--use-system-ca", "/bc/appium/dist/index.js"], "env": {"NO_UI": "true"}}
 
-    def test_both_configs_get_the_entry_and_keep_everything_else(self):
-        self.write("claude.json", json.dumps({"mcpServers": {"testrail": {"command": "uv"}}}))
-        self.write("copilot.json", json.dumps({"mcpServers": {"other": {"type": "local"}}, "keep": 1}), mode=0o600)
-        changed = bc_tools.wire(self.ENTRY)
-        self.assertEqual(len(changed), 2)
-        claude = json.loads(self.claude.read_text())
-        copilot = json.loads(self.copilot.read_text())
-        self.assertEqual(claude["mcpServers"]["appium"], self.ENTRY)
-        self.assertIn("testrail", claude["mcpServers"])
-        self.assertEqual(copilot["mcpServers"]["appium"]["type"], "local")
-        self.assertEqual(copilot["mcpServers"]["appium"]["tools"], ["*"])
-        self.assertEqual(copilot["keep"], 1)
-        self.assertIn("other", copilot["mcpServers"])
-        self.assertEqual(stat.S_IMODE(self.copilot.stat().st_mode), 0o600)
+    def test_the_record_changes_only_when_the_entry_does(self):
+        self.assertEqual(bc_tools.wire(self.ENTRY), [bc_tools.tilde(self.record)])
+        self.assertEqual(json.loads(self.record.read_text()), self.ENTRY)
+        self.assertEqual(bc_tools.wired_entry(), self.ENTRY)
         self.assertEqual(bc_tools.wire(self.ENTRY), [], "a second run changes nothing")
+        self.assertEqual(bc_tools.unwire(), [bc_tools.tilde(self.record)])
+        self.assertIsNone(bc_tools.wired_entry())
+        self.assertEqual(bc_tools.unwire(), [])
 
-    def test_missing_configs_are_created_and_a_broken_one_is_left_alone(self):
-        self.write("copilot.json", "{ not json")
-        with self.assertRaises(bc_tools.ToolError):
-            bc_tools.wire(self.ENTRY)
-        self.assertEqual(self.copilot.read_text(), "{ not json")
-        self.copilot.unlink()
-        bc_tools.wire(self.ENTRY)
-        self.assertIn("appium", json.loads(self.claude.read_text())["mcpServers"])
-        self.assertEqual(stat.S_IMODE(self.copilot.stat().st_mode), 0o600)
+    def test_a_broken_record_reads_as_none(self):
+        self.write("bc/tools/appium-mcp.json", "{ not json")
+        self.assertIsNone(bc_tools.wired_entry())
 
-    def test_a_symlinked_config_is_written_where_it_points(self):
-        real = self.write("dotfiles/mcp-config.json", json.dumps({"mcpServers": {}}))
-        self.copilot.symlink_to(real)
-        bc_tools.wire(self.ENTRY)
-        self.assertTrue(self.copilot.is_symlink())
-        self.assertIn("appium", json.loads(real.read_text())["mcpServers"])
+    def test_no_assistant_config_is_ever_written(self):
+        for name in ("claude_config", "copilot_config", "restore", "foreign_entries"):
+            self.assertFalse(hasattr(bc_tools, name), name)
+        source = (SCRIPTS / "bc_tools.py").read_text()
+        self.assertNotIn("mcp-config.json", source)
+        self.assertNotIn('".mcp.json"', source)
 
-    def test_unwire_removes_only_bcs_own_entry(self):
-        own = dict(self.ENTRY, command=str(self.home / "tools" / "node" / "v1" / "bin" / "node"))
-        self.write("claude.json", json.dumps({"mcpServers": {"appium": own, "x": {}}}))
-        self.write("copilot.json", json.dumps({"mcpServers": {"appium": {"command": "/someone/else"}}}))
-        self.assertEqual(len(bc_tools.unwire()), 1)
-        self.assertNotIn("appium", json.loads(self.claude.read_text())["mcpServers"])
-        self.assertIn("appium", json.loads(self.copilot.read_text())["mcpServers"])
+
+class Serve(Sandbox):
+    """scripts/bc-mcp appium runs `serve`: the recorded appium-mcp, or an MCP server with no tools until then."""
+
+    def serve(self, *messages):
+        lines = "".join(json.dumps(message) + "\n" for message in messages)
+        done = subprocess.run([sys.executable, str(SCRIPTS / "bc_tools.py"), "serve"], input=lines, capture_output=True,
+                              text=True, timeout=30, env=dict(os.environ))
+        return done.returncode, done.stdout, done.stderr
+
+    def test_without_the_tools_it_answers_with_no_tools(self):
+        code, out, err = self.serve(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            {"jsonrpc": "2.0", "id": 3, "method": "ping"},
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "appium_screenshot"}},
+        )
+        answers = [json.loads(line) for line in out.splitlines()]
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual([a["id"] for a in answers], [1, 2, 3, 4], "a notification gets no answer")
+        self.assertEqual(answers[0]["result"]["protocolVersion"], "2025-03-26")
+        self.assertEqual(answers[0]["result"]["serverInfo"]["name"], "appium")
+        self.assertIn("/bc:setup", answers[0]["result"]["instructions"])
+        self.assertEqual((answers[1]["result"], answers[2]["result"]), ({"tools": []}, {}))
+        self.assertEqual(answers[3]["error"]["code"], -32601)
+
+    def test_with_the_tools_it_becomes_the_recorded_server(self):
+        node = self.write("bc/tools/node/v1/bin/node", "#!/bin/sh\necho \"node $* NO_UI=$NO_UI\"\n", mode=0o755)
+        app = self.write("bc/tools/appium-mcp/1.0.0-aaaaaaaaaaaa/node_modules/appium-mcp/dist/index.js", "")
+        bc_tools.wire({"command": str(node), "args": ["--use-system-ca", str(app)], "env": {"NO_UI": "true"}})
+        code, out, _ = self.serve()
+        self.assertEqual((code, out.strip()), (0, f"node --use-system-ca {app} NO_UI=true"))
+
+    def test_a_record_bc_didnt_write_or_whose_files_are_gone_is_never_run(self):
+        marker = self.tmp / "ran"
+        script = self.write("elsewhere/node", f"#!/bin/sh\ntouch {marker}\n", mode=0o755)
+        bc_tools.wire({"command": str(script), "args": [], "env": {}})
+        self.assertEqual(json.loads(self.serve({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[1])["result"], {"tools": []})
+        bc_tools.wire({"command": str(self.home / "tools" / "node" / "gone" / "bin" / "node"), "args": [], "env": {}})
+        self.assertEqual(json.loads(self.serve({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[1])["result"], {"tools": []})
+        self.assertFalse(marker.exists())
 
 
 class Pruning(Sandbox):
@@ -263,13 +283,12 @@ class Pruning(Sandbox):
         for folder in ("node/v26.13.0-darwin-arm64/bin", "node/v24.0.0-darwin-arm64/bin", "appium-mcp/1.99.2-aaaaaaaaaaaa",
                        "appium-mcp/1.98.0-bbbbbbbbbbbb", "appium-mcp/1.97.0-cccccccccccc"):
             (tools / folder).mkdir(parents=True)
-        wired = {"command": str(tools / "node/v26.13.0-darwin-arm64/bin/node"),
-                 "args": [str(tools / "appium-mcp/1.98.0-bbbbbbbbbbbb/node_modules/appium-mcp/dist/index.js")]}
-        self.write("copilot.json", json.dumps({"mcpServers": {"appium": wired}}))
+        bc_tools.wire({"command": str(tools / "node/v26.13.0-darwin-arm64/bin/node"),
+                       "args": [str(tools / "appium-mcp/1.98.0-bbbbbbbbbbbb/node_modules/appium-mcp/dist/index.js")]})
         removed = bc_tools.prune([tools / "appium-mcp/1.99.2-aaaaaaaaaaaa"])
         names = sorted(Path(item).name for item in removed)
         self.assertEqual(names, ["1.97.0-cccccccccccc", "v24.0.0-darwin-arm64"])
-        self.assertTrue((tools / "appium-mcp/1.98.0-bbbbbbbbbbbb").exists(), "still wired, so kept until the new one answers")
+        self.assertTrue((tools / "appium-mcp/1.98.0-bbbbbbbbbbbb").exists(), "still recorded, so kept until the new one answers")
 
     def test_week_old_screen_files_and_extra_logs_go(self):
         old = self.home / "automation" / "page-sources" / "old.xml"
@@ -467,7 +486,7 @@ class ProjectServer(Sandbox):
 
 
 class Ensure(FakeServer):
-    """ensure installs, wires, and proves the server; smoke reads the phone. Each fits in one shell call."""
+    """ensure installs, proves, and records the server; smoke reads the phone. Each fits in one shell call."""
 
     PHONE = {"platform": "ios", "udid": "U1", "name": "QA iPhone", "source": "connected over USB"}
 
@@ -498,10 +517,8 @@ class Ensure(FakeServer):
              mock.patch.object(bc_tools, "server_entry", return_value=entry or self.entry(tools=tools)):
             return bc_tools.cmd_ensure(str(root), install=not phone_check, phone_check=phone_check)
 
-    def test_a_failed_download_is_recorded_as_pending_and_changes_no_config(self):
+    def test_a_failed_download_is_recorded_as_pending_and_records_no_server(self):
         root = self.project()
-        self.write("copilot.json", json.dumps({"mcpServers": {"other": {}}}))
-        before = self.copilot.read_text()
         with mock.patch.object(bc_tools, "detect", return_value=self.found(root)), \
              mock.patch.object(bc_tools, "platform_key", return_value="darwin-arm64"), \
              mock.patch.object(bc_tools, "install_node", side_effect=bc_tools.ToolError("couldn't download https://nodejs.org/x: timed out")):
@@ -509,15 +526,15 @@ class Ensure(FakeServer):
         self.assertEqual(result["status"], "pending")
         self.assertIn("setup tries again on its next run", result["pending"][0])
         self.assertEqual(self.block(root)["status"], "pending")
-        self.assertEqual(self.copilot.read_text(), before)
-        self.assertFalse(self.claude.exists())
+        self.assertFalse(self.record.exists())
 
-    def test_ensure_wires_and_hands_the_phone_to_smoke_which_makes_it_ready(self):
+    def test_ensure_records_and_hands_the_phone_to_smoke_which_makes_it_ready(self):
         root = self.project()
         result = self.run_ensure(root, self.found(root))
         self.assertEqual((result["status"], result["phone_check"]), ("pending", "due"))
         self.assertIn("next, one page source from QA iPhone", result["lines"][0])
-        self.assertEqual(len(result["wired"]), 2)
+        self.assertEqual(result["wired"], [bc_tools.tilde(self.record)])
+        self.assertTrue(any("restart your assistant once" in line for line in result["lines"]), result["lines"])
         self.assertEqual(self.calls(), [], "ensure never touches the phone")
         result = self.run_ensure(root, self.found(root), phone_check=True)
         self.assertEqual((result["status"], result["phone_check"]), ("ready", "passed"), result)
@@ -558,32 +575,24 @@ class Ensure(FakeServer):
         self.assertIn("tap Trust", result["lines"][0])
         self.assertEqual(sum("tap Trust" in line for line in result["lines"]), 1, "said once, not again as needs-you")
 
-    def test_an_appium_server_bc_didnt_add_is_left_alone(self):
+    def test_the_assistants_own_configs_are_never_touched(self):
         root = self.project()
-        theirs = {"command": "/usr/local/bin/npx", "args": ["-y", "appium-mcp@latest"]}
-        self.write("copilot.json", json.dumps({"mcpServers": {"appium": theirs}}))
+        theirs = self.write(".copilot/mcp-config.json", json.dumps({"mcpServers": {"appium": {"command": "/usr/local/bin/npx"}}}))
+        before = theirs.read_text()
         result = self.run_ensure(root, self.found(root))
-        self.assertEqual(result["status"], "pending")
-        self.assertIn("didn't add", result["pending"][0])
-        self.assertIn(str(self.copilot), result["pending"][0])
-        self.assertEqual(json.loads(self.copilot.read_text())["mcpServers"]["appium"], theirs)
-        self.assertFalse(self.claude.exists())
-        self.assertEqual(self.calls(), [])
+        self.assertEqual(result["wired"], [bc_tools.tilde(self.record)])
+        self.assertEqual(theirs.read_text(), before)
 
-    def test_a_failed_upgrade_keeps_the_old_version_wired_in_both_clis(self):
+    def test_a_failed_upgrade_keeps_the_old_version_in_use(self):
         root = self.project()
         old_node = self.write("bc/tools/node/v0/bin/node", "#!/bin/sh\n", mode=0o755)
         old_app = self.write("bc/tools/appium-mcp/0.9.0-bbbbbbbbbbbb/node_modules/appium-mcp/dist/index.js", "")
-        before = {"type": "local", "command": str(old_node), "args": [str(old_app)], "tools": ["*"], "env": {"NO_UI": "true"}}
-        self.write("copilot.json", json.dumps({"mcpServers": {"appium": before}}))
-        self.write("claude.json", json.dumps({"mcpServers": {"testrail": {"command": "uv"}}}))
+        before = {"command": str(old_node), "args": [str(old_app)], "env": {"NO_UI": "true"}}
+        bc_tools.wire(before)
         result = self.run_ensure(root, self.found(root), entry=self.entry("die"))
         self.assertEqual(result["status"], "pending")
-        self.assertIn("the version before it stays wired", result["pending"][0])
-        self.assertEqual(json.loads(self.copilot.read_text())["mcpServers"]["appium"], before)
-        claude = json.loads(self.claude.read_text())["mcpServers"]
-        self.assertEqual(claude["appium"], {"command": str(old_node), "args": [str(old_app)], "env": {"NO_UI": "true"}})
-        self.assertIn("testrail", claude)
+        self.assertIn("the version before it stays in use", result["pending"][0])
+        self.assertEqual((bc_tools.wired_entry(), result["wired"]), (before, []))
         self.assertTrue(old_app.exists(), "nothing is pruned when the new version didn't answer")
 
     def test_smoke_keeps_bcs_own_jdk_and_sdk_wired(self):
@@ -621,7 +630,7 @@ class Ensure(FakeServer):
                 result = bc_tools.cmd_ensure(str(root))
         self.assertEqual(result["removed"], [])
         self.assertTrue((java_home / "bin" / "java").exists(), "the JDK the server points at stays")
-        self.assertEqual(json.loads(self.claude.read_text())["mcpServers"]["appium"]["env"]["JAVA_HOME"], str(java_home))
+        self.assertEqual(bc_tools.wired_entry()["env"]["JAVA_HOME"], str(java_home))
 
 
 class Downloads2(Sandbox):
@@ -698,7 +707,7 @@ class PruneKeepsWhatsInside(Sandbox):
     def test_a_wired_env_value_keeps_its_pin(self):
         jdk = self.home / "tools" / "jdk" / "21.0.13+9" / "Contents" / "Home"
         jdk.mkdir(parents=True)
-        self.write("copilot.json", json.dumps({"mcpServers": {"appium": {"command": "/x/node", "args": [], "env": {"JAVA_HOME": str(jdk)}}}}))
+        bc_tools.wire({"command": "/x/node", "args": [], "env": {"JAVA_HOME": str(jdk)}})
         self.assertEqual(bc_tools.prune(), [])
         self.assertTrue(jdk.exists())
 
@@ -711,8 +720,7 @@ class ProjectReport(unittest.TestCase):
         block = {"enabled": True, "status": "pending", "tools": {"appium_mcp": "1.99.2"},
                  "pending": ["no phone is connected over USB yet: plug one in, unlock it and tap Trust; setup checks again on its next run"]}
         (tmp / ".buddy-council" / "sources.json").write_text(json.dumps({"automation": block}))
-        with mock.patch.dict(os.environ, {"BC_HOME": str(tmp / "bc"), "BC_CLAUDE_MCP_CONFIG": str(tmp / "c.json"),
-                                          "BC_COPILOT_MCP_CONFIG": str(tmp / "p.json")}):
+        with mock.patch.dict(os.environ, {"BC_HOME": str(tmp / "bc")}):
             status = bc_tools.cmd_status(str(tmp))
         self.assertEqual(status["line"], "Automation:    pending — no phone is connected over USB yet: plug one in, unlock it "
                                          "and tap Trust (re-checking this run)")

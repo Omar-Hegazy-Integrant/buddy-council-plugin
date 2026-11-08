@@ -30,7 +30,7 @@ The text the user typed after the command holds:
 1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
    > Configuration not found. Please run `/bc:setup` to configure your data sources first.
 
-2. Check the Jira dev board in `.buddy-council/sources.json` (which board/project to file into — the credential itself lives in `~/.buddy-council/atlassian.env` and is the MCP server's business, not this command's):
+2. Check the Jira dev board in `.buddy-council/sources.json` (which board/project to file into, and `jira.base_url`, the `site` every Jira call passes — the credential itself is the site's key and the connector's business, not this command's):
    - If the `jira` section or `jira.board` is missing AND `--dry-run` is NOT present, warn:
      > No Jira dev board is configured. Run `/bc:setup` — Step 3 is required — or use `--dry-run` to test without creating a real ticket.
    - If `jira.pending` is `true` AND `--dry-run` is NOT present, warn:
@@ -157,8 +157,8 @@ https://yourorg.atlassian.net/browse/PROJ-1234
 - **No ticket description provided**: Prompt user for description
 - **No related requirements found**: Automatically skip contradiction detection and proceed to gap analysis
 - **Jira not configured**: Suggest `/bc:setup` or `--dry-run` mode
-- **Atlassian tools unavailable**: run `/bc:setup` and fully restart the runtime. There is no authorization step — the first launch downloads `mcp-atlassian` via `uvx`, which takes a few seconds
-- **Ticket creation fails**: if 401, the token in `~/.buddy-council/atlassian.env` is wrong or expired — re-run `/bc:setup`; if 400, check the project key and issue type; if 403, the account lacks "Create Issues" on that project or an IP allowlist is blocking the request
+- **Atlassian tools unavailable**: the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*). There is no authorization step; a site's first call downloads `mcp-atlassian` through `uv`, which can take half a minute
+- **Ticket creation fails**: if 401, the token saved for the Jira site is wrong or expired — re-run `/bc:setup`; if 400, check the project key and issue type; if 403, the account lacks "Create Issues" on that project or an IP allowlist is blocking the request
 
 ## Tips
 

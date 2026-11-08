@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The tools /bc:automate drives the app with, installed and wired by /bc:setup. Standard library only; Python 3.9+.
+"""The tools /bc:automate drives the app with, installed by /bc:setup. Standard library only; Python 3.9+.
 
 bc keeps its own pinned copies, the way uv provides Python: never on PATH, never shared with anything else on the Mac,
 and never set in a shell profile, JAVA_HOME, or ANDROID_HOME. Everything lives under ~/.buddy-council:
@@ -7,6 +7,7 @@ and never set in a shell profile, JAVA_HOME, or ANDROID_HOME. Everything lives u
   tools/node/v26.13.0-darwin-arm64/   Node.js, by version and SHA-256 (pins.json)
   tools/appium-mcp/1.99.2-<lock>/     appium-mcp, as appium-mcp/package-lock.json says, via npm ci --ignore-scripts
   tools/jdk/, tools/android-sdk/      only for Android on appium-mcp's built-in drivers, on a Mac without them
+  tools/appium-mcp.json               how the plugin's appium connector starts appium-mcp, written once it answered
   automation/                         what the server writes (page sources, screenshots) and the logs
 
 Subcommands, each printing one JSON object to stdout (progress goes to stderr):
@@ -16,9 +17,9 @@ Subcommands, each printing one JSON object to stdout (progress goes to stderr):
                                             from the project
   status  --project DIR                     installed against pinned, wiring, and what is pending
   ensure  --project DIR [--shared jdk,android-sdk]
-                                            install or upgrade the pinned tools, wire the appium server into both
-                                            CLIs, prove the server answers, remove pins nothing uses, and record the
-                                            result in <project>/.buddy-council/sources.json
+                                            install or upgrade the pinned tools, prove the server answers, record
+                                            how the plugin's appium connector starts it, remove pins nothing uses,
+                                            and record the result in <project>/.buddy-council/sources.json
   smoke   --project DIR                     read one page source from the phone; installs nothing. Run it after
                                             ensure when ensure reports "phone_check": "due"
   start   --project DIR                     start the project's own Appium server on this Mac (127.0.0.1 only)
@@ -26,7 +27,9 @@ Subcommands, each printing one JSON object to stdout (progress goes to stderr):
   prune                                     remove pins and leftovers nothing points at any more
   project --project DIR --mode check|fix    run the project's own setup script and report it. Runs the project's
                                             code, so the bash hook never approves it by itself
-  remove  --project DIR                     unwire the appium server and delete bc's tools. Never approved by itself
+  remove  --project DIR                     delete bc's tools; the appium connector goes quiet. Never approved by itself
+  serve                                     the plugin's appium connector (scripts/bc-mcp runs it): appium-mcp as
+                                            ensure recorded it, or an MCP server with no tools until then
 
 Downloads use this Mac's own settings: the environment's and macOS's proxy, npm's proxy and certificate settings
 (~/.npmrc), the keychain's certificates when the bundled ones fail, and NODEJS_ORG_MIRROR for Node. Every file is
@@ -66,7 +69,6 @@ from typing import Any, Iterable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPT_DIR.parent
-SERVER = "appium"  # the server's key in both MCP configs
 LOCAL_ONLY_URLS = r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?(/[^?#]*)?$"
 # Auto-approved by hooks/auto-approve-mcp.sh: appium-mcp's read-only tools, plus page sources and screenshots,
 # which it writes into ~/.buddy-council/automation. Keep the two lists identical.
@@ -137,12 +139,8 @@ def logs_dir() -> Path:
     return folder
 
 
-def claude_config() -> Path:
-    return Path(os.environ.get("BC_CLAUDE_MCP_CONFIG") or PLUGIN_ROOT / ".mcp.json")
-
-
-def copilot_config() -> Path:
-    return Path(os.environ.get("BC_COPILOT_MCP_CONFIG") or Path.home() / ".copilot" / "mcp-config.json")
+def server_record() -> Path:
+    return tools_dir() / "appium-mcp.json"
 
 
 def pins_file() -> Path:
@@ -1239,7 +1237,7 @@ def recap_lines(found: dict, pins: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Wiring: the "appium" entry in both CLIs' MCP configs; the rest of each file is left as it was
+# The record: how the plugin's appium connector (scripts/bc-mcp → serve) starts bc's appium-mcp
 # ---------------------------------------------------------------------------
 
 
@@ -1255,92 +1253,35 @@ def server_entry(pins: dict, node: Path, app: Path, extra_env: dict) -> dict:
     return {"command": str(node_exe(node)), "args": [*system_ca_flag(node), str(appium_entry(pins, app))], "env": env}
 
 
-def copilot_shape(entry: dict) -> dict:
-    return {"type": "local", "command": entry["command"], "args": entry.get("args") or [], "tools": ["*"],
-            "env": entry.get("env") or {}}
-
-
-def claude_shape(entry: dict) -> dict:
-    return {"command": entry["command"], "args": entry.get("args") or [], "env": entry.get("env") or {}}
-
-
 def bc_owned(entry: Any) -> bool:
-    """Whether an MCP entry runs bc's own Node — the only kind bc ever writes, replaces, or removes."""
+    """Whether an entry runs bc's own Node — the only kind the record ever holds."""
     command = str((entry or {}).get("command") or "") if isinstance(entry, dict) else ""
     return command.startswith(str(tools_dir()) + os.sep)
 
 
-def read_config(path: Path) -> dict:
-    try:
-        data = read_json(path, {})
-    except ValueError:
-        raise ToolError(f"{tilde(path)} isn't valid JSON, so it was left as it is; fix it, then run /bc:setup again") from None
-    if not isinstance(data, dict) or not isinstance(data.get("mcpServers", {}), dict):
-        raise ToolError(f"{tilde(path)} doesn't hold an mcpServers object, so it was left as it is")
-    return data
-
-
-def wired_entry(path: Path | None = None) -> dict | None:
-    for config in [path] if path else [copilot_config(), claude_config()]:
-        with contextlib.suppress(ToolError, OSError):
-            entry = (read_config(config).get("mcpServers") or {}).get(SERVER)
-            if isinstance(entry, dict):
-                return entry
+def wired_entry() -> dict | None:
+    """What the appium connector starts, as the last ensure whose server answered recorded it."""
+    with contextlib.suppress(ValueError, OSError):
+        entry = read_json(server_record(), None)
+        if isinstance(entry, dict) and entry.get("command"):
+            return entry
     return None
 
 
-def foreign_entries() -> list[str]:
-    """The MCP configs holding an "appium" server that bc didn't add. bc leaves those alone."""
-    found = []
-    for path in (claude_config(), copilot_config()):
-        with contextlib.suppress(ToolError):
-            entry = (read_config(path).get("mcpServers") or {}).get(SERVER)
-            if entry is not None and not bc_owned(entry):
-                found.append(tilde(path))
-    return found
-
-
 def wire(entry: dict) -> list[str]:
-    changed = []
-    for path, shape in ((claude_config(), claude_shape(entry)), (copilot_config(), copilot_shape(entry))):
-        data = read_config(path)
-        servers = data.setdefault("mcpServers", {})
-        if servers.get(SERVER) == shape:
-            continue
-        if servers.get(SERVER) is not None and not bc_owned(servers[SERVER]):
-            raise ToolError(f"{tilde(path)} has an \"appium\" server bc didn't add, so it was left as it is")
-        servers[SERVER] = shape
-        write_json(path, data)
-        changed.append(tilde(path))
-    return changed
-
-
-def restore(before: dict) -> list[str]:
-    """After a failed upgrade, put the entry that worked into any config that lost it, such as the fresh .mcp.json
-    of a Claude Code plugin update. Configs that still have an entry keep it."""
-    restored = []
-    for path, shape in ((claude_config(), claude_shape(before)), (copilot_config(), copilot_shape(before))):
-        with contextlib.suppress(ToolError):
-            data = read_config(path)
-            servers = data.setdefault("mcpServers", {})
-            if servers.get(SERVER) is None:
-                servers[SERVER] = shape
-                write_json(path, data)
-                restored.append(tilde(path))
-    return restored
+    """Record how the connector starts appium-mcp. Returns the record's path when it changed."""
+    if wired_entry() == entry:
+        return []
+    write_json(server_record(), entry, 0o644)
+    return [tilde(server_record())]
 
 
 def unwire() -> list[str]:
-    changed = []
-    for path in (claude_config(), copilot_config()):
-        with contextlib.suppress(ToolError):
-            data = read_config(path)
-            entry = (data.get("mcpServers") or {}).get(SERVER)
-            if bc_owned(entry):
-                del data["mcpServers"][SERVER]
-                write_json(path, data)
-                changed.append(tilde(path))
-    return changed
+    path = server_record()
+    if not path.exists():
+        return []
+    path.unlink()
+    return [tilde(path)]
 
 
 def entry_exists(entry: dict | None) -> bool:
@@ -1374,7 +1315,7 @@ def prune(keep: Iterable[Any] = ()) -> list[str]:
     """Remove pins nothing points at, unfinished downloads, week-old screen files, and old logs.
 
     A pin folder stays when anything kept lives inside it — a kept path, or a command, argument, or env value of
-    either CLI's wired entry (JAVA_HOME points inside a JDK folder, not at it).
+    the recorded entry the appium connector starts (JAVA_HOME points inside a JDK folder, not at it).
     """
     kept: set[Path] = set()
 
@@ -1385,10 +1326,9 @@ def prune(keep: Iterable[Any] = ()) -> list[str]:
 
     for item in keep:
         hold(item)
-    for config in (claude_config(), copilot_config()):
-        entry = wired_entry(config) or {}
-        for item in [entry.get("command"), *(entry.get("args") or []), *((entry.get("env") or {}).values())]:
-            hold(item)
+    entry = wired_entry() or {}
+    for item in [entry.get("command"), *(entry.get("args") or []), *((entry.get("env") or {}).values())]:
+        hold(item)
     removed = []
     for family in ("node", "appium-mcp", "jdk"):
         base = tools_dir() / family
@@ -1748,9 +1688,8 @@ def outcome_lines(pins: dict, status: str, pending: list[str], server: dict | No
     if changes.get("installed"):
         lines.append(f"{pad}installed into {tilde(tools_dir())}: {', '.join(changes['installed'])}")
     if changes.get("wired"):
-        lines.append(f"{pad}wired into {' and '.join(changes['wired'])} — restart your CLI to load the appium server")
-    if changes.get("restored"):
-        lines.append(f"{pad}put the working version back into {' and '.join(changes['restored'])}")
+        lines.append(f"{pad}the plugin's appium connector starts this version from now on — restart your assistant "
+                     "once to load it")
     if changes.get("removed"):
         lines.append(f"{pad}removed the versions nothing uses any more: {', '.join(Path(item).name for item in changes['removed'])}")
     lines.extend(f"{pad}{note}" for note in notes)
@@ -1769,8 +1708,9 @@ def cmd_detect(project: str) -> dict:
 
 
 def cmd_ensure(project: str, shared_text: str = "", install: bool = True, phone_check: bool = False) -> dict:
-    """Install or upgrade, wire, prove the server answers, prune, and record. With phone_check (the smoke
-    subcommand), also read one page source from the phone. Each half fits in one 10-minute shell call."""
+    """Install or upgrade, prove the server answers, record how the connector starts it, prune, and record the
+    result. With phone_check (the smoke subcommand), also read one page source from the phone. Each half fits in one
+    10-minute shell call."""
     root = project_root(project)
     pins, key = load_pins(), platform_key()
     wanted = {item.strip() for item in (shared_text or "").split(",") if item.strip()}
@@ -1786,7 +1726,7 @@ def cmd_ensure(project: str, shared_text: str = "", install: bool = True, phone_
         proof = valid_proof(recorded(root), found)
         pending: list[str] = []
         notes: list[str] = []
-        changes: dict[str, list[str]] = {"installed": [], "wired": [], "restored": [], "removed": []}
+        changes: dict[str, list[str]] = {"installed": [], "wired": [], "removed": []}
         hint = phone_hint(found["phone"], found["platforms"])
         guided = [step for step in found["guided"] if not (proof and step == hint)]
 
@@ -1798,11 +1738,6 @@ def cmd_ensure(project: str, shared_text: str = "", install: bool = True, phone_
                     "lines": outcome_lines(pins, status, pending, server, proof, fresh, phone_state,
                                            found["phone"].get("name") or "the phone", changes, notes, guided)}
 
-        foreign = foreign_entries()
-        if foreign:
-            pending.append(f"{' and '.join(foreign)} already {'has' if len(foreign) == 1 else 'have'} an \"appium\" MCP "
-                           "server that bc didn't add, so bc left it as it is: rename or remove that entry, then run /bc:setup again")
-            return finish(None, False, "passed" if proof else "not checked", {})
         if install:  # recorded first, so a run the CLI stops early still shows as pending and is finished next run
             record(root, automation_block(found, pins, "pending", ["bc's tools are being installed; if this run stopped "
                                           "early, setup finishes it on its next run"], None, proof, {}, guided))
@@ -1822,7 +1757,7 @@ def cmd_ensure(project: str, shared_text: str = "", install: bool = True, phone_
             return finish(None, False, "passed" if proof else "not checked", {})
         extra_env, shared = shared_tools(found, pins, key, wanted, state, changes["installed"], notes, install)
         entry = server_entry(pins, node, app, extra_env)
-        before = wired_entry(copilot_config()) or wired_entry(claude_config())
+        before = wired_entry()
         log = logs_dir() / f"appium-mcp-{stamp()}.log"
         server = screen = None
         try:
@@ -1842,9 +1777,8 @@ def cmd_ensure(project: str, shared_text: str = "", install: bool = True, phone_
                     screen = read_screen(client, found)
         except ToolError as exc:
             if server is None and entry_exists(before) and bc_owned(before):
-                changes["restored"] = restore(before)
-                if claude_shape(before) != claude_shape(entry):
-                    pending.append(f"the new appium-mcp didn't answer ({exc}); the version before it stays wired, and setup tries again on its next run")
+                if before != entry:
+                    pending.append(f"the new appium-mcp didn't answer ({exc}); the version before it stays in use, and setup tries again on its next run")
                 else:
                     pending.append(f"appium-mcp didn't answer ({exc}); setup tries again on its next run")
             else:
@@ -1936,11 +1870,9 @@ def cmd_status(project: str) -> dict:
         node, app = node_home(pins, key), appium_home(pins)
         if not node_works(node, pins["node"]["version"]) or not appium_installed(pins, app):
             needs.append("install")
-        for config in (claude_config(), copilot_config()):
-            entry = wired_entry(config)
-            if not entry_exists(entry) or str(node) not in str(entry.get("command")) or not any(str(app) in str(arg) for arg in entry.get("args") or []):
-                needs.append("wire")
-                break
+        entry = wired_entry()
+        if not entry_exists(entry) or str(node) not in str(entry.get("command")) or not any(str(app) in str(arg) for arg in entry.get("args") or []):
+            needs.append("wire")
     if block.get("status") != "ready":
         needs.append("retry")
     tools = block.get("tools") or {}
@@ -2034,7 +1966,57 @@ def cmd_remove(project: str) -> dict:
     with contextlib.suppress(ToolError):
         record(root, {"enabled": False, "removed_at": now()})
     return {"unwired": unwired, "removed": removed,
-            "lines": ["Automation:    removed — the appium server is unwired and bc's tools are deleted; restart your CLI"]}
+            "lines": ["Automation:    removed — bc's tools are deleted, and the plugin's appium connector has no tools "
+                      "from your assistant's next start"]}
+
+
+# ---------------------------------------------------------------------------
+# The plugin's appium connector: scripts/bc-mcp appium runs `serve`
+# ---------------------------------------------------------------------------
+
+STUB_INSTRUCTIONS = ("bc's appium tools aren't installed on this computer yet. Run /bc:setup in an Appium or "
+                     "WebdriverIO test project to install them, then restart the assistant.")
+
+
+def cmd_serve() -> int:
+    """Become the appium-mcp the record names. Without one, answer MCP with no tools, so the connector stays quiet
+    instead of showing as failed in every assistant that never automates anything."""
+    entry = wired_entry()
+    if entry_exists(entry) and bc_owned(entry):
+        assert entry is not None
+        env = dict(os.environ)
+        env.update({str(name): str(value) for name, value in (entry.get("env") or {}).items()})
+        command = str(entry["command"])
+        os.execve(command, [command, *[str(arg) for arg in entry.get("args") or []]], env)
+    return serve_stub(sys.stdin, sys.stdout)
+
+
+def serve_stub(reader: Any, writer: Any) -> int:
+    """A stdio MCP server with no tools: newline-delimited JSON-RPC 2.0, answering initialize, tools/list, and ping."""
+    for line in reader:
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(message, dict) or "method" not in message or "id" not in message:
+            continue  # a notification, or an answer to a request this server never sends
+        method = message["method"]
+        answer: dict[str, Any] = {"jsonrpc": "2.0", "id": message["id"]}
+        if method == "initialize":
+            params = message.get("params") or {}
+            answer["result"] = {"protocolVersion": params.get("protocolVersion") or "2025-06-18",
+                                "capabilities": {"tools": {"listChanged": False}},
+                                "serverInfo": {"name": "appium", "version": plugin_version()},
+                                "instructions": STUB_INSTRUCTIONS}
+        elif method == "tools/list":
+            answer["result"] = {"tools": []}
+        elif method == "ping":
+            answer["result"] = {}
+        else:
+            answer["error"] = {"code": -32601, "message": f"{method} isn't available: {STUB_INSTRUCTIONS}"}
+        writer.write(json.dumps(answer) + "\n")
+        writer.flush()
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -2043,13 +2025,13 @@ def cmd_remove(project: str) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Buddy-Council automation tools: detect, status, ensure, smoke, start, stop, prune, project, remove.")
+    parser = argparse.ArgumentParser(description="Buddy-Council automation tools: detect, status, ensure, smoke, start, stop, prune, project, remove, serve.")
     sub = parser.add_subparsers(dest="action", required=True)
-    for name, text in (("detect", "read the test project and this Mac"), ("status", "installed, wired, and pending"),
+    for name, text in (("detect", "read the test project and this Mac"), ("status", "installed, recorded, and pending"),
                        ("smoke", "read one page source from the phone; installs nothing"), ("start", "start the project's own Appium server"),
-                       ("remove", "unwire the appium server and delete bc's tools")):
+                       ("remove", "delete bc's tools")):
         sub.add_parser(name, help=text).add_argument("--project", required=True, help="absolute path of the test project")
-    ensure = sub.add_parser("ensure", help="install or upgrade, wire, prove the server answers, prune, and record")
+    ensure = sub.add_parser("ensure", help="install or upgrade, prove the server answers, record how it starts, prune")
     ensure.add_argument("--project", required=True)
     ensure.add_argument("--shared", default="", help="the Mac's missing shared tools to install side by side: jdk,android-sdk")
     project = sub.add_parser("project", help="run the project's own setup script")
@@ -2057,7 +2039,10 @@ def main(argv: list[str] | None = None) -> int:
     project.add_argument("--mode", required=True, choices=("check", "fix"))
     sub.add_parser("stop", help="stop the Appium server that start started")
     sub.add_parser("prune", help="remove pins and leftovers nothing points at")
+    sub.add_parser("serve", help="the plugin's appium connector: appium-mcp as ensure recorded it, or no tools yet")
     args = parser.parse_args(argv)
+    if args.action == "serve":
+        return cmd_serve()
     try:
         if args.action == "detect":
             result = cmd_detect(args.project)

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "testrail": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["./scripts/bc-mcp", "testrail"]
+    },
+    "jama": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["./scripts/bc-mcp", "jama"]
+    },
+    "atlassian": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["./scripts/bc-mcp", "atlassian"]
+    },
+    "appium": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["./scripts/bc-mcp", "appium"]
+    }
+  }
+}

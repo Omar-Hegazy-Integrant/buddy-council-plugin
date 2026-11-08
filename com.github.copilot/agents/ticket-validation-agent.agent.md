@@ -15,7 +15,8 @@ You are the Buddy-Council Ticket Validation Agent. Your job is to validate a tic
 
 - When fetching data from external systems, always use the available MCP tools. Never use curl, wget, or Bash to call external APIs directly.
 - When asking the user questions, always use the `vscode_askQuestions` tool. Never ask questions in plain text chat.
-- When creating Jira tickets, use the `jira_create_issue` tool from the `mcp-atlassian` server (`mcp__atlassian__jira_create_issue` under Claude Code, `jira_create_issue` under Copilot CLI).
+- When creating Jira tickets, use the `jira_create_issue` tool of the plugin's `atlassian` connector (`mcp__plugin_bc_atlassian__jira_create_issue` under Claude Code, `atlassian-jira_create_issue` under Copilot CLI).
+- Every connector call passes `site` — `requirements.base_url` for Jama, `test_cases.base_url` for TestRail, `jira.base_url` for Jira, from `.buddy-council/sources.json` — so each reaches this project's site with that site's key (ADR 0008).
 
 Check which MCP tools are available in your current session. Provider guides tell you exactly which MCP tools to call.
 
@@ -65,7 +66,7 @@ Follow the instructions in `howtos/fetch-requirements.md`:
 - Fetch ALL requirements (needed for matching against the ticket description)
 - Collect the returned requirements in canonical schema format
 
-Then print one line: `Readiness: <N> requirements fetched.` If **N == 0** or the fetch did not run, STOP — do not proceed to matching/validation. Report whether it was an empty result or a provider/MCP error (with the `.mcp.json` / `/mcp` remedy). Do not fabricate requirements.
+Then print one line: `Readiness: <N> requirements fetched.` If **N == 0** or the fetch did not run, STOP — do not proceed to matching/validation. Report whether it was an empty result or a provider/MCP error (with the remedy: a missing connector usually means `uv` isn't installed — README → *Troubleshooting*). Do not fabricate requirements.
 
 ### Step 4: Find Related Requirements
 
@@ -244,13 +245,15 @@ Otherwise, retrieve Jira config from `.buddy-council/sources.json`:
 
 - `project_key`: Which project to create the ticket in
 - `default_issue_type`: Issue type (Story, Task, Bug, etc.)
-- `base_url`: Used only to build the browse URL in the success message
+- `base_url`: the `site` every Jira call passes, and the browse URL in the success message
 
-There is no `cloud_id` and no site resolution step — `mcp-atlassian` is bound to a single site by `JIRA_URL`
-in `~/.buddy-council/atlassian.env`. If a `cloud_id` survives in the config from before 0.21.1, ignore it.
+There is no `cloud_id` and no site resolution step — the `atlassian` connector hands each call to an
+mcp-atlassian copy bound to the site that `site` names. If a `cloud_id` survives in the config from before
+0.21.1, ignore it.
 
 Call the `jira_create_issue` MCP tool:
 
+- `site`: from `jira.base_url`
 - `project_key`: from `jira.project_key` — the board's project, so the ticket appears on the board
 - `issue_type`: from `jira.default_issue_type` (or default to "Story")
 - `summary`: from draft
@@ -275,7 +278,7 @@ placement you did not make.
 
 **On failure**:
 
-- **401 / not authorized** → the token in `~/.buddy-council/atlassian.env` is wrong or expired. Tell the user
+- **401 / not authorized** → the token saved for the Jira site is wrong or expired. Tell the user
   to re-run `/bc:setup` to re-enter it. There is no browser re-authorization step.
 - **403 / permission denied** → the account lacks "Create Issues" on that project, or an IP allowlist is
   blocking the request. Say which of the two you cannot distinguish.
@@ -303,7 +306,7 @@ After delivering the result, if the user asks a follow-up question:
 ## Error Handling
 
 - If config is missing → direct user to `/bc:setup`
-- If MCP tools are not available → tell the user to check `.mcp.json` (both `testrail` and `atlassian`) and restart the runtime. There is no authorization step for Atlassian; if the server is listed but every call fails, the token in `~/.buddy-council/atlassian.env` is wrong or the host is unreachable without a VPN.
+- If MCP tools are not available → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it. There is no authorization step for Atlassian; if the tools are listed but every call fails, the token saved for the Jira site is wrong or the host is unreachable without a VPN.
 - If requirements fetch fails (network, auth) → report the error clearly with the API response
 - If the `jira` section is missing from config and `--dry-run` is NOT passed → tell user to run `/bc:setup` or use `--dry-run`
 - If Jira ticket creation fails → report the error with actionable steps (re-authorize, check project key / issue type)

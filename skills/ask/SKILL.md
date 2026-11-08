@@ -142,5 +142,5 @@ When the intent is a general question about requirements or test cases:
 ## Error Handling
 
 - If config is missing → direct user to `/bc:setup`
-- If MCP tools are unavailable → tell user to check `.mcp.json` and restart Claude Code
+- If MCP tools are unavailable → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it
 - If no artifacts match the question → report clearly what was searched and that nothing matched

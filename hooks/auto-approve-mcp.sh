@@ -7,7 +7,8 @@
 # servers also fall through untouched.
 #
 # The Atlassian names below are mcp-atlassian's tools
-# (https://github.com/sooperset/mcp-atlassian). They are enumerated rather than
+# (https://github.com/sooperset/mcp-atlassian), which the plugin's atlassian
+# connector routes to one copy per Jira site. They are enumerated rather than
 # globbed. A jira_get_*/jira_search* glob would look tempting and is wrong:
 # the server exposes ~50 Jira tools plus Confluence ones, several read-shaped
 # names sit one edit away from a write cousin, and the set grows every release.
@@ -20,12 +21,13 @@
 # jira_batch_create_issues, or anything else that mutates Jira. /bc:vnv-sprint-prep
 # writes to other teams' tickets and depends on those prompts being reached.
 #
-# Runs under BOTH runtimes. Claude Code names MCP tools mcp__<server>__<tool>
-# and routes only those here (hooks/hooks.json matcher mcp__.*). Copilot CLI
-# runs this for every preToolUse (com.github.copilot/hooks/hooks.json, no matcher) and uses its
-# own MCP tool naming, so the case below matches both the Claude-prefixed and
-# bare tool names — anything else exits silently. Never exits non-zero:
-# Copilot treats a failing preToolUse hook as deny (fail-closed).
+# Runs under BOTH runtimes, and matches every spelling of a tool's name:
+#   mcp__plugin_bc_<server>__<tool>   Claude Code, the plugin's own connectors (hooks/hooks.json, matcher mcp__.*)
+#   mcp__<server>__<tool>             Claude Code, a connector registered in a project's or user's own settings
+#   <server>-<tool>                   Copilot CLI, plugin or user connectors alike (seen in its hook payload)
+#   <tool>                            Copilot CLI versions that sent the bare name
+# Copilot runs this for every preToolUse (com.github.copilot/hooks/hooks.json, no matcher), so anything else
+# exits silently. Never exits non-zero: Copilot treats a failing preToolUse hook as deny (fail-closed).
 
 INPUT=$(cat)
 
@@ -55,37 +57,35 @@ except Exception:
 # session, installs or launches an app, or changes the phone (appium_gesture, appium_set_value,
 # appium_session_management, appium_app_lifecycle, appium_mobile_permissions, …) must keep prompting.
 # scripts/bc_tools.py keeps the same list in READ_TOOLS, and its tests fail if the two differ.
-# Copilot names an MCP tool <server>-<tool> in its hook payload (e.g. appium-appium_find_element), so each
-# appium tool is matched in all three spellings.
 case "$TOOL" in
-  mcp__testrail__testrail_get_* | mcp__github__get_file_contents | \
-  testrail_get_* | get_file_contents | \
-  mcp__jama__jama_get_* | jama_get_* | \
-  mcp__appium__appium_mobile_device_info | appium-appium_mobile_device_info | appium_mobile_device_info | \
-  mcp__appium__appium_find_element | appium-appium_find_element | appium_find_element | \
-  mcp__appium__appium_find_elements | appium-appium_find_elements | appium_find_elements | \
-  mcp__appium__appium_get_text | appium-appium_get_text | appium_get_text | \
-  mcp__appium__appium_get_element_attribute | appium-appium_get_element_attribute | appium_get_element_attribute | \
-  mcp__appium__appium_get_active_element | appium-appium_get_active_element | appium_get_active_element | \
-  mcp__appium__appium_get_window_size | appium-appium_get_window_size | appium_get_window_size | \
-  mcp__appium__generate_locators | appium-generate_locators | \
-  mcp__appium__appium_get_page_source | appium-appium_get_page_source | appium_get_page_source | \
-  mcp__appium__appium_screenshot | appium-appium_screenshot | appium_screenshot | \
-  mcp__atlassian__jira_get_user_profile | jira_get_user_profile | \
-  mcp__atlassian__jira_get_issue | jira_get_issue | \
-  mcp__atlassian__jira_search | jira_search | \
-  mcp__atlassian__jira_get_agile_boards | jira_get_agile_boards | \
-  mcp__atlassian__jira_get_board_issues | jira_get_board_issues | \
-  mcp__atlassian__jira_get_sprints_from_board | jira_get_sprints_from_board | \
-  mcp__atlassian__jira_get_sprint_issues | jira_get_sprint_issues | \
-  mcp__atlassian__jira_get_all_projects | jira_get_all_projects | \
-  mcp__atlassian__jira_get_project_issue_types | jira_get_project_issue_types | \
-  mcp__atlassian__jira_get_project_fields | jira_get_project_fields | \
-  mcp__atlassian__jira_get_create_fields | jira_get_create_fields | \
-  mcp__atlassian__jira_search_fields | jira_search_fields | \
-  mcp__atlassian__jira_get_transitions | jira_get_transitions | \
-  mcp__atlassian__jira_get_link_types | jira_get_link_types | \
-  mcp__atlassian__jira_search_assignable_users | jira_search_assignable_users)
+  mcp__testrail__testrail_get_* | mcp__plugin_bc_testrail__testrail_get_* | testrail-testrail_get_* | testrail_get_* | \
+  mcp__github__get_file_contents | get_file_contents | \
+  mcp__jama__jama_get_* | mcp__plugin_bc_jama__jama_get_* | jama-jama_get_* | jama_get_* | \
+  mcp__appium__appium_mobile_device_info | mcp__plugin_bc_appium__appium_mobile_device_info | appium-appium_mobile_device_info | appium_mobile_device_info | \
+  mcp__appium__appium_find_element | mcp__plugin_bc_appium__appium_find_element | appium-appium_find_element | appium_find_element | \
+  mcp__appium__appium_find_elements | mcp__plugin_bc_appium__appium_find_elements | appium-appium_find_elements | appium_find_elements | \
+  mcp__appium__appium_get_text | mcp__plugin_bc_appium__appium_get_text | appium-appium_get_text | appium_get_text | \
+  mcp__appium__appium_get_element_attribute | mcp__plugin_bc_appium__appium_get_element_attribute | appium-appium_get_element_attribute | appium_get_element_attribute | \
+  mcp__appium__appium_get_active_element | mcp__plugin_bc_appium__appium_get_active_element | appium-appium_get_active_element | appium_get_active_element | \
+  mcp__appium__appium_get_window_size | mcp__plugin_bc_appium__appium_get_window_size | appium-appium_get_window_size | appium_get_window_size | \
+  mcp__appium__generate_locators | mcp__plugin_bc_appium__generate_locators | appium-generate_locators | \
+  mcp__appium__appium_get_page_source | mcp__plugin_bc_appium__appium_get_page_source | appium-appium_get_page_source | appium_get_page_source | \
+  mcp__appium__appium_screenshot | mcp__plugin_bc_appium__appium_screenshot | appium-appium_screenshot | appium_screenshot | \
+  mcp__atlassian__jira_get_user_profile | mcp__plugin_bc_atlassian__jira_get_user_profile | atlassian-jira_get_user_profile | jira_get_user_profile | \
+  mcp__atlassian__jira_get_issue | mcp__plugin_bc_atlassian__jira_get_issue | atlassian-jira_get_issue | jira_get_issue | \
+  mcp__atlassian__jira_search | mcp__plugin_bc_atlassian__jira_search | atlassian-jira_search | jira_search | \
+  mcp__atlassian__jira_get_agile_boards | mcp__plugin_bc_atlassian__jira_get_agile_boards | atlassian-jira_get_agile_boards | jira_get_agile_boards | \
+  mcp__atlassian__jira_get_board_issues | mcp__plugin_bc_atlassian__jira_get_board_issues | atlassian-jira_get_board_issues | jira_get_board_issues | \
+  mcp__atlassian__jira_get_sprints_from_board | mcp__plugin_bc_atlassian__jira_get_sprints_from_board | atlassian-jira_get_sprints_from_board | jira_get_sprints_from_board | \
+  mcp__atlassian__jira_get_sprint_issues | mcp__plugin_bc_atlassian__jira_get_sprint_issues | atlassian-jira_get_sprint_issues | jira_get_sprint_issues | \
+  mcp__atlassian__jira_get_all_projects | mcp__plugin_bc_atlassian__jira_get_all_projects | atlassian-jira_get_all_projects | jira_get_all_projects | \
+  mcp__atlassian__jira_get_project_issue_types | mcp__plugin_bc_atlassian__jira_get_project_issue_types | atlassian-jira_get_project_issue_types | jira_get_project_issue_types | \
+  mcp__atlassian__jira_get_project_fields | mcp__plugin_bc_atlassian__jira_get_project_fields | atlassian-jira_get_project_fields | jira_get_project_fields | \
+  mcp__atlassian__jira_get_create_fields | mcp__plugin_bc_atlassian__jira_get_create_fields | atlassian-jira_get_create_fields | jira_get_create_fields | \
+  mcp__atlassian__jira_search_fields | mcp__plugin_bc_atlassian__jira_search_fields | atlassian-jira_search_fields | jira_search_fields | \
+  mcp__atlassian__jira_get_transitions | mcp__plugin_bc_atlassian__jira_get_transitions | atlassian-jira_get_transitions | jira_get_transitions | \
+  mcp__atlassian__jira_get_link_types | mcp__plugin_bc_atlassian__jira_get_link_types | atlassian-jira_get_link_types | jira_get_link_types | \
+  mcp__atlassian__jira_search_assignable_users | mcp__plugin_bc_atlassian__jira_search_assignable_users | atlassian-jira_search_assignable_users | jira_search_assignable_users)
     # Both decision shapes: top-level keys for Copilot CLI, the
     # hookSpecificOutput wrapper for Claude Code.
     printf '{"permissionDecision":"allow","permissionDecisionReason":"bc: read-only MCP fetch","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"bc: read-only MCP fetch"}}\n'

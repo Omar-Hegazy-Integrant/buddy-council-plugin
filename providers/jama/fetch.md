@@ -5,22 +5,26 @@ Fetch requirements live from **Jama Connect** through the plugin's own `jama` MC
 
 **The server is read-only by construction.** Every tool is named `jama_get_*`, and its HTTP client can only
 issue GET requests — there is no tool that creates, edits, moves, or deletes anything in Jama. Never call the
-Jama REST API with curl or Bash for data; the MCP server is the required access method. (`/bc:setup` runs the
-server's `--check` mode once, deliberately, before the server is registered.)
+Jama REST API with curl or Bash for data; the connector is the required access method. (`/bc:setup` may run the
+server's `--check --site` mode, deliberately, when the tools aren't available in the assistant.)
 
 ## Prerequisites
 
-`/bc:setup` registers the `jama` server in both runtime configs:
-`.mcp.json` for Claude Code and `~/.copilot/mcp-config.json` for Copilot CLI. Check availability by looking
-for `mcp__jama__jama_get_requirements` (Claude Code) or `jama_get_requirements` (Copilot CLI).
+The `jama` connector ships inside the plugin and starts with the assistant — nothing to register. Claude Code
+shows its tools as `mcp__plugin_bc_jama__jama_get_requirements`, Copilot CLI as `jama-jama_get_requirements`.
+
+**Every call passes `site`: `requirements.base_url` from `.buddy-council/sources.json`.** Keys belong to sites, one
+per site (ADR 0008): the connector uses the key saved for the site the call names, and only that site ever sees it.
+Each site also keeps its own caches, so two projects on two Jama sites never mix. A call without `site` uses this
+computer's only Jama key and fails when it has several, so commands always pass it.
 
 If the tools are NOT available:
 
-- Tell the user to restart the runtime — the server is registered in config but only loads at startup. The
-  first launch also provisions its Python dependencies through `uv`, which takes a few seconds.
-- If the server loads but every call fails with "Jama is not configured" or a credentials error, the fix is
-  `/bc:setup` — credentials live in `~/.buddy-council/secrets.json` under `jama`, the base URL in the MCP
-  config's `JAMA_BASE_URL`.
+- The plugin's connectors didn't start — almost always because `uv` isn't installed. Point the user to the
+  README's *Troubleshooting*, then a restart of the assistant. The first start also provisions the server's Python
+  dependencies through `uv`, which takes a few seconds.
+- If the connector answers but every call says no Jama key is saved for the site, or its key is incomplete, the fix
+  is `/bc:setup` with a link to the Jama project — keys live in `~/.buddy-council/keys/`, one file per site.
 
 ## Configuration
 
@@ -28,6 +32,7 @@ Read the `requirements` block of `.buddy-council/sources.json` and pass these to
 
 | Config field | Tool argument | Default | Purpose |
 |---|---|---|---|
+| `base_url` | `site` | this computer's only Jama key | The Jama site — on every call |
 | `project_id` | `project_id` | required | Jama project id |
 | `roots[*].id` | `root_ids` | none — whole project | The requirements root(s): only what sits inside them is in scope |
 | `exclude[*].id` | `exclude_ids` | none | Containers inside a root to leave out entirely |
@@ -57,6 +62,7 @@ Call `jama_get_requirements` once:
 
 ```json
 {
+  "site": "https://company.jamacloud.com",
   "project_id": 42,
   "scope": "<the scope input, or empty for everything>",
   "root_ids": [1001],
@@ -157,6 +163,7 @@ same `field_mapping`, `root_ids`, and `feature_depth` as above:
 
 ```json
 {
+  "site": "https://company.jamacloud.com",
   "items": ["CWA-REQ-85", "CWA-REQ-86", "CWA-REQ-91"],
   "project_id": 42,
   "root_ids": [1001],
@@ -188,7 +195,8 @@ For exactly one item, `jama_get_item` returns the same entry as a single object
 
 The server's errors are written for the user; relay them, then map the remedy:
 
-- **"Jama is not configured" / "No Jama credentials"** → run `/bc:setup`.
+- **"No Jama key is saved for …" / an incomplete key** → run `/bc:setup` with a link to the Jama project.
+- **"This computer has Jama keys for N sites"** → the call left out `site`; pass `requirements.base_url`.
 - **Rejected API client ID/secret, or HTTP 401** → the credentials were rotated or revoked; regenerate them in
   Jama (profile → Set API Credentials) and re-run `/bc:setup`.
 - **HTTP 403** → the account lacks read permission on the project, or is not enabled under Admin → REST API →

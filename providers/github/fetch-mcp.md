@@ -1,14 +1,10 @@
 # GitHub Fetch (MCP Strategy) — Provider Guide
 
-Fetch a single GitHub-hosted file via the official `github-mcp-server` MCP server. Used when `requirements.enrichment.strategy === "mcp"`.
+Fetch a single GitHub-hosted file through the assistant's own GitHub connection — the official `github-mcp-server`. Used when `requirements.enrichment.strategy === "mcp"`.
 
 ## When to Use
 
-Invoked by `howtos/enrich-requirements.md` for each unique URL when the user configured MCP at setup time. The user must have:
-
-- Installed `github-mcp-server` externally (not vendored by this plugin — `.mcp.example.json` shows where to add it)
-- Provided a GitHub PAT during `/bc:setup`, stored in `.mcp.json` env block under `GITHUB_TOKEN`
-- Restarted Claude Code (or toggled the MCP server) so `mcp__github__*` tools are available
+Invoked by `howtos/enrich-requirements.md` for each unique URL when setup found no `gh` CLI but a GitHub connection in the assistant. The plugin registers no GitHub server and keeps no GitHub token: the connection is the assistant's own — Copilot CLI's built-in GitHub server, or GitHub's server added to Claude Code — so its `get_file_contents` tool is available (`github-mcp-server-get_file_contents` in Copilot CLI, `mcp__github__get_file_contents` in Claude Code).
 
 If the MCP tools are not available at runtime, return a structured error so the orchestrator can surface the failure to the user.
 

@@ -140,4 +140,4 @@ reports which pairs are label-only, so someone can link them in the UI in one pa
 - **V&V board shares a project with the dev board and no discriminator is known** → derive one by sampling both boards, or ask. If it stays unresolved, warn that clones may surface on the dev board and let the user decide.
 - **No `OS` field on the project** → phase 2 falls back to the title prefix and says so loudly; parity results are marked lower-confidence.
 - **No active sprint** → report it and stop. There is nothing to clone.
-- **401 / 403 from Atlassian** → 401 means the token in `~/.buddy-council/atlassian.env` is wrong or expired (re-run `/bc:setup`); 403 means the account lacks permission on that project, or an IP allowlist is blocking the request.
+- **401 / 403 from Atlassian** → 401 means the token saved for the Jira site is wrong or expired (re-run `/bc:setup`); 403 means the account lacks permission on that project, or an IP allowlist is blocking the request.

@@ -20,6 +20,7 @@ with `jira.board.id`.
 - `scope`: Optional — a feature name, a set of requirement IDs, or "all" (default). Narrows the JQL applied
   *within* the board.
 - `include_done`: Optional, default `false`. When true, drops the "not done" restriction.
+- `site`: the Jira site — `jira.base_url`. Pass it on every call below.
 - `board_id`: Optional — defaults to `jira.board.id`. `/bc:vnv-sprint-prep` passes `jira.vnv_board.id` to read
   the V&V board with the same code path.
 
@@ -34,7 +35,7 @@ with `jira.board.id`.
 4. Normalize each issue to the canonical schema with `type: "board_issue"`.
 5. Print one line: `Fetch: board issues → <N> fetched from board <id>`.
 
-No `cloudId` is involved anywhere — the server is bound to one site by its env file.
+No `cloudId` is involved anywhere — the connector hands each call to an mcp-atlassian copy bound to the site `site` names.
 
 ## The JQL passed to the board
 
@@ -113,7 +114,7 @@ backlog. Never fail ticket creation over sprint placement.
 ## Error Handling
 
 - **No `jira` section / `jira.pending` true / no `jira.board`** → skip with the visible line above, return `[]`.
-- **401** → the token in `~/.buddy-council/atlassian.env` is wrong or expired. Tell the user to re-run
+- **401** → the token saved for the Jira site is wrong or expired. Tell the user to re-run
   `/bc:setup`. Treat as a failed source.
 - **403** → the account cannot browse this project or view this board. Say both; the response does not
   distinguish them.

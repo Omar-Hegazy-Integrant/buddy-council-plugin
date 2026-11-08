@@ -19,6 +19,8 @@ as coverage. Everything below exists to make that impossible to do by accident.
 **Never call `testrail_update_case` or `testrail_update_cases` from anywhere else.** The moment two code paths
 can update cases, one of them forgets the requirement field.
 
+Every TestRail call below passes `site`: `test_cases.base_url` from `.buddy-council/sources.json` (ADR 0008).
+
 ## The rules every path obeys
 
 1. **Read before you write.** Fetch each case fresh with `testrail_get_case` and build the change from that

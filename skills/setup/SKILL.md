@@ -46,44 +46,58 @@ mentions it (`Automation: left out — say "automation" to add it`) and never br
 **Two exceptions, because the Jira board is required** — both run even when the user answers "nothing":
 
 - **Missing `jira` block** → the config predates the requirement, or an earlier run was abandoned. Say so and walk Step 3 regardless of what they asked to change.
-- **`jira.pending` is `true`** → re-test now, using the full 3a-bis procedure (MCP tool if live, `curl` otherwise). On success drop `pending` and report `Jira board: PROJ board 42 — verified`. If it still fails, leave `pending` as it is and remind them `/bc:validate` stays blocked until it clears. Never silently keep a stale `pending: true` that would now verify — and never leave it set without having attempted a call this run.
+- **`jira.pending` is `true`** → re-test now, using the full 3a-bis procedure (`jira_get_user_profile` with `site`). On success drop `pending` and report `Jira board: PROJ board 42 — verified`. If it still fails, leave `pending` as it is and remind them `/bc:validate` stays blocked until it clears. Never silently keep a stale `pending: true` that would now verify — and never leave it set without having attempted a call this run.
 
 **Excel configs** — also unconditional: when `requirements.provider` is `excel`, say in one line that
 requirements now come only from Jama, and walk Step 1 for the Jama project, whatever the user answered.
 
 **Pre-0.21.1 config migration** — also unconditional, because these configs cannot work as written:
 
-- **`jira.cloud_id` present, or `jira.deployment` missing** → the config targets Atlassian's hosted Cloud-only server. Drop `cloud_id`, detect `deployment` from `base_url`, and walk Step 3a to collect the credential the `uvx` server needs. Explain in one line why: the plugin no longer uses the hosted server, and it never worked against Jira Server/Data Center at all.
-- **`~/.buddy-council/atlassian.env` missing while a `jira` block exists** → same thing; the credential was never collected. Walk Step 3a.
+- **`jira.cloud_id` present, or `jira.deployment` missing** → the config targets Atlassian's hosted Cloud-only server. Drop `cloud_id`, detect `deployment` from `base_url`, and walk Step 3a to collect the credential the plugin's Jira connector needs. Explain in one line why: the plugin no longer uses the hosted server, and it never worked against Jira Server/Data Center at all.
+- **No Jira key saved for `jira.base_url`** — `python3 '<plugin_root>/scripts/bc_keys.py' check --url '<jira.base_url>' --provider jira` reports `"ok": false` → the credential was never collected. Walk Step 3a.
+
+**Keys from older setups.** Before the checks above, run `python3 '<plugin_root>/scripts/bc_keys.py' migrate`. Keys
+live one file per site in `~/.buddy-council/keys/` now (ADR 0008); this copies the TestRail and Jama keys an older
+setup kept in `~/.buddy-council/secrets.json`, and the Jira token in `~/.buddy-council/atlassian.env`, each to the
+site it was set up for. It prints sites only — never a key — runs once per computer, never replaces a saved key, and
+leaves the old files where they are. A key whose site it can't tell is listed under `skipped`: ask for that site's
+key in its step, as for a new site. (The connectors run the same migration on their first call, so everyday use
+keeps working before setup runs.)
 
 **If it does not exist**, run all steps in order.
 
-In both cases, resolve the **plugin install path** now, using the procedure in Step 4a-bis — Step 1 runs the Jama server's connection check from it (`uv run` provisions Python and its dependencies automatically, so nothing needs to be installed). Reuse the resolved value when writing `plugin_root` in Step 4.
+In both cases, resolve the **plugin install path** now, using the procedure in Step 4a-bis — the key store, the
+automation tools, and the Jama server's connection check run from it (`uv run` provisions Python and its
+dependencies automatically, so nothing needs to be installed). Reuse the resolved value when writing `plugin_root`
+in Step 4.
 
 ### Step 0a: Path health check (runs on every re-run, including "nothing")
 
-Claude Code's install path embeds the plugin version, so **every plugin update invalidates the paths recorded by the previous setup**. Before asking the user anything, compare the freshly resolved install path against what is stored:
+Claude Code's install path embeds the plugin version, so **every plugin update invalidates the `plugin_root` recorded
+by the previous setup**. Before asking the user anything, compare the freshly resolved install path against
+`plugin_root` in `.buddy-council/sources.json`.
 
-- `plugin_root` in `.buddy-council/sources.json`
-- each `--directory` argument in the project's `.mcp.json`
-- each `--directory` argument in `~/.copilot/mcp-config.json`, **and whether that file exists at all** — a config written before this check was added will be missing it entirely, which is the single most common reason TestRail tools don't load under Copilot. If it is absent, create it per Step 4c instead of only repairing paths.
-
-If either differs from the resolved path — or points at a directory that no longer exists — **repair both files automatically**, without a confirmation prompt (this is a path correction, not a configuration change; nothing else in either file is touched). Then report it in one line:
+If it differs — or points at a directory that no longer exists — **repair it automatically**, without a
+confirmation prompt (this is a path correction, not a configuration change; nothing else in the file is touched).
+Then report it in one line:
 
 ```
 Updated plugin path after version change:
   /Users/you/.claude/plugins/cache/buddy-council/bc/0.14.0
   → /Users/you/.claude/plugins/cache/buddy-council/bc/0.15.0
-  Repaired: .buddy-council/sources.json, .mcp.json — restart or toggle /mcp to reconnect the servers.
+  Repaired: .buddy-council/sources.json
 ```
 
-This repair happens **even when the user answers "nothing"** to the question above — answer the question after the check, and if they say "nothing", stop *after* the paths are fixed. If the paths already match, say nothing and continue silently.
+The connectors need no repair: they ship inside the plugin, and each assistant starts them from the plugin's own
+manifests.
+
+This repair happens **even when the user answers "nothing"** to the question above — answer the question after the check, and if they say "nothing", stop *after* the path is fixed. If the path already matches, say nothing and continue silently.
 
 **Then the automation tools** — only when `.buddy-council/sources.json` has `automation.enabled: true`, and also
-before answering "nothing". After the repair above (so the new plugin path's `.mcp.json` exists), run `status`
-(the same command as in Step 0). When its `needs` is empty, do nothing and say nothing. Otherwise — a plugin
-update changed a pin (`install`), a config lost or holds a stale `appium` entry (`wire`), or something was
-pending (`retry`) — run the same two calls as 4d steps 2–3, each with a 10-minute timeout:
+before answering "nothing". Run `status` (the same command as in Step 0). When its `needs` is empty, do nothing
+and say nothing. Otherwise — a plugin update changed a pin (`install`), the record the plugin's `appium` connector
+starts appium-mcp from is missing or stale (`wire`), or something was pending (`retry`) — run the same two calls
+as 4d steps 2–3, each with a 10-minute timeout:
 
 ```bash
 python3 '<plugin_root>/scripts/bc_tools.py' ensure --project '<cwd>'
@@ -91,10 +105,32 @@ python3 '<plugin_root>/scripts/bc_tools.py' smoke --project '<cwd>'
 ```
 
 `smoke` only when `ensure` reported `"phone_check": "due"`. `ensure` installs a pin a plugin update changed —
-keeping the old version wired, in both CLIs, until the new server answers, then removing it — re-adds the
-`appium` entry to a `.mcp.json` that a plugin update replaced, and retries a failed download. Both ask nothing,
-and the bash hook approves both. Show their `lines`, then use a fresh `status` line in the summary. A pending
-result never blocks the rest of setup.
+keeping the old version in use until the new server answers, then removing it — and retries a failed download.
+Both ask nothing, and the bash hook approves both. Show their `lines`, then use a fresh `status` line in the
+summary. A pending result never blocks the rest of setup.
+
+## Saving a key (used by Steps 1a, 2 and 3)
+
+Keys belong to sites, not projects: one file per site in `~/.buddy-council/keys/`, mode 600 in a 700 folder
+(ADR 0008). The plugin's connectors look a site's key up on the call that needs it, so a key works the moment it is
+saved — no restart. A key is only ever sent to the site it was saved for. One key per site: saving again replaces it.
+
+1. **Before asking for a key**, check whether this computer already has one for the site:
+   `python3 '<plugin_root>/scripts/bc_keys.py' check --url '<base url>' --provider <testrail|jama|jira>`. When it
+   reports `"ok": true`, don't ask — test the connection, and ask for a new key only if the site refuses it.
+2. **Find where it goes:** `python3 '<plugin_root>/scripts/bc_keys.py' path --url '<base url>' --provider <provider>`
+   prints the key file's `path` (and makes its folder private).
+3. **Write that file with your file tool** — never through a shell command, so the key stays out of command lines
+   and the tool log — holding the provider, the site's base URL, and the credential fields the step names:
+
+   ```json
+   { "provider": "jama", "url": "https://company.jamacloud.com", "client_id": "…", "client_secret": "…" }
+   ```
+
+4. **Check it:** run the `check` command from item 1 again. It confirms the key is complete and makes the file
+   private. Neither command ever prints a key.
+
+Never echo a key back, and never put one in `sources.json`, a command line, or any assistant's settings.
 
 ## Step 1 of 4: Requirements (Jama)
 
@@ -119,27 +155,26 @@ Features are Jama **folders** — each requirement belongs to its nearest folder
    creating them on an account with **read-only** project permissions — defense in depth on top of the
    server's own guarantee.
 
-   Write them **now**, because the connection test reads them: merge into `~/.buddy-council/secrets.json`
-   under `jama` (`mkdir -p ~/.buddy-council` first, `chmod 600` after), with exactly one auth style:
+   Save them **now**, as described in *Saving a key*, because the connection test reads them — with exactly one
+   auth style:
 
    ```json
-   { "jama": { "client_id": "<client id>", "client_secret": "<client secret>" } }
+   { "provider": "jama", "url": "<base url>", "client_id": "<client id>", "client_secret": "<client secret>" }
    ```
 
-   Never echo the secret back, and never put it in `sources.json` or either MCP config.
+   (`username` + `password` replace the pair only on instances without API credentials.)
 
-3. **Test the connection — always produce a verdict.** If the `jama` tools are live
-   (`mcp__jama__jama_get_current_user` under Claude Code, `jama_get_current_user` under Copilot CLI), call it.
-   Otherwise — the usual first run, because the server is only registered in Step 4c — run the server's
-   one-shot check. It reads the credential from the secrets file, so nothing secret goes on the command line:
+3. **Test the connection — always produce a verdict.** Call `jama_get_current_user` with `site` set to the base
+   URL — the plugin's `jama` connector is already running, and reads the key the moment it is saved. When the Jama
+   tools aren't available in this assistant, run the server's one-shot check instead. It reads the key from the key
+   store, so nothing secret goes on the command line:
 
    ```bash
-   JAMA_BASE_URL="<base url>" BC_SECRETS_FILE="$HOME/.buddy-council/secrets.json" \
-     uv run --quiet --directory "<plugin_root>/mcp-servers/jama-server" python server.py --check
+   uv run --quiet --directory "<plugin_root>/mcp-servers/jama-server" python server.py --check --site '<base url>'
    ```
 
-   It prints JSON — `{"ok": true, "user": {...}, "projects": [...], "summary": "..."}`, or `{"ok": false,
-   "error": "..."}` with a non-zero exit. Report the verdict:
+   Either prints JSON — `{"ok": true, "user": {...}, "projects": [...], "summary": "..."}` from the check, or
+   `{"base_url", "auth", "user"}` from the tool — or an error. Report the verdict:
    `Jama: connected as Jane Doe — company.jamacloud.com (OAuth API credentials)`. Map failures honestly:
 
    | The error says | What to tell the user |
@@ -152,11 +187,11 @@ Features are Jama **folders** — each requirement belongs to its nearest folder
    Offer one retry. If it still fails, Jama cannot be verified this run: say so, and stop here — every analysis
    command needs requirements, so there is nothing useful to save until Jama answers.
 
-4. **Project.** List the projects from the check (or `jama_get_projects`) and ask which one — unless the pasted
+4. **Project.** List the projects from `jama_get_projects` (or the check) and ask which one — unless the pasted
    URL named a project id that is in the list, in which case use it and show it in the recap instead of asking.
 
-5. **Inspect the project.** Run the check again with `--project <id>` appended (or, with the tools live, call
-   `jama_get_item_types` with `project_id` and `jama_get_features`). It reads the project tree once and
+5. **Inspect the project.** Call `jama_get_item_types` with `project_id` and `jama_get_features` (or run the check
+   again with `--project <id>` appended). Pass `site` on every Jama call. It reads the project tree once and
    reports item-type counts, folders (features), document-key samples, and field candidates. Decide the
    following **without asking**, surfacing each in the Step 4 recap:
 
@@ -195,23 +230,19 @@ Features are Jama **folders** — each requirement belongs to its nearest folder
 Detect available GitHub access strategies in parallel:
 
 - **CLI**: run `gh --version` and `gh auth status` (capture exit codes). If both succeed, CLI is available; capture the authenticated user from `gh auth status`.
-- **MCP**: check whether `mcp__github__get_file_contents` is a callable tool in this session.
+- **MCP**: check whether this assistant already has a GitHub connection with a `get_file_contents` tool — Copilot CLI's built-in GitHub server has one, and in Claude Code it is `mcp__github__get_file_contents` when the user added GitHub's server.
 
 Pick the strategy automatically — do **not** ask the user to choose:
 
 - **CLI available** (regardless of whether MCP also is) → use `cli`. Nothing more to configure — `gh auth login` already handles auth. Report in one line: `GitHub docs will be fetched via gh CLI (authenticated as <user>).` Write `enrichment.strategy: "cli"`.
-- **Only MCP available** → use `mcp`. This is the one case that still needs input: ask the user for a GitHub Personal Access Token with `repo` scope (read access). Write the token to:
-  - `~/.buddy-council/secrets.json` under `"github": { "token": "<PAT>" }` (chmod 600)
-  - `.mcp.json` `mcpServers.github.env.GITHUB_TOKEN` (see Step 4c)
-
-  Tell the user they'll need to restart Claude Code or toggle `/mcp` to activate the new server.
+- **Only MCP available** → use `mcp`, through the assistant's own GitHub connection. Nothing to configure: setup registers no GitHub server and saves no GitHub token. Write `enrichment.strategy: "mcp"`.
 - **Neither available** → warn-and-continue. Write `enrichment.enabled: false`, tell the user enrichment is disabled (links will be detected but not fetched at runtime), and offer install hints:
   - For CLI: `brew install gh && gh auth login` (macOS) or visit https://cli.github.com/
-  - For MCP: visit https://github.com/github/github-mcp-server for installation
+  - For MCP: connect GitHub in the assistant itself (Claude Code: https://github.com/github/github-mcp-server)
 
 #### Smoke test
 
-After the strategy is chosen, try fetching one example URL end-to-end: the `first_url` the Step 1a check reported for the mapped field. If a URL is found, fetch it via the chosen strategy (CLI: `gh api repos/.../contents/...` and base64-decode; MCP: call `mcp__github__get_file_contents`). Show the user the first 200 chars of the decoded content as a preview:
+After the strategy is chosen, try fetching one example URL end-to-end: the `first_url` the Step 1a check reported for the mapped field. If a URL is found, fetch it via the chosen strategy (CLI: `gh api repos/.../contents/...` and base64-decode; MCP: call the assistant's `get_file_contents`). Show the user the first 200 chars of the decoded content as a preview:
 
 ```
 Smoke test: fetching <first URL from sheet>...
@@ -226,13 +257,12 @@ Do **not** ask to save here — config is saved once, in Step 4. If the smoke te
 Test cases come from **TestRail** — currently the only supported test-case source, so there is no menu here. Tell the user you're configuring TestRail, then:
 
 - Ask for: base URL (e.g., `https://company.testrail.io`)
-- Ask for: username (email) and API key
-- Test the connection:
-  - If the `mcp__testrail__testrail_get_projects` MCP tool is available, use it to verify the connection
-  - If MCP tools are not yet available (first-time setup), fall back to:
-    ```bash
-    curl -s -u "USERNAME:API_KEY" "BASE_URL/index.php?/api/v2/get_projects" | head -c 500
-    ```
+- Ask for: username (email) and API key — unless this computer already has a key for the site (*Saving a key*, item 1)
+- Save the key as described in *Saving a key*: `{"provider": "testrail", "url": "<base url>", "username": "…", "api_key": "…"}`
+- Test the connection with `testrail_get_projects`, passing `site` set to the base URL — the plugin's `testrail`
+  connector is already running and reads the key the moment it is saved. Pass `site` on every TestRail call setup
+  makes. If the TestRail tools aren't available in this assistant, its connectors didn't start: say so, and point
+  to the README's *Troubleshooting* (usually `uv` isn't installed) rather than testing another way.
 - If successful, ask which project to use (list the projects returned)
 - Ask if they want to filter by suite (optional)
 
@@ -243,7 +273,7 @@ differ per instance and a folder policy, so resolve them **now**, once, rather t
 here is a question** — the ids are detected, the folder policy is defaulted from how the suite is already
 organized, and the Step 4 recap shows both in plain words, where the user can change them.
 
-Skip this sub-step entirely when the MCP tools are not yet live (first-time setup): omit `authoring`, and the
+Skip this sub-step entirely when the TestRail tools aren't available in this assistant: omit `authoring`, and the
 next `/bc:setup` run fills it in. Phase 7 skips itself with a visible line until it exists, which is correct
 — it must never guess a template.
 
@@ -332,19 +362,18 @@ Run this when the TestRail tools are live and Step 2a resolved a
 /bc:setup once the TestRail tools are live` — and save without `roots`: everything still works on the whole
 project, with every folder a feature.
 
-1. **What the tests link to.** Call `testrail_get_requirement_ids` with the project, suite,
+1. **What the tests link to.** Call `testrail_get_requirement_ids` with `site`, the project, suite,
    `requirement_field`, and `sample_size: 2000`. It returns counts, the ID prefixes in use, and the IDs —
    all of them when the suite links to 2,000 or fewer distinct IDs, otherwise an even spread. Passing every
    ID makes the "not tested yet" list exact. When `distinct_ids` exceeds the sample, say that the per-feature
    link counts come from a sample, so a feature listed as not tested may still have a few links.
-2. **Where those live in Jama.** With the Jama tools live, call `jama_get_scope_proposal` with
-   `document_keys` set to the sample and the Step 1a `item_type_exclude`. Otherwise write the sample to a
-   temp file, one ID per line, and run the check — it prints JSON with a `scope_proposal`:
+2. **Where those live in Jama.** Call `jama_get_scope_proposal` with `site`, `document_keys` set to the sample,
+   and the Step 1a `item_type_exclude`. When the Jama tools aren't available in this assistant, write the sample to
+   a temp file, one ID per line, and run the check — it prints JSON with a `scope_proposal`:
 
    ```bash
-   JAMA_BASE_URL="<base url>" BC_SECRETS_FILE="$HOME/.buddy-council/secrets.json" \
-     uv run --quiet --directory "<plugin_root>/mcp-servers/jama-server" python server.py \
-     --check --project <id> --anchors-file <temp file> --item-type-exclude Text
+   uv run --quiet --directory "<plugin_root>/mcp-servers/jama-server" python server.py --check --site '<base url>' \
+     --project <id> --anchors-file <temp file> --item-type-exclude Text
    ```
 
    The proposal finds where the links concentrate (`linked_folders`), widens that to its whole document
@@ -444,15 +473,16 @@ Persist as `project: { enabled, ignore_dirs, id_patterns }` in `.buddy-council/s
 lives, and every analysis command reads it: `/bc:contradiction` and `/bc:coverage` compare board issues
 against requirements and test cases, and `/bc:validate` files new tickets onto it.
 
-Jira runs on **`mcp-atlassian`** (<https://github.com/sooperset/mcp-atlassian>), launched with `uvx` as a
-local stdio server pinned to `mcp-atlassian@0.23.1`. Nothing needs installing ahead of time — `uvx`
-provisions it on first launch. It speaks to **both Atlassian Cloud and Jira Server/Data Center** — Atlassian's
-hosted server is Cloud-only — and it exposes real **board and sprint tools**, which is what lets this plugin
-address a board by id instead of approximating it with a project-wide JQL.
+Jira runs on **`mcp-atlassian`** (<https://github.com/sooperset/mcp-atlassian>), pinned to `mcp-atlassian@0.23.1`.
+The plugin's `atlassian` connector routes each call to a copy of it for that call's site, started from the site's
+key, so nothing needs installing ahead of time — `uv` provisions it on the first call. It speaks to **both
+Atlassian Cloud and Jira Server/Data Center** — Atlassian's hosted server is Cloud-only — and it exposes real
+**board and sprint tools**, which is what lets this plugin address a board by id instead of approximating it with a
+project-wide JQL.
 
 Unlike the plugin's earlier Jira integration, this step **does collect a credential** — `mcp-atlassian`
-authenticates as the user, not by browser OAuth. It goes into `~/.buddy-council/atlassian.env` (`chmod 600`),
-never into `.mcp.json`, `~/.copilot/mcp-config.json`, or any committed file.
+authenticates as the user, not by browser OAuth. It is saved as the site's key (*Saving a key*), never into
+`sources.json`, any assistant's settings, or any committed file.
 
 ### 3a: Site and credentials
 
@@ -463,83 +493,61 @@ Ask for the Jira base URL first, then derive everything you can from it:
 
 **Detect the deployment from the host — do not ask.** A host ending in `.atlassian.net` (or `.jira.com`) is
 **Cloud**; anything else is **Server/Data Center**. Record it as `jira.deployment` (`"cloud"` or `"server"`),
-because it decides the auth method, the REST API version the fallback probe uses, and which fields
-`/bc:validate` can set. State the detection so a user on an unusual vanity domain can correct it:
+because it decides the auth method and which fields `/bc:validate` can set. State the detection so a user on an
+unusual vanity domain can correct it:
 `Detected Jira Server/Data Center from jira.company.com — say "it's Cloud" if that's wrong.`
 
-Then ask for the one credential that deployment needs:
+Then ask for the one credential that deployment needs — unless this computer already has a key for the site
+(*Saving a key*, item 1):
 
-| Deployment | Ask for | Env keys | Where the user gets it |
+| Deployment | Ask for | Key fields | Where the user gets it |
 |---|---|---|---|
-| Cloud | account email + API token | `JIRA_USERNAME`, `JIRA_API_TOKEN` | <https://id.atlassian.com/manage-profile/security/api-tokens> |
-| Server / Data Center | Personal Access Token only | `JIRA_PERSONAL_TOKEN` | Jira → profile menu → **Personal Access Tokens** → Create token |
+| Cloud | account email + API token | `username`, `api_token` | <https://id.atlassian.com/manage-profile/security/api-tokens> |
+| Server / Data Center | Personal Access Token only | `personal_token` | Jira → profile menu → **Personal Access Tokens** → Create token |
 
-Server/DC takes **no username** — the PAT identifies the user. Asking for one and writing it into the env
-file makes `mcp-atlassian` prefer basic auth and fail with a confusing 401, so don't.
+Server/DC takes **no username** — the PAT identifies the user. Asking for one makes `mcp-atlassian` prefer basic
+auth and fail with a confusing 401, so don't.
 
-Write `~/.buddy-council/atlassian.env` (`mkdir -p ~/.buddy-council` first, `chmod 600` after). Keep
-`TOOLSETS` and `ENABLED_TOOLS` exactly as below — the plugin depends on the agile, links, projects, and users
-toolsets, and the explicit allowlist keeps the tool surface small enough that runtimes don't truncate it:
+Save it as described in *Saving a key*:
 
-```dotenv
-JIRA_URL=https://jira.company.com
-JIRA_PERSONAL_TOKEN=<the PAT>
-TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
-ENABLED_TOOLS=jira_get_issue,jira_search,jira_create_issue,jira_update_issue,jira_add_comment,jira_get_transitions,jira_transition_issue,jira_search_fields,jira_get_agile_boards,jira_get_board_issues,jira_get_sprints_from_board,jira_get_sprint_issues,jira_add_issues_to_sprint,jira_get_link_types,jira_create_issue_link,jira_get_all_projects,jira_get_project_issue_types,jira_get_create_fields,jira_get_project_fields,jira_get_user_profile,jira_search_assignable_users
+```json
+{ "provider": "jira", "url": "https://jira.company.com", "personal_token": "<the PAT>" }
 ```
 
-For Cloud, swap the token line for `JIRA_USERNAME=` plus `JIRA_API_TOKEN=`. If the user also wants Confluence
-reads, append `CONFLUENCE_URL` and the matching `CONFLUENCE_PERSONAL_TOKEN` (Server/DC) or
-`CONFLUENCE_USERNAME` + `CONFLUENCE_API_TOKEN` (Cloud), and add `confluence_search,confluence_get_page` to
-`ENABLED_TOOLS`. Don't prompt for Confluence — offer it in one line and move on if they decline.
-
-If the file already exists, **merge**: keep the keys the user set by hand, replace only what this run
-collected, and never print a token value back to the screen or into the Step 4 recap.
+For Cloud, `username` + `api_token` take the place of `personal_token`. The connector sets mcp-atlassian's
+toolsets and tool list itself; there is nothing else to configure. Never print a token back to the screen or into
+the Step 4 recap.
 
 **Self-signed certificates.** If the connection test below fails TLS verification against a Server/DC host,
-tell the user they can add `JIRA_SSL_VERIFY=false` to the env file, and say plainly that it disables
-certificate checking. Never write that line without asking.
+tell the user they can add `"ssl_verify": false` to the site's key, and say plainly that it disables
+certificate checking. Never add it without asking.
 
 ### 3a-bis: Test the connection
 
 **Always produce a verdict here — this step never ends in "unknown".** This mirrors the TestRail check in
 Step 2, and it is the difference between a working config and a silent `pending: true`.
 
-1. **If the Atlassian MCP tools are live in this session** — look for `mcp__atlassian__jira_get_user_profile`
-   (Claude Code) or `jira_get_user_profile` (Copilot CLI) — call it with `user_identifier` set to the
-   configured account (the email on Cloud; on Server/DC pass `currentUser()`, or omit it and let the server
-   resolve the token's owner). Report the verdict:
-   `Jira: connected as Omar Hegazy — jira.company.com (Server/Data Center)`.
+1. Call `jira_get_user_profile` with `site` set to the base URL and `user_identifier` set to the configured
+   account (the email on Cloud; on Server/DC pass `currentUser()`, or omit it and let the server resolve the
+   token's owner). The plugin's `atlassian` connector is already running and uses the key the moment it is saved;
+   its first call for a site downloads mcp-atlassian, which can take half a minute — if it answers that it is still
+   starting, call again. Report the verdict:
+   `Jira: connected as Omar Hegazy — jira.company.com (Server/Data Center)`. Pass `site` on every Jira call setup
+   makes. If the Jira tools aren't available in this assistant, its connectors didn't start: say so, and point to
+   the README's *Troubleshooting* (usually `uv` isn't installed).
 
-2. **If the tools are NOT live** — the usual case on a first run, because the server only gets registered
-   later in Step 4c — do **not** jump to deferral. Probe the REST API directly with the credential you just
-   collected, exactly as Step 2 falls back to `curl` for TestRail. Source the env file rather than
-   interpolating the token into the command line, so it never lands in shell history or a transcript:
-
-   ```bash
-   set -a; . ~/.buddy-council/atlassian.env; set +a
-   # Server/Data Center (PAT, REST v2):
-   curl -sS -H "Authorization: Bearer $JIRA_PERSONAL_TOKEN" -w '\nHTTP %{http_code}\n' "$JIRA_URL/rest/api/2/myself"
-   # Cloud (email + API token, REST v3):
-   curl -sS -u "$JIRA_USERNAME:$JIRA_API_TOKEN" -w '\nHTTP %{http_code}\n' "$JIRA_URL/rest/api/3/myself"
-   ```
-
-   `200` → connected; read `displayName` out of the response and report it the same way as case 1. Treat the
-   probe as authoritative — the credential works, and the tools will be live once the user restarts the
-   runtime at the end of setup. Do **not** set `pending`.
-
-3. **Only a failed probe defers.** Map the status honestly rather than reporting a generic failure:
+2. **Only a failed call defers.** Map the error honestly rather than reporting a generic failure:
 
    | Result | What to say |
    |---|---|
    | `401` | The token is wrong, expired, or (Cloud) paired with the wrong email. Offer to re-collect it. |
    | `403` | The credential is valid but the account can't use the API — often a Jira permission or an IP allowlist. |
-   | `404` on `/rest/api/2/myself` | The base URL is wrong or points at a proxy. Confirm the URL. |
-   | TLS error | Self-signed certificate — see `JIRA_SSL_VERIFY` above. |
+   | `404` | The base URL is wrong or points at a proxy. Confirm the URL. |
+   | TLS error | Self-signed certificate — see `ssl_verify` above. |
    | Connection refused / timeout | The host is unreachable from here. **Ask whether it needs a corporate VPN** — a self-hosted Jira usually does, and this is the most common cause on a laptop that is off the network. |
 
    Offer one retry, then continue with `"pending": true` per *Deferral* below. Never write `pending: true`
-   after a successful probe.
+   after a successful call.
 
 Do not silently skip this test. If you could not run it at all, say why in one line.
 
@@ -698,8 +706,8 @@ connection test in 3a-bis failed even after a retry:
 - Say plainly that the board is required and setup will keep asking until it is confirmed.
 - Still collect what they can give: the base URL → `base_url`, the detected deployment → `deployment`, the
   board URL → `board.url` + `board.id` + `project_key`, and the default issue type.
-- Still write `~/.buddy-council/atlassian.env` **and both MCP configs** — a credential that turns out to be
-  fine once they're on the VPN should never need re-entering.
+- Still save the site's key — a credential that turns out to be fine once they're on the VPN should never need
+  re-entering, and the connector uses it the moment the site answers.
 - Write the `jira` block with **`"pending": true`**.
 - Finish the wizard normally. `/bc:contradiction` and `/bc:coverage` keep working — they skip the board
   source with a visible line rather than failing. Only `/bc:validate` is blocked.
@@ -788,7 +796,7 @@ Ready to save:
 Save? [y]: _
 ```
 
-On yes, write all files (4a–4c below), then install the automation tools (4d) when the recap included them. On
+On yes, write the config and confirm the keys (4a–4b below), then install the automation tools (4d) when the recap included them. On
 no, ask what to change — unless the answer already says — fix it, and re-show the recap.
 
 ### 4a: Write source config
@@ -803,7 +811,7 @@ mkdir -p .buddy-council
 
 **Migration:** if an older `config/sources.json` exists inside the plugin directory (from before this move), copy its contents into `.buddy-council/sources.json` and tell the user it was migrated.
 
-Write `.buddy-council/sources.json` with the selected providers and non-secret settings. Include the field-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and the code-mapping section. No credentials, ever — those went to `~/.buddy-council/secrets.json` in Step 1a:
+Write `.buddy-council/sources.json` with the selected providers and non-secret settings. Include the field-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and the code-mapping section. No credentials, ever — those are saved per site in `~/.buddy-council/keys/`. Each `base_url` is what every command passes as `site`, so it must be the address the key was saved with:
 
 ```json
 {
@@ -895,7 +903,7 @@ Write `.buddy-council/sources.json` with the selected providers and non-secret s
 }
 ```
 
-The `"jira"` section is **always written** — Step 3 is required. If the connection test failed, write it with `"pending": true`. `board.id` and `vnv_board.id` are integers, not strings. `deployment` is `"cloud"` or `"server"`, detected from the host. `vnv_board.project_key` **may equal** `project_key` — that is a supported layout, and `discriminator` is what keeps the two boards apart; set it to `null` when the V&V board has its own project. There is no `cloud_id`: `mcp-atlassian` is bound to one site by `JIRA_URL` in the env file, so no site id is ever passed to a tool. If a `cloud_id` survives from a pre-0.21.1 config, drop it. If no `github_url` field was mapped, or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the project has none of the excluded types. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
+The `"jira"` section is **always written** — Step 3 is required. If the connection test failed, write it with `"pending": true`. `board.id` and `vnv_board.id` are integers, not strings. `deployment` is `"cloud"` or `"server"`, detected from the host. `vnv_board.project_key` **may equal** `project_key` — that is a supported layout, and `discriminator` is what keeps the two boards apart; set it to `null` when the V&V board has its own project. There is no `cloud_id`: every Jira call names its site with `site` — the `jira.base_url` — and the connector hands it to an mcp-atlassian copy bound to that site. If a `cloud_id` survives from a pre-0.21.1 config, drop it. If no `github_url` field was mapped, or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the project has none of the excluded types. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
 
 **Never write the `automation` block yourself** — `bc_tools.py ensure` writes it in 4d, from what it actually
 installed and proved, and every later `ensure` keeps it current. On a re-run, carry an existing block over
@@ -907,252 +915,47 @@ the requirements were not anchored, and every folder in the project is then a fe
 
 ### 4a-bis: Record the plugin install path (`plugin_root`)
 
-The MCP servers live **inside the plugin's install directory**, which must be referenced by an absolute path that works on the current machine. Determine the absolute install path and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
+The plugin's scripts — the key store, the automation tools, the run folders, the Jama check — live **inside the plugin's install directory**, which commands reach by an absolute path that works on the current machine. Determine the absolute install path and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
 
 1. The **plugin root** — two folders above this skill's base directory, as the top of this file says — when it contains `mcp-servers/`. This works in every assistant.
-2. Otherwise auto-detect: search Copilot's real install locations for a directory containing `mcp-servers/testrail-server/server.py` — in this order:
+2. Otherwise auto-detect: search Copilot's real install locations for a directory containing `scripts/bc-mcp` — in this order:
    - `~/.copilot/installed-plugins/*/*/` — installed from a marketplace, e.g. `~/.copilot/installed-plugins/buddy-council/bc/`
    - `~/.copilot/installed-plugins/_direct/*/` — installed straight from the repo URL, or run with `--plugin-dir`. Copilot flattens `owner/repo` into `owner--repo` here, so this looks like `_direct/Omar-Hegazy-Integrant--buddy-council-plugin/`. **That owner segment is normal** — it is the GitHub account the plugin was installed from, not a per-user path.
 
    If exactly one matches → use it. If several match (both a marketplace and a direct install), prefer the marketplace copy and tell the user which was chosen.
 3. Otherwise, ask the user for the absolute path to the installed plugin.
 
-**Always re-resolve — never trust a stored value.** Claude Code's install path embeds the plugin version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so a `plugin_root` written by an earlier setup points at the *previous* version's directory after any update. A stale path either fails outright or, if the old directory still exists, silently runs old MCP-server and parser code against new commands. Copilot's install path is version-less and unaffected.
+**Always re-resolve — never trust a stored value.** Claude Code's install path embeds the plugin version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so a `plugin_root` written by an earlier setup points at the *previous* version's directory after any update. A stale path either fails outright or, if the old directory still exists, silently runs old scripts against new commands. Copilot's install path is version-less and unaffected.
 
-Write the resolved absolute path, e.g. `"plugin_root": "/Users/<you>/.copilot/plugins/buddy-council"`. **This value is per-machine** and lives only in the git-excluded `.buddy-council/sources.json` — never hardcode a path into a committed file (`.mcp.example.json` and all tracked files keep placeholders; only the generated, gitignored files get the real path).
+Write the resolved absolute path, e.g. `"plugin_root": "/Users/<you>/.copilot/plugins/buddy-council"`. **This value is per-machine** and lives only in the git-excluded `.buddy-council/sources.json` — never hardcode a path into a committed file.
 
-### 4b: Write credentials
+### 4b: Keys
 
-Credentials live in `~/.buddy-council/secrets.json` (home — **not** the project folder; API keys should never sit in a repo). Ensure the directory exists: `mkdir -p ~/.buddy-council`. **Migration:** if a legacy `~/.buddy-council-secrets.json` flat file exists, move it to `~/.buddy-council/secrets.json` and tell the user.
+Every key was saved in its own step, one file per site (*Saving a key*). Confirm each site this project uses —
+`requirements.base_url` (provider `jama`), `test_cases.base_url` (`testrail`), and `jira.base_url` (`jira`) — with
+`python3 '<plugin_root>/scripts/bc_keys.py' check --url '<base url>' --provider <provider>`, which also makes each
+file private. A deferred Jira site keeps its key too.
 
-Write `~/.buddy-council/secrets.json` with credentials — this file is the **single source of truth** for all credentials (`chmod 600`):
+Keys saved by an older setup — `~/.buddy-council/secrets.json` and `~/.buddy-council/atlassian.env` — were copied
+into per-site files in Step 0 and are left where they are; nothing reads them any more. Setup never writes either
+file again. GitHub needs no key here: `gh` keeps its own, and the `mcp` strategy uses the assistant's own GitHub
+connection.
 
-```json
-{
-  "testrail": {
-    "username": "user@company.com",
-    "api_key": "the-api-key"
-  },
-  "github": {
-    "token": "<github-personal-access-token>"
-  }
-}
-```
+### 4c: Connectors — nothing to register
 
-**There is no `jira` section here, ever.** The Jira credential lives in `~/.buddy-council/atlassian.env`
-instead (Step 3a), because `mcp-atlassian` reads its configuration from a dotenv file rather than from this
-plugin's secrets format. Two credential files, one rule: both are `chmod 600`, both live under
-`~/.buddy-council/`, and neither is ever referenced from a committed file. If a `jira` block survives here
-from a version before 0.21.1, move its token into `atlassian.env` if it is still valid, delete the block, and
-tell the user.
+The connectors — `testrail`, `jama`, `atlassian` (Jira), and `appium` — ship inside the plugin, and every
+assistant starts them from the plugin's own manifests (`mcp.json`, and `.claude-plugin/plugin.json` for Claude
+Code) through `scripts/bc-mcp`, which finds `uv` even when the assistant was opened from the Dock. So setup writes
+no connector settings for any assistant, and there is nothing to restart: the connectors were already running when
+setup began, and each reads a site's key on the call that needs it (ADR 0002).
 
-If the GitHub enrichment strategy is **not** `mcp` (e.g., CLI was chosen, or enrichment is disabled), omit the `"github"` section — `gh` CLI handles its own credentials.
+An older setup registered `testrail`, `jama`, and `atlassian` in `~/.copilot/mcp-config.json` and the plugin
+folder's `.mcp.json`. The plugin's own connectors carry the same names and take their place — Copilot gives a
+plugin's server precedence over a same-named one in its config — so leave those entries alone.
 
-The file also carries the `jama` section written in Step 1a — keep it, with exactly one auth style:
-
-```json
-{
-  "jama": {
-    "client_id": "<Jama API client id>",
-    "client_secret": "<Jama API client secret>"
-  }
-}
-```
-
-(`username` + `password` replace the pair only on instances without API credentials.) The `jama` MCP server
-reads this section itself; the base URL is not a secret and lives in `JAMA_BASE_URL` instead.
-
-Set restrictive permissions on the secrets file:
-
-```bash
-chmod 600 ~/.buddy-council/secrets.json
-```
-
-### 4c: Configure MCP servers
-
-**The two runtimes read different files, and you must write BOTH — always, regardless of which CLI is running.** A user who sets up in one CLI and later opens the other must not have to re-run setup:
-
-| Runtime | File it reads | Schema |
-|---|---|---|
-| Claude Code | `.mcp.json` (project/plugin root) | `mcpServers.<name>.{command,args,env}` |
-| Copilot CLI | `~/.copilot/mcp-config.json` | same, **plus** `type: "local"` and a `tools` allowlist |
-
-Copilot **ignores `.mcp.json` entirely**. Writing only that file is why TestRail tools silently fail to load under Copilot — the server is fine, the wiring is missing.
-
-**Resolve the absolute paths to `uv` and `uvx` first** — run `command -v uv` and `command -v uvx` and use the results (e.g. `/opt/homebrew/bin/uv`, `/opt/homebrew/bin/uvx`) as `command` in **both** files. A bare `"uv"`/`"uvx"` works interactively but the spawned MCP server does not inherit your shell's `PATH`, so it fails with a confusing "server not loaded" error. `uvx` ships with `uv`; if only one resolves, the other is its sibling in the same directory.
-
-If `.mcp.json` does not exist in the plugin root, copy it from `.mcp.example.json`.
-
-`.mcp.json` must contain **no credentials** — only non-secret config (`*_BASE_URL`) and `BC_SECRETS_FILE`. For each server's `--directory`, write the **absolute** `plugin_root` path recorded in 4a-bis (e.g. `<plugin_root>/mcp-servers/testrail-server`) — **not** the `${CLAUDE_PLUGIN_ROOT}` token, which stays literal under Copilot CLI. An absolute path works on both runtimes. Update the blocks like this (substitute the real `<plugin_root>`):
-
-```json
-{
-  "mcpServers": {
-    "testrail": {
-      "command": "/absolute/path/to/uv",
-      "args": ["run", "--directory", "<plugin_root>/mcp-servers/testrail-server", "mcp", "run", "server.py"],
-      "env": {
-        "TESTRAIL_BASE_URL": "https://company.testrail.io",
-        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
-      }
-    },
-    "atlassian": {
-      "command": "/absolute/path/to/uvx",
-      "args": [
-        "mcp-atlassian@0.23.1",
-        "--env-file", "/Users/<you>/.buddy-council/atlassian.env",
-        "--transport", "stdio"
-      ]
-    }
-  }
-}
-```
-
-**Write the `atlassian` entry into this file too.** Earlier versions deliberately kept it out, because Claude
-Code registered Atlassian's hosted server from the plugin manifest and a second entry would have loaded the
-same server twice. That no longer applies: the manifest declares no MCP servers as of 0.21.1, because a
-`uvx` server needs an absolute interpreter path and an absolute env-file path, and neither can be expressed
-in a committed manifest. `atlassian` is now wired exactly like `testrail` — written by setup into both
-runtime configs, with real paths resolved on this machine.
-
-**The `jama` entry.** It is wired exactly like `testrail`: the
-vendored server under `<plugin_root>/mcp-servers/jama-server`, the non-secret `JAMA_BASE_URL`, and
-`BC_SECRETS_FILE` pointing at the secrets file whose `jama` section holds the credential.
-
-```json
-{
-  "mcpServers": {
-    "jama": {
-      "command": "/absolute/path/to/uv",
-      "args": ["run", "--directory", "<plugin_root>/mcp-servers/jama-server", "mcp", "run", "server.py"],
-      "env": {
-        "JAMA_BASE_URL": "https://company.jamacloud.com",
-        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
-      }
-    }
-  }
-}
-```
-
-**The `--env-file` path must be absolute and fully expanded** — write `/Users/<you>/.buddy-council/atlassian.env`,
-never `~/...`. The spawned server does not expand a tilde and will start with no credentials at all,
-reporting a confusing "Jira is not configured" instead of a path error.
-
-`<plugin_root>` is the absolute path from 4a-bis — it differs per machine and stays only in the local, gitignored `.mcp.json`, never in a committed file.
-
-#### The Copilot CLI copy — `~/.copilot/mcp-config.json`
-
-Write the same servers again to `~/.copilot/mcp-config.json`, in Copilot's schema. **Merge, never overwrite**:
-read the file if it exists, add or replace only the `testrail`/`atlassian`/`github`/`jama` keys under `mcpServers`,
-and leave every other server the user has configured untouched. Create the file (and `~/.copilot/`) if absent.
-
-```json
-{
-  "mcpServers": {
-    "testrail": {
-      "type": "local",
-      "command": "<absolute path from `command -v uv`>",
-      "args": ["run", "--directory", "<plugin_root>/mcp-servers/testrail-server", "mcp", "run", "server.py"],
-      "tools": ["*"],
-      "env": {
-        "TESTRAIL_BASE_URL": "https://company.testrail.io",
-        "BC_SECRETS_FILE": "/Users/<you>/.buddy-council/secrets.json"
-      }
-    },
-    "atlassian": {
-      "type": "local",
-      "command": "<absolute path from `command -v uvx`>",
-      "args": [
-        "mcp-atlassian@0.23.1",
-        "--env-file", "/Users/<you>/.buddy-council/atlassian.env",
-        "--transport", "stdio"
-      ],
-      "tools": ["*"]
-    }
-  }
-}
-```
-
-**Write the `atlassian` entry unconditionally** — even when the connection test deferred. It holds no secret
-of its own (the credential is in the env file it points at), and having it present means Jira works the
-moment the user gets on the VPN or fixes the token, with no second setup run.
-
-Add the `jama` entry here as well, in Copilot's shape.
-`"tools": ["*"]` is safe for this server in particular: it has no write tools to expose.
-
-```json
-{
-  "mcpServers": {
-    "jama": {
-      "type": "local",
-      "command": "<absolute path from `command -v uv`>",
-      "args": ["run", "--directory", "<plugin_root>/mcp-servers/jama-server", "mcp", "run", "server.py"],
-      "tools": ["*"],
-      "env": {
-        "JAMA_BASE_URL": "https://company.jamacloud.com",
-        "BC_SECRETS_FILE": "/Users/<you>/.buddy-council/secrets.json"
-      }
-    }
-  }
-}
-```
-
-**Why the plugin manifest no longer declares it.** Copilot CLI does not reliably pick up MCP servers declared
-in a plugin manifest — `copilot plugin install` doesn't merge a plugin's `.mcp.json` into the runtime config
-([copilot-cli#2709](https://github.com/github/copilot-cli/issues/2709)) — so Copilot always needed this file.
-And as of 0.21.1 Claude Code needs a setup-written entry too, because a `uvx` server takes absolute paths
-that a committed manifest cannot contain. One registration per runtime, both written here in 4c, never two.
-
-Three differences from the Claude Code file, all required:
-
-- **`"type": "local"`** — Copilot rejects entries without it.
-- **`"tools": ["*"]`** — the per-server tool allowlist. Without it the server loads but exposes nothing.
-- **Fully expanded `$HOME`** in `BC_SECRETS_FILE` and in the atlassian `--env-file` — write `/Users/<you>/...`, not `~/...`. The tilde is not expanded here.
-
-Same rules as the Claude Code copy: no credentials in the file itself (base URLs, `BC_SECRETS_FILE`, and the `--env-file` path only), and add `github` only under `strategy: "mcp"`.
-
-The TestRail and Jama servers read their credentials (`testrail.username`/`api_key`, `jama.client_id`/`client_secret`) from `~/.buddy-council/secrets.json`. `BC_SECRETS_FILE` is optional — both default to `~/.buddy-council/secrets.json` — but write it explicitly for clarity. TestRail env vars still take precedence if set, so a legacy `.mcp.json` with literal credentials keeps working; the Jama server deliberately reads its credential from the secrets file only.
-
-**Migration.** Clean up both older shapes if you find them, and say what you removed:
-
-- A `"jira"` server pointing at `mcp-servers/jira-server` (pre-0.17.0) — the vendored server no longer
-  exists and the entry fails to start.
-- An `"atlassian"` server with `"type": "http"` and the `mcp.atlassian.com` URL (0.17.0–0.20.x) — replace it
-  with the `uvx` entry above. That hosted server serves **Atlassian Cloud only**, so on a Jira Server/Data
-  Center site it could never connect no matter how the OAuth flow went. On Cloud it did work, but it must
-  still be replaced: every how-to and the auto-approve hook name `mcp-atlassian`'s `jira_*` tools, which the
-  hosted server does not expose.
-
-**GitHub exception.** If GitHub enrichment was configured with `strategy: "mcp"`, add a `github` server entry. The external `github-mcp-server` (NOT vendored — install it externally per `.mcp.example.json`) reads `GITHUB_TOKEN` from its env and cannot read the secrets file, so this is the one place a token still lives in `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "github": {
-      "command": "github-mcp-server",
-      "args": ["stdio"],
-      "env": {
-        "GITHUB_TOKEN": "<the PAT you also stored in ~/.buddy-council/secrets.json>"
-      }
-    }
-  }
-}
-```
-
-If GitHub enrichment uses `strategy: "cli"` or is disabled, do NOT add a `github` server entry. The `gh` CLI handles auth via its own keychain.
-
-**Important**: Tell the user that after setup completes, they need to restart their CLI — Claude Code can also just toggle the servers with `/mcp`; Copilot CLI must be fully exited and relaunched — for the MCP servers to become available.
-
-**There is no browser authorization step for Jira.** `mcp-atlassian` authenticates with the token already in
-`~/.buddy-council/atlassian.env`, so the server is usable the moment the runtime restarts. Do not tell the
-user to run `/mcp` → Authenticate for it; there is nothing to approve.
-
-The first launch downloads `mcp-atlassian` through `uvx`, which takes a few seconds. If Jira tools are
-missing right after a restart, that download is the usual cause — say so rather than sending the user to
-re-run setup.
-
-**Jama needs no browser authorization either.** The `jama` server exchanges the API client ID/secret for a
-token itself, on the first call, and renews it when it expires.
+**There is no browser authorization step for Jira or Jama.** The Jira connector starts mcp-atlassian with the
+site's token, and the Jama connector exchanges the API client ID/secret for a token itself on the first call. Do
+not tell the user to run `/mcp` → Authenticate.
 
 ### 4d: Automation tools (only when the recap included them)
 
@@ -1170,7 +973,7 @@ Otherwise, in this order, with no further questions:
    returns `needs_you`, show that too, in its own words — `run ./setup in a terminal for what needs you: …` —
    because a password, tapping Trust on the phone, or choosing a signing profile can only be done there.
 
-2. **Install, wire, and prove the server answers:**
+2. **Install, prove the server answers, and record it:**
 
    ```bash
    python3 '<plugin_root>/scripts/bc_tools.py' ensure --project '<cwd>'
@@ -1180,9 +983,10 @@ Otherwise, in this order, with no further questions:
    would install. The first run installs about 620 MB and usually takes one to three minutes — say so before
    running it, and give the call a 10-minute timeout (Claude Code's limit; under Copilot CLI, wait for it). The
    bash hook approves it, so it asks nothing. It records `pending` before installing, so a run stopped early is
-   finished by the next `/bc:setup`. It wires the `appium` server into **both** MCP configs itself
-   (`<plugin_root>/.mcp.json` and `~/.copilot/mcp-config.json`, by absolute paths), merging like 4c, and never
-   replaces an `appium` server the user added themselves. It records the result in `.buddy-council/sources.json`.
+   finished by the next `/bc:setup`. Once the new server has answered, it records how the plugin's `appium`
+   connector starts it (`~/.buddy-council/tools/appium-mcp.json`) — no assistant's settings are written — and it
+   records the result in `.buddy-council/sources.json`. Until that first install the `appium` connector serves no
+   tools, so after it, tell the user to restart the assistant once to load appium-mcp's tools.
 
 3. **Read one screen from the phone** — only when `ensure` reported `"phone_check": "due"`:
 
@@ -1202,30 +1006,25 @@ Otherwise, in this order, with no further questions:
 ## After saving: validate
 
 - Confirm `.buddy-council/sources.json` was written
-- Confirm `~/.buddy-council/secrets.json` was written
-- Confirm `~/.buddy-council/atlassian.env` was written and is `chmod 600`, and that it carries `JIRA_URL` plus exactly one auth style (`JIRA_PERSONAL_TOKEN`, or `JIRA_USERNAME` + `JIRA_API_TOKEN`) — never both
-- Confirm `.mcp.json` was written (base URLs + `BC_SECRETS_FILE`, no secrets) and contains the `atlassian` entry
-- Confirm `~/.copilot/mcp-config.json` was written, that every entry has `type: "local"` and `tools: ["*"]`, and that any pre-existing servers in it survived the merge
-- Confirm neither MCP config still carries a `jira` entry pointing at the removed `mcp-servers/jira-server`, nor an `atlassian` entry of `type: "http"` pointing at `mcp.atlassian.com`
+- Confirm `bc_keys.py check` reports `"ok": true` for each site the project uses (4b), and that the Jira site's key holds exactly one auth style (`personal_token`, or `username` + `api_token`) — never both
 - Confirm `.buddy-council/sources.json` has a `jira` block with `deployment`, `board.id`, and `board.url`, and that `pending` is `false` whenever the connection test actually succeeded
-- Confirm the `command` in both files is an absolute `uv`/`uvx` path that exists on disk, and that the atlassian `--env-file` argument is an absolute path with no `~`
 - If a V&V board was configured, confirm its `id` differs from the dev board's, and that `discriminator` is set whenever the two share a `project_key`
-- Confirm `requirements.provider` is `"jama"` with an integer `project_id`, and any `roots`/`exclude` entries carry integer `id`s; `~/.buddy-council/secrets.json` has a `jama` section with exactly one auth style; both MCP configs have a `jama` entry whose `--directory` is `<plugin_root>/mcp-servers/jama-server` and whose env holds only `JAMA_BASE_URL` and `BC_SECRETS_FILE`
-- If automation was included, confirm `ensure` (and `smoke`, when it ran) returned `"ok": true` with a `status` — `ready` or `pending` — and that `.buddy-council/sources.json` now has an `automation` block. The script itself checks the rest (the server answered before it was wired, both `appium` entries use absolute paths that exist); do not re-check it by hand
+- Confirm `requirements.provider` is `"jama"` with an integer `project_id`, and any `roots`/`exclude` entries carry integer `id`s
+- If automation was included, confirm `ensure` (and `smoke`, when it ran) returned `"ok": true` with a `status` — `ready` or `pending` — and that `.buddy-council/sources.json` now has an `automation` block. The script itself checks the rest (the server answered before it was recorded, and the record names files that exist); do not re-check it by hand
 - Tell the user:
-  1. Restart Claude Code or toggle the MCP servers with `/mcp` for connections to activate — the `appium` server, too, when automation was set up
+  1. Everything is live already — the connectors were running before setup began, and each key works from the moment it was saved. The one exception: after automation's first install, restart the assistant once so the `appium` connector loads appium-mcp's tools
   2. Then run `/bc:contradiction` to detect contradictions or `/bc:validate` to create tickets
 
-## After saving: reduce permission prompts (Copilot CLI)
+## After saving: reduce permission prompts
 
-The bundled hooks run in **Claude Code, Copilot CLI, and VS Code** (Claude Code loads `hooks/hooks.json`; Copilot CLI and VS Code load `com.github.copilot/hooks/hooks.json` — same scripts). They auto-approve the plugin's read-only operations **and writes to its own generated files** (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's `.mcp.json`) — no action needed on Claude Code, and usually none on Copilot either.
+The bundled hooks run in **Claude Code, Copilot CLI, and VS Code** (Claude Code loads `hooks/hooks.json`; Copilot CLI and VS Code load `com.github.copilot/hooks/hooks.json` — same scripts). They auto-approve the plugin's read-only operations — including every connector read, in each spelling those assistants give the plugin's tools — **and writes to its own generated files** (`.buddy-council/` config and progress log). Saving a key always asks first. No action is needed.
 
-Because MCP tool naming in Copilot's hooks varies by version, MCP reads may still prompt there. Print a ready-to-paste `--allow-tool` launch recipe covering the MCP read tools that were just configured, and tell the user it's only needed if prompts appear (writes like Jira creation still prompt by design):
+If reads still prompt (an older Copilot version without plugin hooks), print a ready-to-paste `--allow-tool` launch recipe covering the connectors' read tools, and tell the user it's only needed if prompts appear (writes like Jira creation still prompt by design):
 
 - Always include the TestRail read tools:
   `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates),testrail(testrail_get_requirement_ids),testrail(testrail_get_linked_cases),testrail(testrail_get_canonical_cases)` — deliberately **not** `testrail(testrail_add_case)`, `testrail(testrail_add_cases)`, `testrail(testrail_add_section)`, `testrail(testrail_update_case)`, or `testrail(testrail_update_cases)`, which must keep prompting
 - If Jira was configured, also add the Atlassian read tools: `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)` — deliberately **none** of `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, or `jira_add_issues_to_sprint`, which must keep prompting
-- If GitHub enrichment uses the `mcp` strategy, also add: `github(get_file_contents)`
+- If GitHub enrichment uses the `mcp` strategy, also add the assistant's GitHub server's file read — `github-mcp-server(get_file_contents)` for Copilot's built-in one
 - Also add the Jama tools: `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — that is every tool the server has, because it has no write tools
 - If automation was set up, also add appium-mcp's read tools: `appium(appium_mobile_device_info),appium(appium_find_element),appium(appium_find_elements),appium(appium_get_text),appium(appium_get_element_attribute),appium(appium_get_active_element),appium(appium_get_window_size),appium(generate_locators),appium(appium_get_page_source),appium(appium_screenshot)` — deliberately **none** of `appium_session_management`, `appium_gesture`, `appium_set_value`, `appium_app_lifecycle`, or anything else that taps, types, opens a session, or launches an app, which must keep prompting
 
@@ -1235,21 +1034,18 @@ Present it as a single command, e.g.:
 copilot --allow-tool='<comma-separated list from above>'
 ```
 
-If the user's Copilot version predates plugin hooks, tell them to also append the entries the hooks would otherwise cover — `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json),write(<plugin_root>/.mcp.json)` (substitute the real `<plugin_root>` recorded in config) — and to choose **"always allow"** when the TestRail connection test first prompts. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
+If the user's Copilot version predates plugin hooks, tell them to also append the entries the hooks would otherwise cover — `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/onboarding-progress.json)` — and to choose **"always allow"** when a connection test first prompts. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
 
 ## Important
 
 - NEVER write credentials into `.buddy-council/sources.json` — that file is user-specific and contains no secrets
-- ALWAYS write credentials ONLY to `~/.buddy-council/secrets.json` — it is the single source of truth. `.mcp.json` gets non-secret env (`*_BASE_URL`) plus `BC_SECRETS_FILE`, never tokens (the external GitHub MCP server is the sole exception)
-- `.mcp.json` is gitignored; under this design it carries no secrets (except the GitHub MCP token)
-- If `~/.buddy-council/secrets.json` already exists, merge new entries without overwriting existing ones
-- If `.mcp.json` already exists, merge new server configs without overwriting other servers
+- Keys go only into their site's file in `~/.buddy-council/keys/`, written with the file tool as in *Saving a key* — never into a command line, `sources.json`, or any assistant's settings, and never echoed back to the user. One key per site, and a key is only ever sent to the site it was saved for
+- Setup writes no connector settings for any assistant: the connectors ship inside the plugin (4c)
 - Step 3 (Jira) is **required** — never offer to skip it. When the connection test fails, record the answers with `"pending": true` and finish the wizard; do not abandon the run and do not omit the `jira` block
-- ALWAYS test the Jira connection in 3a-bis, by MCP tool if live and by `curl` otherwise. A `pending: true` written without an attempted call is a bug, not a safe default
-- The Jira credential goes in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `secrets.json`, not in either MCP config, never echoed back to the user
+- ALWAYS test the Jira connection in 3a-bis, with `jira_get_user_profile` and `site`. A `pending: true` written without an attempted call is a bug, not a safe default
 - A V&V board **may** share a project with the dev board. Refuse only a duplicate board *id*, and record a `discriminator` when the projects match
-- Jama is read **only** through the plugin's read-only `jama` server. Its credential goes in the `jama` section of `~/.buddy-council/secrets.json` (`chmod 600`) and nowhere else; `JAMA_BASE_URL` is the only Jama value in either MCP config. The one direct call setup makes is the server's own `--check` mode, before the server is registered
+- Jama is read **only** through the plugin's read-only `jama` connector. Its credential is the site's key and nowhere else — the connector never reads one from the environment. The one direct call setup may make is the server's own `--check --site` mode, when the Jama tools aren't available in the assistant
 - Never register Jama's hosted MCP server (Jama Connect MCP via `mcp-remote`) in place of the vendored one: it exposes write tools and no bulk reads
 - Automation adds **no question** of its own: it is detected, planned, and shown in the Step 4 recap, and the one save confirmation covers it. Never install anything the recap didn't list, and pass `--shared` only for what it named
-- bc's automation tools live only in `~/.buddy-council/tools`: never on PATH, never shared, and setup never edits a shell profile, `JAVA_HOME`, or `ANDROID_HOME`, and never replaces a working tool the Mac already has. Only `bc_tools.py` writes the `appium` MCP entry and the `automation` block
+- bc's automation tools live only in `~/.buddy-council/tools`: never on PATH, never shared, and setup never edits a shell profile, `JAVA_HOME`, or `ANDROID_HOME`, and never replaces a working tool the Mac already has. Only `bc_tools.py` writes the record the `appium` connector starts appium-mcp from, and the `automation` block
 - What only a person can do — `sudo`, the App Store, signing, the phone — is passed on in the recap and the result lines, never attempted

@@ -15,7 +15,7 @@ below:
 ## Input
 
 - `stories`: dev stories to clone, canonical schema, with their parity records from `check-platform-parity`.
-- Config: `jira.vnv_board.{id, project_key, discriminator}`, `jira.default_issue_type`, `jira.base_url`.
+- Config: `jira.vnv_board.{id, project_key, discriminator}`, `jira.default_issue_type`, `jira.base_url`. Every Jira call below passes `site`: `jira.base_url` from `.buddy-council/sources.json` (ADR 0008).
 - `apply`: boolean. When false, produce the plan and create nothing.
 
 ## Step 1: Duplicate guard (always, before any create)

@@ -11,96 +11,61 @@ The one local side effect of a read tool: with `save_to`,
 `testrail_get_canonical_cases` writes its result to a JSON file directly inside an
 existing `<project>/.buddy-council/runs/<run>/` folder, so a run's data reaches the
 analysis as a file instead of passing through a model. Nothing else is written.
+
+Every tool takes `site`: the TestRail site to use, as its address or host. Keys come
+from the plugin's key store, one file per site in ~/.buddy-council/keys/ (ADR 0008,
+scripts/bc_keys.py), looked up on every call so a key works the moment it is saved.
+Each site gets its own HTTP client, built from that site's key and pointed at the
+address saved with it, so a key only ever reaches the site it was saved for. A call
+without `site` uses this computer's only TestRail key.
 """
 
 import asyncio
 import contextlib
+import contextvars
 import html
+import importlib.util
 import os
 import re
-import sys
 import json
 import tempfile
 import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 # ---------------------------------------------------------------------------
-# Configuration — env vars take precedence, then the buddy-council secrets file
+# Sites — each call names one; its key comes from the plugin's key store
 # ---------------------------------------------------------------------------
 
 
-def _secrets_candidates() -> list[str]:
-    """Secrets-file paths to try, in priority order."""
-    candidates = []
-    env_path = os.environ.get("BC_SECRETS_FILE")
-    if env_path:
-        candidates.append(os.path.expanduser(env_path))
-    candidates.append(os.path.expanduser("~/.buddy-council/secrets.json"))  # unified location
-    candidates.append(os.path.expanduser("~/.buddy-council-secrets.json"))  # legacy flat file
-    return candidates
+def _key_store():
+    """scripts/bc_keys.py, imported by path from the plugin root this server ships in."""
+    path = Path(__file__).resolve().parents[2] / "scripts" / "bc_keys.py"
+    spec = importlib.util.spec_from_file_location("bc_keys", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def _load_secrets(section: str) -> dict[str, Any]:
-    """Load one section from the first readable buddy-council secrets file.
+bc_keys = _key_store()
 
-    Checks BC_SECRETS_FILE, then ~/.buddy-council/secrets.json, then the legacy
-    ~/.buddy-council-secrets.json. Returns {} if none is readable, so the env-var
-    path and the missing-values check below still apply (fail safe).
-    """
-    for path in _secrets_candidates():
-        if not os.path.exists(path):
-            continue
-        try:
-            if (os.stat(path).st_mode & 0o077) != 0:
-                print(
-                    f"WARNING: {path} is group/world-accessible; run `chmod 600` on it.",
-                    file=sys.stderr,
-                )
-            with open(path) as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, PermissionError, OSError):
-            continue
-        section_data = data.get(section, {}) if isinstance(data, dict) else {}
-        return section_data if isinstance(section_data, dict) else {}
-    return {}
-
-
-_secrets = _load_secrets("testrail")
-
-BASE_URL = (os.environ.get("TESTRAIL_BASE_URL") or _secrets.get("base_url", "")).rstrip("/")
-USERNAME = os.environ.get("TESTRAIL_USERNAME") or _secrets.get("username", "")
-API_KEY = os.environ.get("TESTRAIL_API_KEY") or _secrets.get("api_key", "")
-
-if not all([BASE_URL, USERNAME, API_KEY]):
-    missing = [
-        name
-        for name, val in [
-            ("TESTRAIL_BASE_URL", BASE_URL),
-            ("TESTRAIL_USERNAME", USERNAME),
-            ("TESTRAIL_API_KEY", API_KEY),
-        ]
-        if not val
-    ]
-    print(
-        f"ERROR: Missing required TestRail config: {', '.join(missing)}. "
-        "Provide credentials in ~/.buddy-council/secrets.json (or BC_SECRETS_FILE) "
-        "and non-secret values like TESTRAIL_BASE_URL in the .mcp.json env block. "
-        "Run /bc:setup to configure.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+Site = Annotated[
+    str | None,
+    Field(
+        description="The TestRail site to use: its address or host, e.g. https://acme.testrail.io — the project's "
+        "test_cases.base_url. Leave it out only when this computer has one TestRail site."
+    ),
+]
 
 # ---------------------------------------------------------------------------
 # HTTP client
 # ---------------------------------------------------------------------------
-
-_API_BASE = f"{BASE_URL}/index.php?/api/v2/"
 
 _PAGE_LIMIT = 250  # TestRail's maximum page size on get_* endpoints
 _RATE_LIMIT_STATUS = 429
@@ -110,15 +75,83 @@ _MAX_NETWORK_RETRIES = 2  # reads only: a POST that timed out may still have bee
 _MAX_ERROR_CHARS = 500
 _SECTION_PATH_SEPARATOR = "/"
 
-_client = httpx.AsyncClient(
-    auth=(USERNAME, API_KEY),
-    headers={"Content-Type": "application/json"},
-    timeout=30.0,
-)
-
 
 class TestRailError(RuntimeError):
     """A TestRail API call failed. The message carries TestRail's own error text."""
+
+
+def _new_client(key: dict[str, Any]) -> httpx.AsyncClient:
+    """An HTTP client carrying one site's key. Redirects are not followed, so the key never leaves its site."""
+    return httpx.AsyncClient(
+        auth=(key["username"], key["api_key"]),
+        headers={"Content-Type": "application/json"},
+        timeout=30.0,
+        follow_redirects=False,
+        transport=_TRANSPORT,
+    )
+
+
+_TRANSPORT: httpx.AsyncBaseTransport | None = None  # tests put a fake TestRail here; None is the network
+
+
+class _Site:
+    """One TestRail site: its key, a client that only talks to the key's own address, and what was read there."""
+
+    def __init__(self, key: dict[str, Any]):
+        self.key = key
+        self.id = key["site"]
+        self.url = key["url"]
+        self.api_base = f"{self.url}/index.php?/api/v2/"
+        self.client = _new_client(key)
+        self.index: dict[tuple[int, int | None, str], _LinkIndex] = {}
+        self.meta: dict[Any, tuple[float, Any]] = {}  # field definitions, priorities, case types
+
+
+_SITES: dict[str, _Site] = {}
+_CURRENT: contextvars.ContextVar[_Site] = contextvars.ContextVar("testrail_site")
+
+
+def _key(site: str | None) -> dict[str, Any]:
+    try:
+        return bc_keys.read_key(site, "testrail")
+    except bc_keys.KeyStoreError as exc:
+        raise TestRailError(str(exc)) from None
+
+
+def _adopt(key: dict[str, Any]) -> _Site:
+    """The site for this key, rebuilt when its saved key changed since it was last used."""
+    current = _SITES.get(key["site"])
+    if current is None or current.key != key:
+        current = _SITES[key["site"]] = _Site(key)
+    _CURRENT.set(current)
+    return current
+
+
+def _use(site: str | None) -> _Site:
+    """Select the call's site. The key is looked up on every call, so a key saved a moment ago is used."""
+    return _adopt(_key(site))
+
+
+def _site() -> _Site:
+    try:
+        return _CURRENT.get()
+    except LookupError:
+        raise TestRailError("No TestRail site was selected for this call.") from None
+
+
+def _reloaded(site: _Site) -> _Site | None:
+    """After a 401: the same site with its key read again, or None when that key is unchanged or gone.
+
+    Only the site the request was for counts: a lookup that now lands on another saved site (its key was forgotten,
+    and another site's address covers it) never gets the request.
+    """
+    try:
+        key = bc_keys.read_key(site.url, "testrail")
+    except bc_keys.KeyStoreError:
+        return None
+    if key["site"] != site.id or key == site.key:
+        return None
+    return _adopt(key)
 
 
 def _error_message(response: httpx.Response) -> str:
@@ -154,32 +187,52 @@ async def _request(
 
     Retries on 429 (TestRail Cloud's rate limit), honouring Retry-After, and retries
     a GET that hit a network error or timeout — never a POST, which may already have
-    been applied. Raises TestRailError carrying the server's own message on any other
-    4xx/5xx, because "HTTP 400" alone is useless when the real cause is a required
-    custom field.
+    been applied. After a 401 it reads the site's key again, once: a key replaced since
+    the call began is used straight away. Raises TestRailError carrying the server's own
+    message on any other 4xx/5xx, because "HTTP 400" alone is useless when the real
+    cause is a required custom field.
     """
-    url = f"{_API_BASE}{endpoint}"
+    site = _site()
+    target = endpoint
     if params:
         query = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
         if query:
-            url = f"{url}&{query}"
+            target = f"{target}&{query}"
 
     network_retries = 0
+    reloaded = False
     attempt = -1
     while attempt < _MAX_RATE_LIMIT_RETRIES:
         attempt += 1
         try:
-            response = await _client.request(method, url, json=payload)
+            response = await site.client.request(method, f"{site.api_base}{target}", json=payload)
         except httpx.TransportError as exc:
             if method == "GET" and network_retries < _MAX_NETWORK_RETRIES:
                 network_retries += 1
                 attempt -= 1  # a network retry does not use up a rate-limit retry
                 await asyncio.sleep(float(network_retries))
                 continue
-            raise TestRailError(f"{method} {endpoint} → could not reach TestRail ({type(exc).__name__}: {exc})") from None
+            raise TestRailError(f"{method} {endpoint} → could not reach TestRail at {site.id} ({type(exc).__name__}: {exc})") from None
         if response.status_code == _RATE_LIMIT_STATUS and attempt < _MAX_RATE_LIMIT_RETRIES:
             await asyncio.sleep(_retry_after_seconds(response))
             continue
+        if response.status_code == 401 and not reloaded:
+            reloaded = True
+            fresh = _reloaded(site)
+            if fresh is not None:  # a rejected request changed nothing, so it is safe to send again
+                site = fresh
+                attempt -= 1
+                continue
+        if response.status_code == 401:
+            raise TestRailError(
+                f"{method} {endpoint} → HTTP 401: {site.id} no longer accepts the key saved for it "
+                f"({_error_message(response)}). Run /bc:setup to save a new one."
+            )
+        if 300 <= response.status_code < 400:
+            raise TestRailError(
+                f"{method} {endpoint} → HTTP {response.status_code}: {site.id} redirected to "
+                f"{response.headers.get('location', '?')}, which is not followed — check the address saved for it."
+            )
         if response.status_code >= 400:
             raise TestRailError(
                 f"{method} {endpoint} → HTTP {response.status_code}: {_error_message(response)}"
@@ -199,9 +252,9 @@ async def _get(endpoint: str, params: dict[str, Any] | None = None) -> Any:
 
 
 async def _post(endpoint: str, payload: dict[str, Any]) -> Any:
-    """POST JSON to a TestRail endpoint and return parsed JSON. Every write clears the link index."""
+    """POST JSON to a TestRail endpoint and return parsed JSON. Every write clears the site's link index."""
     result = await _request("POST", endpoint, payload=payload)
-    _INDEX.clear()
+    _site().index.clear()
     return result
 
 
@@ -570,9 +623,6 @@ class _LinkIndex:
     section_paths: dict[int, str]
 
 
-_INDEX: dict[tuple[int, int | None, str], _LinkIndex] = {}
-
-
 async def _link_index(project_id: int, suite_id: int | None, field: str, refresh: bool = False) -> _LinkIndex:
     """Every case in the suite with the requirement IDs its requirement field holds, cached.
 
@@ -580,7 +630,7 @@ async def _link_index(project_id: int, suite_id: int | None, field: str, refresh
     Any case or folder write through this server clears the cache.
     """
     key = (project_id, suite_id, field)
-    cached = _INDEX.get(key)
+    cached = _site().index.get(key)
     if cached and not refresh and time.monotonic() - cached.loaded_at < _INDEX_TTL_SECONDS:
         return cached
     cases = await _get_paged(f"get_cases/{project_id}", {"suite_id": suite_id}, "cases")
@@ -591,7 +641,7 @@ async def _link_index(project_id: int, suite_id: int | None, field: str, refresh
         ids_by_case={case["id"]: _tokens(case.get(field)) for case in cases if case.get("id") is not None},
         section_paths={s["id"]: _section_path(sections, s) for s in sections if s.get("id") is not None},
     )
-    _INDEX[key] = index
+    _site().index[key] = index
     return index
 
 
@@ -629,7 +679,6 @@ _DROPDOWN, _CHECKBOX, _INTEGER, _MULTI_SELECT = 6, 5, 2, 12
 _TAG = re.compile(r"<[^>]+>")
 _BREAK_TAG = re.compile(r"<\s*(br|/p|/li|/div|/h[1-6]|/tr)\s*/?>", re.IGNORECASE)
 _BLANK_RUN = re.compile(r"\n{3,}")
-_META_CACHE: dict[Any, tuple[float, Any]] = {}  # field definitions, priorities, case types — configuration, not cases
 
 
 def _clean(value: Any) -> str:
@@ -643,11 +692,12 @@ def _clean(value: Any) -> str:
 
 
 async def _cached_meta(key: Any, load: Any) -> Any:
-    cached = _META_CACHE.get(key)
+    meta = _site().meta  # configuration, not cases: field definitions, priorities, case types
+    cached = meta.get(key)
     if cached and time.monotonic() - cached[0] < _INDEX_TTL_SECONDS:
         return cached[1]
     value = await load()
-    _META_CACHE[key] = (time.monotonic(), value)
+    meta[key] = (time.monotonic(), value)
     return value
 
 
@@ -768,7 +818,7 @@ def _canonical_case(
         "type": case_types.get(case.get("type_id"), case.get("type_id")),
         "template_id": case.get("template_id"),
         "updated_on": case.get("updated_on"),
-        "url": f"{BASE_URL}/index.php?/cases/view/{case_id}" if case_id else None,
+        "url": f"{_site().url}/index.php?/cases/view/{case_id}" if case_id else None,
     }
     if include_steps:
         raw["steps"] = _case_steps(case)
@@ -884,19 +934,20 @@ mcp = FastMCP("testrail")
 
 
 @mcp.tool(structured_output=False)
-async def testrail_get_projects() -> str:
+async def testrail_get_projects(site: Site = None) -> str:
     """List all projects in the TestRail instance.
 
     Returns a JSON array of projects with id, name, announcement, and is_completed fields.
     Used during setup to let the user pick which project to analyze.
     """
+    _use(site)
     data = await _get("get_projects")
     projects = data.get("projects", data) if isinstance(data, dict) else data
     return json.dumps(projects, indent=2)
 
 
 @mcp.tool(structured_output=False)
-async def testrail_get_suites(project_id: int) -> str:
+async def testrail_get_suites(project_id: int, site: Site = None) -> str:
     """List all test suites for a given project.
 
     Args:
@@ -904,13 +955,14 @@ async def testrail_get_suites(project_id: int) -> str:
 
     Returns a JSON array of suites with id, name, and description fields.
     """
+    _use(site)
     data = await _get(f"get_suites/{project_id}")
     return json.dumps(data, indent=2)
 
 
 @mcp.tool(structured_output=False)
 async def testrail_get_sections(
-    project_id: int, suite_id: int | None = None
+    project_id: int, suite_id: int | None = None, site: Site = None
 ) -> str:
     """List all sections (folders) for a given project/suite.
 
@@ -922,6 +974,7 @@ async def testrail_get_sections(
     derived `path` field ("Login/Negative cases") that testrail_add_cases accepts
     as section_path.
     """
+    _use(site)
     sections = await _get_paged(f"get_sections/{project_id}", {"suite_id": suite_id}, "sections")
     enriched = [{**s, "path": _section_path(sections, s)} for s in sections]
     return json.dumps(enriched, indent=2)
@@ -934,6 +987,7 @@ async def testrail_get_cases(
     section_id: int | None = None,
     limit: int = 250,
     offset: int = 0,
+    site: Site = None,
 ) -> str:
     """Fetch test cases for a project with pagination.
 
@@ -952,6 +1006,7 @@ async def testrail_get_cases(
 
     To paginate: if size == limit, call again with offset += limit.
     """
+    _use(site)
     params: dict[str, Any] = {"limit": limit, "offset": offset}
     if suite_id is not None:
         params["suite_id"] = suite_id
@@ -966,6 +1021,7 @@ async def testrail_get_cases_by_refs(
     project_id: int,
     refs: str,
     suite_id: int | None = None,
+    site: Site = None,
 ) -> str:
     """Fetch test cases that reference specific requirement IDs.
 
@@ -982,6 +1038,7 @@ async def testrail_get_cases_by_refs(
     Note: TestRail's refs filter searches the built-in "References" field.
     For custom fields like custom_jama_req_id, use testrail_get_cases with section_id filtering instead.
     """
+    _use(site)
     params: dict[str, Any] = {"refs": refs}
     if suite_id is not None:
         params["suite_id"] = suite_id
@@ -990,7 +1047,7 @@ async def testrail_get_cases_by_refs(
 
 
 @mcp.tool(structured_output=False)
-async def testrail_get_case(case_id: int) -> str:
+async def testrail_get_case(case_id: int, site: Site = None) -> str:
     """Fetch a single test case by its ID.
 
     Args:
@@ -998,12 +1055,13 @@ async def testrail_get_case(case_id: int) -> str:
 
     Returns the full test case object with all fields including custom fields.
     """
+    _use(site)
     data = await _get(f"get_case/{case_id}")
     return json.dumps(data, indent=2)
 
 
 @mcp.tool(structured_output=False)
-async def testrail_get_case_fields() -> str:
+async def testrail_get_case_fields(site: Site = None) -> str:
     """List every case field defined on this TestRail instance, including custom ones.
 
     Call this before creating cases against an unfamiliar instance: it is the only
@@ -1014,34 +1072,37 @@ async def testrail_get_case_fields() -> str:
     Returns a JSON array of field objects with system_name, label, type_id, and
     per-project configs carrying is_required and options.
     """
+    _use(site)
     data = await _get("get_case_fields")
     return json.dumps(data, indent=2)
 
 
 @mcp.tool(structured_output=False)
-async def testrail_get_case_types() -> str:
+async def testrail_get_case_types(site: Site = None) -> str:
     """List the available case types (Functional, Regression, Smoke, ...).
 
     Returns a JSON array of {id, name, is_default}. Use the id as type_id when
     creating a case — TestRail takes ids, not names.
     """
+    _use(site)
     data = await _get("get_case_types")
     return json.dumps(data, indent=2)
 
 
 @mcp.tool(structured_output=False)
-async def testrail_get_priorities() -> str:
+async def testrail_get_priorities(site: Site = None) -> str:
     """List the available case priorities (Low, Medium, High, Critical, ...).
 
     Returns a JSON array of {id, name, short_name, priority, is_default}. Use the
     id as priority_id when creating a case.
     """
+    _use(site)
     data = await _get("get_priorities")
     return json.dumps(data, indent=2)
 
 
 @mcp.tool(structured_output=False)
-async def testrail_get_templates(project_id: int) -> str:
+async def testrail_get_templates(project_id: int, site: Site = None) -> str:
     """List the case templates available in a project.
 
     Args:
@@ -1051,6 +1112,7 @@ async def testrail_get_templates(project_id: int) -> str:
     fields a case shows — "Test Case (Steps)" enables custom_steps_separated,
     while "Test Case (Text)" uses custom_steps and custom_expected instead.
     """
+    _use(site)
     data = await _get(f"get_templates/{project_id}")
     return json.dumps(data, indent=2)
 
@@ -1062,6 +1124,7 @@ async def testrail_get_requirement_ids(
     suite_id: int | None = None,
     sample_size: int = _DEFAULT_ID_SAMPLE,
     refresh: bool = False,
+    site: Site = None,
 ) -> str:
     """Summarize which requirement IDs a suite's cases link to through the requirement field.
 
@@ -1082,6 +1145,7 @@ async def testrail_get_requirement_ids(
     "cases_with_ids", "distinct_ids", "prefixes": {prefix: count}, "sample": [...],
     "warnings"}.
     """
+    _use(site)
     field = _custom_key(requirement_field)
     index = await _link_index(project_id, suite_id, field, refresh)
     distinct: dict[str, str] = {}
@@ -1122,6 +1186,7 @@ async def testrail_get_linked_cases(
     unlinked: bool = False,
     offset: int = 0,
     refresh: bool = False,
+    site: Site = None,
 ) -> str:
     """Find the cases linked to given requirement IDs through the requirement field, and where they sit.
 
@@ -1151,6 +1216,7 @@ async def testrail_get_linked_cases(
     "by_requirement": {id: [case ids]}, "unlinked_ids": [...], "cases": [...],
     "offset", "next_offset"}.
     """
+    _use(site)
     field = _custom_key(requirement_field)
     wanted: dict[str, str] = {}
     for raw in [] if unlinked else requirement_ids or []:
@@ -1216,6 +1282,7 @@ async def testrail_get_canonical_cases(
     offset: int = 0,
     refresh: bool = False,
     save_to: str = "",
+    site: Site = None,
 ) -> str:
     """Fetch test cases in the plugin's canonical schema — slim, with their requirement links. Read-only.
 
@@ -1257,6 +1324,7 @@ async def testrail_get_canonical_cases(
     "matched", "offset", "next_offset", "test_cases", "unlinked_ids", "summary",
     "warnings"} — with save_to, "saved_to" and "bytes" in place of test_cases and paging.
     """
+    _use(site)
     if save_to:
         _run_file_path(save_to)  # a bad path fails before TestRail is read
         offset = 0
@@ -1311,6 +1379,7 @@ async def testrail_get_canonical_cases(
             {
                 "kind": "test_cases",
                 "source": "testrail",
+                "site": _site().id,
                 "written_at": _utc_now(),
                 "project_id": project_id,
                 "suite_id": suite_id,
@@ -1379,6 +1448,7 @@ async def testrail_add_section(
     suite_id: int | None = None,
     parent_id: int | None = None,
     description: str | None = None,
+    site: Site = None,
 ) -> str:
     """Create a section (folder) in a test suite. WRITES to TestRail.
 
@@ -1393,6 +1463,7 @@ async def testrail_add_section(
     testrail_add_cases with create_missing_sections — it creates the whole
     chain of folders in one call and reports what it made.
     """
+    _use(site)
     payload: dict[str, Any] = {"name": name}
     if suite_id is not None:
         payload["suite_id"] = suite_id
@@ -1424,6 +1495,7 @@ async def testrail_add_case(
     steps_separated: list[dict[str, Any]] | None = None,
     custom_fields: dict[str, Any] | None = None,
     skip_if_title_exists: bool = True,
+    site: Site = None,
 ) -> str:
     """Create ONE test case in a suite folder. WRITES to TestRail.
 
@@ -1454,6 +1526,7 @@ async def testrail_add_case(
     Returns JSON: {"created": [...], "skipped": [...], "failed": [...], "section": {...}}
     — the same shape as testrail_add_cases, with at most one entry.
     """
+    _use(site)
     spec: dict[str, Any] = {
         "title": title,
         "template_id": template_id,
@@ -1477,6 +1550,7 @@ async def testrail_add_case(
         create_missing_sections=create_missing_sections,
         skip_if_title_exists=skip_if_title_exists,
         dry_run=False,
+        site=site,
     )
 
 
@@ -1490,6 +1564,7 @@ async def testrail_add_cases(
     create_missing_sections: bool = True,
     skip_if_title_exists: bool = True,
     dry_run: bool = False,
+    site: Site = None,
 ) -> str:
     """Create one or more test cases in suite folders. WRITES to TestRail.
 
@@ -1530,6 +1605,7 @@ async def testrail_add_cases(
     Always surface `failed` to the user — a silently dropped case is a test that
     never gets written.
     """
+    _use(site)
     if not cases:
         return json.dumps({"error": "No cases supplied — `cases` is empty."}, indent=2)
 
@@ -1620,7 +1696,7 @@ async def testrail_add_cases(
                 "title": result.get("title", payload["title"]),
                 "section_id": dest_id,
                 "section_path": dest_path,
-                "url": f"{BASE_URL}/index.php?/cases/view/{case_id}" if case_id else None,
+                "url": f"{_site().url}/index.php?/cases/view/{case_id}" if case_id else None,
                 "updated_on": result.get("updated_on"),
             }
         )
@@ -1656,6 +1732,7 @@ async def testrail_update_case(
     expected_updated_on: int | None = None,
     allow_unlink: bool = False,
     dry_run: bool = False,
+    site: Site = None,
 ) -> str:
     """Update ONE existing test case, changing only the fields you pass. WRITES to TestRail.
 
@@ -1675,6 +1752,7 @@ async def testrail_update_case(
         allow_unlink: set only when the user explicitly asked to remove a requirement link.
         dry_run: diff against the live case and report what would change, writing nothing.
     """
+    _use(site)
     spec: dict[str, Any] = {
         "title": title,
         "type_id": type_id,
@@ -1694,7 +1772,7 @@ async def testrail_update_case(
         entry["expected_updated_on"] = expected_updated_on
     if allow_unlink:
         entry["allow_unlink"] = True
-    return await testrail_update_cases(cases=[entry], requirement_field=requirement_field, dry_run=dry_run)
+    return await testrail_update_cases(cases=[entry], requirement_field=requirement_field, dry_run=dry_run, site=site)
 
 
 @mcp.tool(structured_output=False)
@@ -1703,6 +1781,7 @@ async def testrail_update_cases(
     requirement_field: str | None = None,
     dry_run: bool = False,
     stop_on_dropped_field: bool = True,
+    site: Site = None,
 ) -> str:
     """Update existing test cases, each with its own changes. WRITES to TestRail.
 
@@ -1753,6 +1832,7 @@ async def testrail_update_cases(
     `changes[*].before` is the value each field had — what to send back to undo.
     Always surface blocked, failed, dropped_fields, and not_attempted to the user.
     """
+    _use(site)
     if not cases:
         return json.dumps({"error": "No cases supplied — `cases` is empty."}, indent=2)
 
@@ -1803,7 +1883,7 @@ async def testrail_update_cases(
             "index": index,
             "case_id": case_id,
             "title": current.get("title"),
-            "url": f"{BASE_URL}/index.php?/cases/view/{case_id}",
+            "url": f"{_site().url}/index.php?/cases/view/{case_id}",
         }
 
         expected_on = spec.get("expected_updated_on")

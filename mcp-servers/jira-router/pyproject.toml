@@ -1,0 +1,16 @@
+[project]
+name = "jira-router-mcp-server"
+version = "0.1.0"
+description = "The plugin's atlassian connector: routes each Jira call to an mcp-atlassian copy for its site"
+requires-python = ">=3.10"
+dependencies = [
+    "anyio>=4.5,<5",
+    "mcp>=1.27.0,<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

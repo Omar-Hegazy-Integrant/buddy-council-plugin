@@ -206,7 +206,7 @@ The demo and assessment how-tos handle most of these; the agent honors `pause` a
 | Situation | Behavior |
 |-----------|----------|
 | Config is missing | Direct user to `/bc:setup` |
-| MCP tools are unavailable | Tell user to check `.mcp.json` and restart Claude Code |
+| MCP tools are unavailable | The plugin's connectors didn't start — usually `uv` is missing (README → *Troubleshooting*); restart the assistant after installing it |
 | Provider fetch fails | Report the error clearly and offer to pause (log already saved) |
 | Progress log is corrupted | Per `manage-progress-log`: do not delete; offer archive-and-restart or manual repair |
 | User runs `resume` but no log exists | Offer to start a new journey |

@@ -1,0 +1,61 @@
+#!/bin/sh
+# bc-mcp testrail|jama|atlassian|appium — starts one of the plugin's connectors (stdio MCP servers).
+#
+# Every assistant starts the connectors from the plugin's own manifests: mcp.json runs `sh ./scripts/bc-mcp <name>`
+# from the plugin root, and .claude-plugin/plugin.json runs it by ${CLAUDE_PLUGIN_ROOT}. An assistant opened from
+# the Dock gets launchd's PATH, which has neither ~/.local/bin nor /opt/homebrew/bin, so this finds uv itself, then
+# replaces itself with the connector. stdout is the MCP stream: a problem is one line on stderr, nothing else.
+
+name=${1:-}
+
+fail() {
+  printf 'bc-mcp: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+# The plugin root: the one the assistant names, when it holds this script, else the folder above this script.
+root=
+for candidate in "${PLUGIN_ROOT:-}" "${CLAUDE_PLUGIN_ROOT:-}" "${CURSOR_PLUGIN_ROOT:-}"; do
+  if [ -n "$candidate" ] && [ -f "$candidate/scripts/bc-mcp" ] && [ -d "$candidate/mcp-servers" ]; then
+    root=$candidate
+    break
+  fi
+done
+if [ -z "$root" ]; then
+  root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd -P) || fail "can't find the plugin folder"
+fi
+
+# uv: on PATH, else where its installers put it. BC_UV_DIRS replaces the fallback folders (colon-separated).
+find_uv() {
+  found=$(command -v uv 2>/dev/null)
+  case $found in
+    /*) [ -x "$found" ] && { printf '%s\n' "$found"; return 0; } ;;
+  esac
+  rest=${BC_UV_DIRS-${HOME:-}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.cargo/bin}:
+  while [ -n "$rest" ]; do
+    dir=${rest%%:*}
+    rest=${rest#*:}
+    if [ -n "$dir" ] && [ -x "$dir/uv" ] && [ ! -d "$dir/uv" ]; then
+      printf '%s\n' "$dir/uv"
+      return 0
+    fi
+  done
+  return 1
+}
+
+case $name in
+  testrail) project=testrail-server ;;
+  jama) project=jama-server ;;
+  atlassian) project=jira-router ;;
+  appium) project= ;;
+  *) fail "usage: bc-mcp testrail|jama|atlassian|appium" 64 ;;
+esac
+
+uv=$(find_uv) || fail "the $name connector needs uv, which isn't on PATH or in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin or ~/.cargo/bin — install it (https://docs.astral.sh/uv/getting-started/installation/), then restart your assistant" 127
+BC_UV=$uv
+export BC_UV
+
+if [ -n "$project" ]; then
+  exec "$uv" run --quiet --frozen --directory "$root/mcp-servers/$project" python server.py
+fi
+exec "$uv" run --quiet --no-project python "$root/scripts/bc_tools.py" serve

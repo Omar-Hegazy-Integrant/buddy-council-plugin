@@ -31,4 +31,4 @@ Fetch test cases from the configured source. This how-to reads the user's config
 
 - If `.buddy-council/sources.json` does not exist → tell the user to run `/bc:setup` first
 - If the configured provider file does not exist → report which provider was expected and that it's not yet implemented
-- If MCP tools specified by the provider are not available → tell the user to check `.mcp.json` and restart Claude Code
+- If MCP tools specified by the provider are not available → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it

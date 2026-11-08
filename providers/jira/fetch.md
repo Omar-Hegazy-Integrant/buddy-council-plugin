@@ -1,40 +1,39 @@
 # Jira Issues Fetch — Provider Guide
 
-Fetch Jira issues using the **`mcp-atlassian`** MCP server (`atlassian`).
+Fetch Jira issues using the plugin's **`atlassian`** connector, which runs [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian).
 
 ## Prerequisites
 
-The `atlassian` server is [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian), launched with `uvx`
-as a local stdio process and pinned to `mcp-atlassian@0.23.1`. It supports **Atlassian Cloud and Jira
-Server/Data Center** alike, and `/bc:setup` writes its entry into both runtime configs:
+The `atlassian` connector ships inside the plugin and starts with the assistant — nothing to register. It serves
+mcp-atlassian's `jira_*` tools (pinned to `mcp-atlassian@0.23.1`) and hands each call to a copy of mcp-atlassian
+for that call's site, started from the site's key. It never talks to Jira itself. It supports **Atlassian Cloud
+and Jira Server/Data Center** alike. Claude Code shows its tools as `mcp__plugin_bc_atlassian__jira_*`, Copilot
+CLI as `atlassian-jira_*`.
 
-- **Claude Code** reads the project `.mcp.json`.
-- **Copilot CLI** reads `~/.copilot/mcp-config.json`.
-
-Credentials live in `~/.buddy-council/atlassian.env` (`chmod 600`), passed to the server with `--env-file`.
-The plugin never reads that file itself — it is the server's own configuration.
-
-Check availability by looking for tools named `mcp__atlassian__jira_*` under Claude Code (e.g.
-`mcp__atlassian__jira_get_issue`) or `jira_*` under Copilot CLI.
+**Every call passes `site`: `jira.base_url` from `.buddy-council/sources.json`.** Keys belong to sites, one per
+site (ADR 0008), so a token only ever reaches the site it was saved for. A call without `site` uses this
+computer's only Jira key — that is what keeps everyday Jira use outside the plugin's commands working — and fails
+when it has several, so commands always pass it.
 
 If the MCP tools are NOT available:
 
-- Tell the user to restart the runtime — the server is registered in config but only loads at startup. The
-  first launch also downloads the package through `uvx`, which takes a few seconds.
-- If the server is present but every call fails, the cause is almost always in `atlassian.env`: a wrong or
-  expired token, a `JIRA_USERNAME` set alongside a Server/DC PAT (which forces basic auth), or a `JIRA_URL`
-  the machine cannot reach without a corporate VPN.
-- Do NOT fall back to curl for data fetches — the MCP server is the required data access method. (`/bc:setup`
-  uses curl once, deliberately, to test the credential before the server is registered.)
+- The plugin's connectors didn't start — almost always because `uv` isn't installed. Point the user to the
+  README's *Troubleshooting*, then a restart of the assistant.
+- A site's first call downloads mcp-atlassian through `uv`, which can take half a minute; when the call answers
+  that mcp-atlassian is still starting, call again with the same arguments.
+- If every call for a site fails, the cause is almost always its key: a wrong or expired token, a Cloud token
+  paired with the wrong email, or a site the machine cannot reach without a corporate VPN.
+- Do NOT fall back to curl for data fetches — the connector is the required data access method.
 
-## No `cloudId`, ever
+## No `cloudId` — `site` instead
 
-`mcp-atlassian` is bound to a single site by `JIRA_URL` in its env file, so **no tool takes a `cloudId`
-argument**. Configs written before 0.21.1 may still carry `jira.cloud_id`; ignore it, and let `/bc:setup`
-drop it on the next run.
+Each mcp-atlassian copy is bound to one site, so **no tool takes a `cloudId` argument**: the site comes from
+`site`. Configs written before 0.21.1 may still carry `jira.cloud_id`; ignore it, and let `/bc:setup` drop it on
+the next run.
 
 ## Input
 
+- `site`: the Jira site (from `.buddy-council/sources.json` → `jira.base_url`) — pass it on every call
 - `project_key`: Jira project key (from `.buddy-council/sources.json` → `jira.project_key`)
 - `scope`: Optional — a specific issue key (e.g., "PROJ-123"), a JQL query, or "all"
 
@@ -162,15 +161,15 @@ convert it.
 
 ## Error Handling
 
-- **401** — the token in `~/.buddy-council/atlassian.env` is wrong or expired. On Cloud, also check that
-  `JIRA_USERNAME` matches the account the API token belongs to. Tell the user to re-run `/bc:setup`.
+- **401** — the token saved for the site is wrong or expired. On Cloud, also check that the key's `username`
+  matches the account the API token belongs to. Tell the user to re-run `/bc:setup` with a link to the board.
 - **403** — the account lacks "Browse Projects"/"View Issues" on that project, or an IP allowlist is blocking
   the request. Name both; you cannot distinguish them from the response.
 - **404** on an issue — return an empty array `[]`.
 - **Connection refused / timeout** — the Jira host is unreachable. For a self-hosted site this is usually a
   missing corporate VPN. Say so rather than reporting a generic network error.
-- **TLS/certificate error** — a self-signed certificate on a Server/DC host. `JIRA_SSL_VERIFY=false` in the
-  env file bypasses it; mention that it disables certificate checking.
+- **TLS/certificate error** — a self-signed certificate on a Server/DC host. `"ssl_verify": false` in the site's
+  key bypasses it; mention that it disables certificate checking.
 - **Invalid project key** — list valid keys with `jira_get_all_projects` and prompt the user to re-run
   `/bc:setup`.
 

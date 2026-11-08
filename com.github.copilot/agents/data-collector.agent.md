@@ -6,6 +6,8 @@ user-invocable: false
 tools:
   - Read
   - Bash
+  - mcp__plugin_bc_jama__jama_get_requirements
+  - mcp__plugin_bc_testrail__testrail_get_canonical_cases
   - mcp__jama__jama_get_requirements
   - mcp__testrail__testrail_get_canonical_cases
   - jama/jama_get_requirements
@@ -42,9 +44,10 @@ The caller's prompt gives:
 
 ## Steps
 
-1. **Read `<project>/.buddy-council/sources.json`.** Note `requirements` (provider, `project_id`, `roots`,
-   `exclude`, `feature_inference`, `item_type_filter`, `item_type_exclude`, `field_mapping`, `enrichment`),
-   `test_cases` (`project_id`, `suite_id`, `authoring.requirement_field`), and `plugin_root`.
+1. **Read `<project>/.buddy-council/sources.json`.** Note `requirements` (provider, `base_url`, `project_id`,
+   `roots`, `exclude`, `feature_inference`, `item_type_filter`, `item_type_exclude`, `field_mapping`,
+   `enrichment`), `test_cases` (`base_url`, `project_id`, `suite_id`, `authoring.requirement_field`), and
+   `plugin_root`.
 
 2. **Find the script.** It is `<plugin_root>/scripts/bc_run.py`, using `plugin_root` from your
    input, else from `sources.json`. Confirm it exists by reading its first 5 lines. If it does not, stop and
@@ -59,8 +62,8 @@ The caller's prompt gives:
    It prints JSON with `run_dir`, `requirements`, `background`, and `test_cases` — the exact paths to use below.
 
 4. **Requirements.**
-   - Provider `jama`: call `jama_get_requirements` with `project_id`, `scope`, and `save_to` = the
-     `requirements` path, plus whichever of these the config has: `root_ids` (each `roots[].id`),
+   - Provider `jama`: call `jama_get_requirements` with `site` = `requirements.base_url`, `project_id`, `scope`,
+     and `save_to` = the `requirements` path, plus whichever of these the config has: `root_ids` (each `roots[].id`),
      `exclude_ids` (each `exclude[].id`), `feature_depth` (`feature_inference.depth`), `feature_item_type`
      (`feature_inference.folder_item_type`), `item_type_filter`, `item_type_exclude`, `field_mapping`.
      If it answers `"loading": true`, call it again with the same arguments — that joins the read already
@@ -70,7 +73,8 @@ The caller's prompt gives:
      arguments plus `background: true`, and `save_to` = the `background` path. It reuses the tree the first
      call read, so it answers in seconds.
 
-5. **Test cases.** Call `testrail_get_canonical_cases` with `project_id` and `suite_id` from `test_cases`,
+5. **Test cases.** Call `testrail_get_canonical_cases` with `site` = `test_cases.base_url`, `project_id` and
+   `suite_id` from `test_cases`,
    `requirement_field` = `test_cases.authoring.requirement_field` (else `custom_jama_req_id`), and `save_to` =
    the `test_cases` path. Pass no other filter — the link step scopes them.
 
