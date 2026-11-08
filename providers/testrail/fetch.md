@@ -16,10 +16,13 @@ per site (ADR 0008): the connector uses the key saved for the site the call name
 A call without `site` uses this computer's only TestRail key and fails when it has several, so commands always pass
 it.
 
-If the tools are NOT available:
+If the tools are NOT available, or a call fails:
 - The plugin's connectors didn't start — almost always because `uv` isn't installed. Point the user to the README's
   *Troubleshooting*, then a restart of the assistant
-- If a call says no key is saved for the site, the fix is `/bc:setup` with a link to the TestRail project
+- If a call says no key is saved for the site, or the site refuses it, ask for the key on the spot, save it,
+  and retry (`howtos/load-settings.md` → *When a tool says no*)
+- If the suite or project is gone (HTTP 400 "is not a valid test suite", or 404), ask for the suite's link on the
+  spot and follow `providers/testrail/setup.md` → *From another command*, then carry on
 - Do NOT fall back to curl — the connector is the required data access method
 
 ## Input

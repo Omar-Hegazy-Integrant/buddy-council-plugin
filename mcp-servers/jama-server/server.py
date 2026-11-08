@@ -37,7 +37,6 @@ import asyncio
 import contextlib
 import contextvars
 import datetime
-import importlib.util
 import json
 import logging
 import math
@@ -129,7 +128,15 @@ _SKIPPED_FIELD_TYPES = {"USER", "RELEASE"}
 
 _MAPPABLE_FIELDS = ("status", "rationale", "github_url")
 _DEFAULT_FIELD_MAPPING = {"status": "status", "rationale": "rationale", "github_url": ""}
-_GITHUB_URL_RE = re.compile(r"https://github\.com/[^\s\"'<>,;)\]]+", re.IGNORECASE)
+# A GitHub link: anything on github.com or raw.githubusercontent.com, and a file or folder link — owner/repo/blob/…
+# or owner/repo/tree/… — on any other host, which is how a GitHub Enterprise host's links look. Reading one is the
+# plugin's job: it sends a token only to the host the token belongs to.
+_URL_CHARS = r"[^\s\"'<>,;)\]]"
+_GITHUB_URL_RE = re.compile(
+    rf"https://(?:(?:www\.)?github\.com|raw\.githubusercontent\.com)/{_URL_CHARS}+"
+    rf"|https://[A-Za-z0-9.-]+(?::\d+)?/[^/\s\"'<>,;)\]]+/[^/\s\"'<>,;)\]]+/(?:blob|tree)/{_URL_CHARS}+",
+    re.IGNORECASE,
+)
 
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
@@ -152,16 +159,10 @@ class JamaError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def _key_store():
-    """scripts/bc_keys.py, imported by path from the plugin root this server ships in."""
-    path = Path(__file__).resolve().parents[2] / "scripts" / "bc_keys.py"
-    spec = importlib.util.spec_from_file_location("bc_keys", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-bc_keys = _key_store()
+_SCRIPTS = str(Path(__file__).resolve().parents[2] / "scripts")  # the plugin root this server ships in
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+import bc_keys  # noqa: E402 — the plugin's one key store (scripts/bc_keys.py), shared by every connector
 
 Site = Annotated[
     str | None,
@@ -203,9 +204,9 @@ def normalize_base_url(raw: str) -> str:
     if scheme not in ("https", "http") or not parts.hostname:
         raise JamaError(f"'{text}' is not a Jama URL — expected something like https://yourcompany.jamacloud.com.")
     if parts.username or parts.password:
-        raise JamaError("Jama credentials belong in the key /bc:setup saves, never in the URL.")
+        raise JamaError("A Jama key belongs in the key store, never in the URL.")
     if scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1", "::1"):
-        raise JamaError(f"Refusing to send Jama credentials over plain HTTP ({text}). Use the https:// address.")
+        raise JamaError(f"Refusing to send the Jama key over plain HTTP ({text}). Use the https:// address.")
     path = parts.path.rstrip("/")
     marker = path.lower().find("/perspective.req")
     if marker != -1:
@@ -232,7 +233,7 @@ def load_config(site: str | None = None) -> JamaConfig:
     try:
         key = bc_keys.read_key(site, "jama")
     except bc_keys.KeyStoreError as exc:
-        raise JamaError(f"{exc} (Jama API credentials: your profile → Set API Credentials.)") from None
+        raise JamaError(f"{exc} (A Jama API client key: your profile → Set API Credentials.)") from None
     return config_for(key)
 
 
@@ -294,7 +295,8 @@ def _describe_failure(path: str, response: httpx.Response) -> str:
             "or the REST API sits behind single sign-on."
         )
     if status == 401:
-        return f"{prefix}: Jama no longer accepts these credentials ({detail}). Re-run /bc:setup to update them."
+        return (f"{prefix}: Jama no longer accepts the key saved for this site ({detail}). Ask for a new one — Jama → "
+                "your profile → Set API Credentials — save it, and try again.")
     if status == 403:
         return (
             f"{prefix}: this account may not read it ({detail}). Check its project permissions, and that it is "
@@ -358,13 +360,13 @@ class JamaClient:
         if response.status_code in (400, 401, 403):
             raise JamaError(
                 f"Jama rejected the API client ID/secret (HTTP {response.status_code}: {_error_message(response)}). "
-                "Regenerate them in Jama (your profile → Set API Credentials) and re-run /bc:setup.",
+                "Ask for a new pair — Jama → your profile → Set API Credentials — save it as this site's key, and try again.",
                 status=response.status_code,
             )
         if response.status_code >= 300:
             raise JamaError(
                 f"OAuth token request failed with HTTP {response.status_code}: {_error_message(response)}. "
-                "Check that the Jama address saved with the key is the root of your Jama instance.",
+                "Check that the Jama address saved with the key is the root address of your Jama site.",
                 status=response.status_code,
             )
         try:
@@ -422,7 +424,7 @@ class JamaClient:
             except ValueError:
                 raise JamaError(
                     f"GET {path} returned non-JSON — check that the Jama address saved with the key ({self.config.base_url}) "
-                    "is the root of your Jama instance."
+                    "is the root address of your Jama site."
                 ) from None
             if not isinstance(body, dict):
                 raise JamaError(f"GET {path} returned an unexpected payload shape.")
@@ -585,7 +587,7 @@ def html_to_text(value: Any) -> str:
 
 
 def _github_urls(value: Any) -> list[str]:
-    """Every https://github.com/ URL in a field value — plain text or HTML links alike."""
+    """Every GitHub link in a field value (_GITHUB_URL_RE) — plain text or HTML links alike."""
     if value is None:
         return []
     found: list[str] = []
@@ -1502,7 +1504,7 @@ def _snapshot_notes(snapshot: ProjectSnapshot, tree: Tree, feature_item_type: st
         if tree.missing_roots:
             warnings.append(
                 f"Requirements root(s) {tree.missing_roots} are not containers in project {snapshot.project_id} — "
-                "moved or deleted. Re-run /bc:setup to re-anchor on your test suite."
+                "moved or deleted. Anchor the scope on the test suite again (the plugin's Jama setup guide, Scope)."
             )
         if not tree.roots:
             warnings.append("No configured requirements root exists, so nothing is in scope.")
@@ -1950,27 +1952,38 @@ async def jama_get_projects(site: Site = None) -> str:
 
 
 @mcp.tool(annotations=_READ_ONLY, structured_output=False)
-async def jama_get_item_types(project_id: int | None = None, refresh: bool = False, site: Site = None) -> str:
+async def jama_get_item_types(
+    project_id: int | None = None, with_fields: bool | None = None, refresh: bool = False, site: Site = None
+) -> str:
     """List Jama item types with their fields.
 
     With project_id, only the types present in that project, each with an item
-    count — what /bc:setup uses to decide which types are requirements and to
-    find the status, rationale, and GitHub-link fields.
+    count — what /bc:setup uses to decide which types are requirements — plus
+    `field_candidates` (the fields that look like status, rationale, or a GitHub
+    doc link, with the first link found) and `document_key_samples` (a few
+    document keys per type, for requirement ID patterns). That answer leaves each
+    type's own field list out, so it stays small; pass with_fields to have it.
 
     Args:
         project_id: Optional Jama project id to count items in.
+        with_fields: List each type's fields. Default: yes without project_id, no with it.
         refresh: Ignore the 10-minute cache and re-read Jama.
     """
     _use(site)
     types = await _item_types(refresh)
     counts: Counter | None = None
+    extra: dict[str, Any] = {}
     if project_id is not None:
         try:
             snapshot, _ = await _project_snapshot(project_id, refresh)
         except SnapshotLoading as loading:
             return _dump(loading.payload())
         counts = Counter(item.get("itemType") for item in snapshot.items.values())
+        tree = Tree(snapshot.items, types, "Folder")
+        ids = _select_requirements(tree, [], []).ids
+        extra = {"field_candidates": _field_candidates(tree, ids), "document_key_samples": _key_samples(tree, types, ids)}
     listed = []
+    fields_wanted = project_id is None if with_fields is None else with_fields
     for type_id, item_type in types.items():
         if counts is not None and not counts.get(type_id):
             continue
@@ -1979,17 +1992,18 @@ async def jama_get_item_types(project_id: int | None = None, refresh: bool = Fal
             "key": item_type.get("typeKey"),
             "display": _type_display(item_type),
             "kind": _container_kind(item_type) or "item",
-            "fields": [
+        }
+        if fields_wanted:
+            entry["fields"] = [
                 {"label": f.get("label"), "name": f.get("name"), "type": f.get("fieldType")}
                 for f in item_type.get("fields") or []
                 if isinstance(f, dict)
-            ],
-        }
+            ]
         if counts is not None:
             entry["count"] = counts[type_id]
         listed.append(entry)
     listed.sort(key=lambda e: (-e.get("count", 0), _norm(e["display"])))
-    return _dump({"project_id": project_id, "item_types": listed})
+    return _dump({"project_id": project_id, **extra, "item_types": listed})
 
 
 @mcp.tool(annotations=_READ_ONLY, structured_output=False)
@@ -2141,6 +2155,7 @@ async def jama_get_requirements(
     offset: int = 0,
     save_to: str = "",
     background: bool = False,
+    background_save_to: str = "",
     site: Site = None,
 ) -> str:
     """Fetch a Jama project's requirements in the plugin's canonical schema, optionally scoped to one feature.
@@ -2189,6 +2204,10 @@ async def jama_get_requirements(
             background.json with background=true). The response then carries only
             `saved_to`, the counts, and the summary.
         background: Return the rest of the project — see above — instead of the requirements.
+        background_save_to: With save_to, also write the rest of the project to this file, from the same read
+            and the same arguments: <project>/.buddy-council/runs/<run>/background.json. One call writes both
+            files, so the two can never be read with different arguments. The response then carries a
+            `background` object with its own `saved_to`, `total`, and `summary`.
 
     A large project takes Jama a minute or more to send. If the read is still
     running when this call has to answer, the result is {loading: true, ...}
@@ -2199,6 +2218,11 @@ async def jama_get_requirements(
     save_to, `saved_to` and `bytes` in place of the requirements and paging.
     """
     _use(site)
+    if background_save_to:
+        if background or not save_to:
+            raise JamaError("background_save_to goes with save_to on a requirements read (background=false): it writes "
+                            "the rest of the project from the same read.")
+        _run_file_path(background_save_to)  # a bad path fails before Jama is read
     if save_to:
         _run_file_path(save_to)  # a bad path fails before Jama is read
         offset = 0
@@ -2302,19 +2326,28 @@ async def jama_get_requirements(
                 "requirements": requirements,
             },
         )
-        return _dump(
-            {
-                "project_id": project_id,
-                "scope": scope_info,
-                "total": len(requirements),
-                "saved_to": saved_to,
-                "bytes": size,
-                "summary": f"{'; '.join(parts)}; {len(requirements)} written to {saved_to}",
-                "warnings": warnings,
-                "fetched_at": snapshot.fetched_at,
-                "truncated": snapshot.truncated,
-            }
-        )
+        response = {
+            "project_id": project_id,
+            "scope": scope_info,
+            "total": len(requirements),
+            "saved_to": saved_to,
+            "bytes": size,
+            "summary": f"{'; '.join(parts)}; {len(requirements)} written to {saved_to}",
+            "warnings": warnings,
+            "fetched_at": snapshot.fetched_at,
+            "truncated": snapshot.truncated,
+        }
+        if background_save_to:
+            rest = json.loads(
+                await jama_get_requirements(
+                    project_id=project_id, scope=scope, feature_item_type=feature_item_type,
+                    item_type_exclude=item_type_exclude, item_type_filter=item_type_filter, field_mapping=field_mapping,
+                    include_custom_fields=include_custom_fields, root_ids=root_ids, feature_depth=feature_depth,
+                    exclude_ids=exclude_ids, save_to=background_save_to, background=True, site=site,
+                )
+            )
+            response["background"] = {key: rest.get(key) for key in ("saved_to", "total", "bytes", "summary")}
+        return _dump(response)
     return _dump(
         {
             "project_id": project_id,
@@ -2782,12 +2815,13 @@ def _scope_proposal(
 @mcp.tool(annotations=_READ_ONLY, structured_output=False)
 async def jama_get_scope_proposal(
     project_id: int,
-    document_keys: list[str],
+    document_keys: list[str] | None = None,
     feature_depth: int = 1,
     item_type_exclude: list[str] | None = None,
     root_ids: list[int] | None = None,
     exclude_ids: list[int] | None = None,
     refresh: bool = False,
+    document_keys_file: str | None = None,
     site: Site = None,
 ) -> str:
     """Propose the requirements root for a project from the requirement IDs its test cases link to.
@@ -2813,21 +2847,45 @@ async def jama_get_scope_proposal(
         root_ids: Preview these roots instead of proposing one.
         exclude_ids: Containers inside the root to leave out.
         refresh: Ignore the 10-minute project cache and re-read Jama.
+        document_keys_file: Absolute path of the .json file testrail_get_requirement_ids wrote
+            into a run folder with save_to (<project>/.buddy-council/runs/<run>/<name>.json):
+            its `ids` are used along with document_keys, so a long list never passes through
+            the conversation.
     """
     _use(site)
+    keys = _parse_keys(document_keys) if document_keys else []
+    if document_keys_file:
+        path = _run_file_path(document_keys_file)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise JamaError(f"Cannot read document_keys_file {document_keys_file!r}: {exc}") from None
+        found = data.get("ids") if isinstance(data, dict) else data
+        keys += [str(key) for key in found or [] if isinstance(key, (str, int))]
+    if not keys:
+        raise JamaError("Pass document_keys, or document_keys_file from testrail_get_requirement_ids' save_to.")
     try:
         snapshot, _ = await _project_snapshot(project_id, refresh)
     except SnapshotLoading as loading:
         return _dump(loading.payload())
     types = await _item_types(refresh)
-    return _dump(
-        _scope_proposal(snapshot, types, document_keys, feature_depth, item_type_exclude, root_ids, exclude_ids)
-    )
+    return _dump(_scope_proposal(snapshot, types, keys, feature_depth, item_type_exclude, root_ids, exclude_ids))
 
 
 # ---------------------------------------------------------------------------
 # One-shot connection check for /bc:setup (runs before the server is registered)
 # ---------------------------------------------------------------------------
+
+
+def _key_samples(tree: Tree, types: dict, ids: list[int]) -> dict[str, list[str]]:
+    """A few document keys per item type, for requirement ID patterns."""
+    samples: dict[str, list[str]] = {}
+    for iid in ids:
+        item = tree.items[iid]
+        bucket = samples.setdefault(_type_display(types.get(item.get("itemType")), item.get("itemType")), [])
+        if len(bucket) < 5 and _document_key(item):
+            bucket.append(_document_key(item))
+    return samples
 
 
 def _field_candidates(tree: Tree, ids: list[int]) -> dict[str, Any]:
@@ -2909,12 +2967,7 @@ async def _check(
         outside = sum(
             1 for iid in selection.ids if tree.feature_of(iid) is None or tree.kind(tree.feature_of(iid)) != "feature"
         )
-        samples: dict[str, list[str]] = {}
-        for iid in selection.ids:
-            item = tree.items[iid]
-            bucket = samples.setdefault(_type_display(types.get(item.get("itemType")), item.get("itemType")), [])
-            if len(bucket) < 5 and _document_key(item):
-                bucket.append(_document_key(item))
+        samples = _key_samples(tree, types, selection.ids)
         counts = Counter(item.get("itemType") for item in snapshot.items.values())
         project_fields = project.get("fields") or {}
         project_key = project.get("projectKey") or project_fields.get("projectKey")

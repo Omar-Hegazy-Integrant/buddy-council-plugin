@@ -4,7 +4,7 @@ After the demo phase of an onboarding feature, walk the user through where the f
 
 ## When to Use
 
-Invoked by `com.github.copilot/agents/onboarding-agent.agent.md` step 6b.5 (between demo and assessment) when `requirements.project.enabled` is true (or unset, defaulting to true) AND the current working directory contains a code repo marker. Also invoked by `skills/codemap/SKILL.md` for ad-hoc mapping of a single feature outside the onboarding flow.
+Invoked by `com.github.copilot/agents/onboarding-agent.agent.md` step 6b.5 (between demo and assessment) when `project.enabled` is true (or unset, defaulting to true) AND the current working directory contains a code repo marker. Also invoked by `skills/codemap/SKILL.md` for ad-hoc mapping of a single feature outside the onboarding flow.
 
 If the cwd is NOT a code repo (no markers detected), this how-to returns immediately without output. The agent silently skips this phase.
 
@@ -17,7 +17,7 @@ If the cwd is NOT a code repo (no markers detected), this how-to returns immedia
 
 ## Configuration
 
-Read `.buddy-council/sources.json` `project`:
+Read the project's settings (`.buddy-council/sources.json`) `project`:
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|

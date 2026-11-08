@@ -1,4 +1,4 @@
-"""Tests for bc_tools.py — installing, recording, and proving the automation tools. Standard library only.
+"""Tests for bc_tools.py — installing, recording, and proving the Plugin Tools. Standard library only.
 
     python3 -m unittest discover -s scripts/tests -v
 
@@ -214,17 +214,17 @@ class Record(Sandbox):
     ENTRY = {"command": "/bc/node", "args": ["--use-system-ca", "/bc/appium/dist/index.js"], "env": {"NO_UI": "true"}}
 
     def test_the_record_changes_only_when_the_entry_does(self):
-        self.assertEqual(bc_tools.wire(self.ENTRY), [bc_tools.tilde(self.record)])
+        self.assertEqual(bc_tools.save_server_record(self.ENTRY), [bc_tools.tilde(self.record)])
         self.assertEqual(json.loads(self.record.read_text()), self.ENTRY)
-        self.assertEqual(bc_tools.wired_entry(), self.ENTRY)
-        self.assertEqual(bc_tools.wire(self.ENTRY), [], "a second run changes nothing")
-        self.assertEqual(bc_tools.unwire(), [bc_tools.tilde(self.record)])
-        self.assertIsNone(bc_tools.wired_entry())
-        self.assertEqual(bc_tools.unwire(), [])
+        self.assertEqual(bc_tools.read_server_record(), self.ENTRY)
+        self.assertEqual(bc_tools.save_server_record(self.ENTRY), [], "a second run changes nothing")
+        self.assertEqual(bc_tools.drop_server_record(), [bc_tools.tilde(self.record)])
+        self.assertIsNone(bc_tools.read_server_record())
+        self.assertEqual(bc_tools.drop_server_record(), [])
 
     def test_a_broken_record_reads_as_none(self):
         self.write("bc/tools/appium-mcp.json", "{ not json")
-        self.assertIsNone(bc_tools.wired_entry())
+        self.assertIsNone(bc_tools.read_server_record())
 
     def test_no_assistant_config_is_ever_written(self):
         for name in ("claude_config", "copilot_config", "restore", "foreign_entries"):
@@ -263,16 +263,16 @@ class Serve(Sandbox):
     def test_with_the_tools_it_becomes_the_recorded_server(self):
         node = self.write("bc/tools/node/v1/bin/node", "#!/bin/sh\necho \"node $* NO_UI=$NO_UI\"\n", mode=0o755)
         app = self.write("bc/tools/appium-mcp/1.0.0-aaaaaaaaaaaa/node_modules/appium-mcp/dist/index.js", "")
-        bc_tools.wire({"command": str(node), "args": ["--use-system-ca", str(app)], "env": {"NO_UI": "true"}})
+        bc_tools.save_server_record({"command": str(node), "args": ["--use-system-ca", str(app)], "env": {"NO_UI": "true"}})
         code, out, _ = self.serve()
         self.assertEqual((code, out.strip()), (0, f"node --use-system-ca {app} NO_UI=true"))
 
     def test_a_record_bc_didnt_write_or_whose_files_are_gone_is_never_run(self):
         marker = self.tmp / "ran"
         script = self.write("elsewhere/node", f"#!/bin/sh\ntouch {marker}\n", mode=0o755)
-        bc_tools.wire({"command": str(script), "args": [], "env": {}})
+        bc_tools.save_server_record({"command": str(script), "args": [], "env": {}})
         self.assertEqual(json.loads(self.serve({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[1])["result"], {"tools": []})
-        bc_tools.wire({"command": str(self.home / "tools" / "node" / "gone" / "bin" / "node"), "args": [], "env": {}})
+        bc_tools.save_server_record({"command": str(self.home / "tools" / "node" / "gone" / "bin" / "node"), "args": [], "env": {}})
         self.assertEqual(json.loads(self.serve({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[1])["result"], {"tools": []})
         self.assertFalse(marker.exists())
 
@@ -283,7 +283,7 @@ class Pruning(Sandbox):
         for folder in ("node/v26.13.0-darwin-arm64/bin", "node/v24.0.0-darwin-arm64/bin", "appium-mcp/1.99.2-aaaaaaaaaaaa",
                        "appium-mcp/1.98.0-bbbbbbbbbbbb", "appium-mcp/1.97.0-cccccccccccc"):
             (tools / folder).mkdir(parents=True)
-        bc_tools.wire({"command": str(tools / "node/v26.13.0-darwin-arm64/bin/node"),
+        bc_tools.save_server_record({"command": str(tools / "node/v26.13.0-darwin-arm64/bin/node"),
                        "args": [str(tools / "appium-mcp/1.98.0-bbbbbbbbbbbb/node_modules/appium-mcp/dist/index.js")]})
         removed = bc_tools.prune([tools / "appium-mcp/1.99.2-aaaaaaaaaaaa"])
         names = sorted(Path(item).name for item in removed)
@@ -308,30 +308,30 @@ class Pruning(Sandbox):
 
 
 class ProjectReading(Sandbox):
-    def test_a_java_appium_project_like_apollo(self):
-        root = self.tmp / "apollo"
-        self.write("apollo/build.gradle", "apply plugin: 'java'\ntestImplementation 'org.testng:testng:7'\n")
-        self.write("apollo/src/test/java/pages/Login.java",
+    def test_a_java_appium_project_with_its_own_conventions(self):
+        root = self.tmp / "myapp"
+        self.write("myapp/build.gradle", "apply plugin: 'java'\ntestImplementation 'org.testng:testng:7'\n")
+        self.write("myapp/src/test/java/pages/Login.java",
                    "import io.appium.java_client.pagefactory.iOSXCUITFindBy;\nimport io.appium.java_client.pagefactory.AndroidFindBy;\n"
                    "class Login { @iOSXCUITFindBy(accessibility = \"Next\") Object next; @AndroidFindBy(id = \"x\") Object y; }\n")
-        self.write("apollo/hub-environment-configuration/environmentConfiguration.json", json.dumps(
+        self.write("myapp/hub-environment-configuration/environmentConfiguration.json", json.dumps(
             {"Apps": [{"platform": "iOS", "location": "location to app on your hub machine", "appPackage": "Empty for iOS apps"}]}))
-        self.write("apollo/local-environment-configuration/environmentConfiguration.json", json.dumps(
-            {"Apps": [{"platform": "Android", "location": "/Users/qa/Desktop/apollo.apk", "appPackage": "com.dexcom.h.debug"},
-                      {"platform": "iOS", "location": "~/Desktop/apollo.ipa", "appPackage": "com.dexcominc.ApolloCGM"}]}))
-        self.write("apollo/execution.properties", "executionLocale=de_DE\nexecutionPlatform=iOS\n")
-        self.write("apollo/toolchain.properties", "appium=2.19.0\nappium.driver.xcuitest=9.10.5\n")
-        self.write("apollo/setup", "#!/bin/bash\n# Set APOLLO_UDID to choose the phone\ncase $1 in --check) MODE=check ;; esac\n", mode=0o755)
+        self.write("myapp/local-environment-configuration/environmentConfiguration.json", json.dumps(
+            {"Apps": [{"platform": "Android", "location": "/Users/qa/Desktop/myapp.apk", "appPackage": "com.acme.myapp.debug"},
+                      {"platform": "iOS", "location": "~/Desktop/myapp.ipa", "appPackage": "com.acme.MyApp"}]}))
+        self.write("myapp/execution.properties", "executionLocale=de_DE\nexecutionPlatform=iOS\n")
+        self.write("myapp/toolchain.properties", "appium=2.19.0\nappium.driver.xcuitest=9.10.5\n")
+        self.write("myapp/setup", "#!/bin/bash\n# Set MYAPP_UDID to choose the phone\ncase $1 in --check) MODE=check ;; esac\n", mode=0o755)
         found = bc_tools.detect(root, {}, "darwin-arm64", deep=False)
         self.assertTrue(found["test_project"])
         self.assertEqual(found["stack"], {"framework": "Appium", "language": "Java", "build": "Gradle", "runner": "TestNG",
                                           "evidence": "src/test/java/pages/Login.java"})
         self.assertEqual(found["platforms"], ["ios", "android"])
-        self.assertEqual(found["apps"]["ios"]["path"], str(Path.home() / "Desktop" / "apollo.ipa"))
-        self.assertEqual(found["apps"]["ios"]["id"], "com.dexcominc.ApolloCGM")
+        self.assertEqual(found["apps"]["ios"]["path"], str(Path.home() / "Desktop" / "myapp.ipa"))
+        self.assertEqual(found["apps"]["ios"]["id"], "com.acme.MyApp")
         self.assertIn("local-environment-configuration", found["apps"]["ios"]["from"])
         self.assertEqual(found["language"], {"value": "de_DE", "from": "execution.properties"})
-        self.assertEqual(found["setup_script"], {"path": "setup", "check": "--check", "udid_setting": "APOLLO_UDID"})
+        self.assertEqual(found["setup_script"], {"path": "setup", "check": "--check", "udid_setting": "MYAPP_UDID"})
 
     def test_a_webdriverio_project_and_a_plain_repo(self):
         self.write("wdio/package.json", json.dumps({"devDependencies": {"@wdio/cli": "9", "@wdio/mocha-framework": "9",
@@ -365,18 +365,18 @@ class Phones(unittest.TestCase):
     PIXEL = {"platform": "android", "udid": "P1", "name": "Pixel 8", "state": "connected", "developer_mode": None}
 
     def test_the_projects_udid_setting_wins(self):
-        with mock.patch.dict(os.environ, {"APOLLO_UDID": "U1"}):
-            chosen = bc_tools.choose_phone(["android", "ios"], [self.PIXEL, self.IPHONE], "APOLLO_UDID")
-        self.assertEqual((chosen["udid"], chosen["source"]), ("U1", "APOLLO_UDID"))
-        with mock.patch.dict(os.environ, {"APOLLO_UDID": "GONE"}):
-            chosen = bc_tools.choose_phone(["ios"], [self.IPHONE], "APOLLO_UDID")
+        with mock.patch.dict(os.environ, {"MYAPP_UDID": "U1"}):
+            chosen = bc_tools.choose_phone(["android", "ios"], [self.PIXEL, self.IPHONE], "MYAPP_UDID")
+        self.assertEqual((chosen["udid"], chosen["source"]), ("U1", "MYAPP_UDID"))
+        with mock.patch.dict(os.environ, {"MYAPP_UDID": "GONE"}):
+            chosen = bc_tools.choose_phone(["ios"], [self.IPHONE], "MYAPP_UDID")
         self.assertNotIn("udid", chosen)
-        self.assertIn("APOLLO_UDID", chosen["why"])
+        self.assertIn("MYAPP_UDID", chosen["why"])
 
     def test_the_first_connected_phone_of_the_projects_platforms(self):
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("APOLLO_UDID", None)
-            chosen = bc_tools.choose_phone(["ios", "android"], [self.PIXEL, self.IPHONE], "APOLLO_UDID")
+            os.environ.pop("MYAPP_UDID", None)
+            chosen = bc_tools.choose_phone(["ios", "android"], [self.PIXEL, self.IPHONE], "MYAPP_UDID")
         self.assertEqual(chosen["udid"], "U1")
         self.assertEqual(bc_tools.choose_phone(["android"], [self.IPHONE], None)["why"], "no phone is connected over USB")
 
@@ -533,7 +533,7 @@ class Ensure(FakeServer):
         result = self.run_ensure(root, self.found(root))
         self.assertEqual((result["status"], result["phone_check"]), ("pending", "due"))
         self.assertIn("next, one page source from QA iPhone", result["lines"][0])
-        self.assertEqual(result["wired"], [bc_tools.tilde(self.record)])
+        self.assertEqual(result["recorded"], [bc_tools.tilde(self.record)])
         self.assertTrue(any("restart your assistant once" in line for line in result["lines"]), result["lines"])
         self.assertEqual(self.calls(), [], "ensure never touches the phone")
         result = self.run_ensure(root, self.found(root), phone_check=True)
@@ -580,7 +580,7 @@ class Ensure(FakeServer):
         theirs = self.write(".copilot/mcp-config.json", json.dumps({"mcpServers": {"appium": {"command": "/usr/local/bin/npx"}}}))
         before = theirs.read_text()
         result = self.run_ensure(root, self.found(root))
-        self.assertEqual(result["wired"], [bc_tools.tilde(self.record)])
+        self.assertEqual(result["recorded"], [bc_tools.tilde(self.record)])
         self.assertEqual(theirs.read_text(), before)
 
     def test_a_failed_upgrade_keeps_the_old_version_in_use(self):
@@ -588,11 +588,11 @@ class Ensure(FakeServer):
         old_node = self.write("bc/tools/node/v0/bin/node", "#!/bin/sh\n", mode=0o755)
         old_app = self.write("bc/tools/appium-mcp/0.9.0-bbbbbbbbbbbb/node_modules/appium-mcp/dist/index.js", "")
         before = {"command": str(old_node), "args": [str(old_app)], "env": {"NO_UI": "true"}}
-        bc_tools.wire(before)
+        bc_tools.save_server_record(before)
         result = self.run_ensure(root, self.found(root), entry=self.entry("die"))
         self.assertEqual(result["status"], "pending")
         self.assertIn("the version before it stays in use", result["pending"][0])
-        self.assertEqual((bc_tools.wired_entry(), result["wired"]), (before, []))
+        self.assertEqual((bc_tools.read_server_record(), result["recorded"]), (before, []))
         self.assertTrue(old_app.exists(), "nothing is pruned when the new version didn't answer")
 
     def test_smoke_keeps_bcs_own_jdk_and_sdk_wired(self):
@@ -630,7 +630,7 @@ class Ensure(FakeServer):
                 result = bc_tools.cmd_ensure(str(root))
         self.assertEqual(result["removed"], [])
         self.assertTrue((java_home / "bin" / "java").exists(), "the JDK the server points at stays")
-        self.assertEqual(bc_tools.wired_entry()["env"]["JAVA_HOME"], str(java_home))
+        self.assertEqual(bc_tools.read_server_record()["env"]["JAVA_HOME"], str(java_home))
 
 
 class Downloads2(Sandbox):
@@ -707,7 +707,7 @@ class PruneKeepsWhatsInside(Sandbox):
     def test_a_wired_env_value_keeps_its_pin(self):
         jdk = self.home / "tools" / "jdk" / "21.0.13+9" / "Contents" / "Home"
         jdk.mkdir(parents=True)
-        bc_tools.wire({"command": "/x/node", "args": [], "env": {"JAVA_HOME": str(jdk)}})
+        bc_tools.save_server_record({"command": "/x/node", "args": [], "env": {"JAVA_HOME": str(jdk)}})
         self.assertEqual(bc_tools.prune(), [])
         self.assertTrue(jdk.exists())
 
@@ -727,16 +727,16 @@ class ProjectReport(unittest.TestCase):
         self.assertIn("retry", status["needs"])
         (tmp / ".buddy-council" / "sources.json").write_text(json.dumps({"automation": {"enabled": False}}))
         self.assertIn("left out", bc_tools.cmd_status(str(tmp))["line"])
-    def test_apollo_style_output(self):
+    def test_a_setup_scripts_report(self):
         text = "\n".join([
-            "ApolloAutomation setup: checking only, nothing will be changed",
+            "MyAppAutomation setup: checking only, nothing will be changed",
             "   ✅ Xcode 27.2", "   ⚠️  Kept Appium 2.18.0; the known-good version is 2.19.0", "      hint line",
-            "   ❌ The phone in APOLLO_UDID isn't connected over USB", "\x1b[31m   ❌ WebDriverAgent isn't signed\x1b[0m",
-            "", "Result: 31 OK, 1 warning, 2 problems", "Full log: /Users/qa/.apollo-setup/logs/x.log",
+            "   ❌ The phone in MYAPP_UDID isn't connected over USB", "\x1b[31m   ❌ WebDriverAgent isn't signed\x1b[0m",
+            "", "Result: 31 OK, 1 warning, 2 problems", "Full log: /Users/qa/.myapp-setup/logs/x.log",
         ])
         report = bc_tools.parse_report(text)
         self.assertEqual(report["result"], "31 OK, 1 warning, 2 problems")
-        self.assertEqual(report["problems"], ["The phone in APOLLO_UDID isn't connected over USB", "WebDriverAgent isn't signed"])
+        self.assertEqual(report["problems"], ["The phone in MYAPP_UDID isn't connected over USB", "WebDriverAgent isn't signed"])
         self.assertEqual(report["warnings"], ["Kept Appium 2.18.0; the known-good version is 2.19.0"])
 
 

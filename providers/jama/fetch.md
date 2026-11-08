@@ -195,14 +195,16 @@ For exactly one item, `jama_get_item` returns the same entry as a single object
 
 The server's errors are written for the user; relay them, then map the remedy:
 
-- **"No Jama key is saved for …" / an incomplete key** → run `/bc:setup` with a link to the Jama project.
+- **"No Jama key is saved for …" / an incomplete key** → ask for the site's key on the spot, save it, and retry
+  (`howtos/load-settings.md` → *When a tool says no*).
 - **"This computer has Jama keys for N sites"** → the call left out `site`; pass `requirements.base_url`.
-- **Rejected API client ID/secret, or HTTP 401** → the credentials were rotated or revoked; regenerate them in
-  Jama (profile → Set API Credentials) and re-run `/bc:setup`.
+- **Rejected API client ID/secret, or HTTP 401** → the key was rotated or revoked: ask for a new one on the
+  spot — Jama → profile → Set API Credentials — save it, and retry (`howtos/load-settings.md` → *When a tool
+  says no*).
 - **HTTP 403** → the account lacks read permission on the project, or is not enabled under Admin → REST API →
   Managed Access Control. Name both; the response cannot distinguish them.
-- **HTTP 404 / "returned no items"** → wrong `project_id`; list projects with `jama_get_projects` and re-run
-  `/bc:setup`.
+- **HTTP 404 / "returned no items"** → the project is gone or the id is wrong: ask for the Jama project's link
+  on the spot and follow `providers/jama/setup.md` → *From another command*.
 - **"Could not reach …"** → network. A self-hosted Jama usually needs the corporate VPN — say so. Dropped
   connections are already retried twice before this error appears.
 - **"Reading project … from Jama failed"** → a background project read failed while no call was waiting.

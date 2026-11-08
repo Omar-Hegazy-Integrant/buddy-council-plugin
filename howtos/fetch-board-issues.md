@@ -26,12 +26,15 @@ with `jira.board.id`.
 
 ## How It Works
 
-1. Read `.buddy-council/sources.json` from the project root.
-2. If there is no `jira` section, or `jira.pending` is `true`, or `jira.board` is missing → **do not fail the
-   run**. Print `Fetch: board issues → skipped (Jira board not configured — run /bc:setup)` and return an
-   empty array. The caller treats this as a configured-but-unavailable source, not a hard error.
-3. Call `jira_get_board_issues` with the board id and the JQL below, paging with `start_at` until exhausted
-   (`limit` caps at 50 per call).
+1. Read `.buddy-council/sources.json` in the project folder — the one `howtos/load-settings.md` found.
+2. When the board isn't ready — the project uses none (`"provider": "none"`), it was never set up, or it is saved
+   but not verified (`pending`) — **do not fail the run**. Print `Fetch: board issues → skipped (not used in this
+   project)` or `(not verified yet)` and return an empty array; the command's report carries the board's line from
+   `howtos/load-settings.md`.
+3. Call `jira_get_board_issues` with the board id, the JQL below, the `fields` below, and `limit: 15`, paging
+   with `start_at` until exhausted. A page that size stays small enough for your assistant to show at once; a
+   larger answer lands in a file outside the project, which costs a permission prompt to read. When a page still
+   arrives as a file, call that page again with a smaller `limit` instead of reading the file.
 4. Normalize each issue to the canonical schema with `type: "board_issue"`.
 5. Print one line: `Fetch: board issues → <N> fetched from board <id>`.
 
@@ -54,9 +57,13 @@ the default form and say you did.
 
 Narrow further when the caller passed a scope:
 
-- **Feature name** → append `AND (component = "<feature>" OR labels = "<feature-slug>" OR text ~ "<feature>")`
+- **Feature name** → append `AND (labels = "<feature-slug>" OR text ~ "<feature>")`. Never `component =
+  "<feature>"`: Jira rejects the whole query when the project has no component of that name.
 - **Requirement IDs** → append `AND text ~ "<REQ-ID>"` per ID, OR-joined. Requirement IDs usually appear in
   the summary or description of the implementing ticket.
+- **A lookup's ask** → append `AND (text ~ "<wording>" OR …)` with its concepts' wordings, and ask for `fields:
+  "summary,status,issuetype,labels"`: the titles say what is in flight, and an issue's description is one
+  `jira_get_issue` away when it matters.
 
 Do not add `project = <key>` — the board already constrains that, and adding it silently drops rows on a
 multi-project board.
@@ -94,8 +101,9 @@ One addition specific to board issues: also scan `summary` and `description` for
 what lets coverage and contradiction analysis tie a sprint ticket back to a requirement when no formal Jira
 link exists.
 
-Request `fields` explicitly — `summary,status,issuetype,priority,labels,components,assignee,description` plus
-the sprint field when you need it. The default field set is narrower than this how-to's output.
+Request `fields` explicitly — `summary,status,issuetype,priority,labels,components,description` (plus the sprint
+field when you need it): the tool's default set adds reporter, assignee, versions, and dates, which this how-to
+doesn't use and which make every page larger.
 
 ## Sprints (for `/bc:validate` and `/bc:vnv-sprint-prep`)
 
@@ -114,13 +122,13 @@ backlog. Never fail ticket creation over sprint placement.
 ## Error Handling
 
 - **No `jira` section / `jira.pending` true / no `jira.board`** → skip with the visible line above, return `[]`.
-- **401** → the token saved for the Jira site is wrong or expired. Tell the user to re-run
-  `/bc:setup`. Treat as a failed source.
+- **401** → the key saved for the Jira site is wrong or expired: ask for it on the spot and retry
+  (`howtos/load-settings.md` → *When a tool says no*). Only if the user won't give one is it a failed source.
 - **403** → the account cannot browse this project or view this board. Say both; the response does not
   distinguish them.
-- **404 on the board id** → the board was deleted or the id is wrong. Report the id you used and point at
-  `/bc:setup`; do not silently fall back to a project-wide query, which would quietly change what "the board"
-  means.
+- **404 on the board id** → the board was deleted or the id is wrong. Say which id, ask for the board's link
+  on the spot, and carry on with the new board (`howtos/load-settings.md` → *When a tool says no*). Never fall
+  back to a project-wide query, which would quietly change what "the board" means.
 - **Malformed JQL** → report the exact server error and the query that produced it. Do not silently broaden
   the query; a wider result set would misrepresent the board.
 - **Connection refused / timeout** → the Jira host is unreachable, usually a missing corporate VPN on a

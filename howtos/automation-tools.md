@@ -1,4 +1,4 @@
-# Automation Tools
+# Plugin Tools
 
 `/bc:automate` drives the app on a phone through **appium-mcp**, an MCP server. This how-to gets that server onto
 the Mac and proves it works. The plugin's own `appium` connector starts it (`scripts/bc-mcp appium` runs
@@ -13,7 +13,9 @@ the plugin root:
 python3 '<plugin_root>/scripts/bc_tools.py' <subcommand> --project '<absolute project path>'
 ```
 
-Each subcommand prints one JSON object (`ok`, then its results); progress goes to stderr. Never edit what it
+Run each call as its own command, exactly in this shape — the one the bash hook approves; anything chained onto
+it makes the assistant ask. Each subcommand prints one JSON object (`ok`, then its results); progress goes to
+stderr. Never edit what it
 wrote by hand, and never retype its `lines`: show them as they are.
 
 | Subcommand | What it does | Prompts? |
@@ -22,7 +24,7 @@ wrote by hand, and never retype its `lines`: show them as they are.
 | `project --mode check` / `--mode fix` | Runs the project's own setup script (`./setup --check`, or `./setup` to fix) without a terminal, and parses its report | **yes** — it runs the project's code |
 | `ensure [--shared jdk,android-sdk]` | Installs or upgrades the pinned tools, proves the server answers, records how the `appium` connector starts it (`~/.buddy-council/tools/appium-mcp.json`), prunes old versions, records `automation` in `.buddy-council/sources.json`. Reports `phone_check`: `due` means run `smoke` next | no |
 | `smoke` | Reads one page source from the phone, installs nothing, and records the result | no |
-| `status` | Installed against pinned, the connector's record, and what is pending — for setup's Step 0 | no |
+| `status` | Installed against pinned, the connector's record, and what is pending — for setup's re-check | no |
 | `start` / `stop` | Starts or stops the project's own Appium server on `127.0.0.1` | no |
 | `prune` | Removes versions nothing points at, unfinished downloads, week-old screen files, old logs | no |
 | `remove` | Deletes bc's tools and the record; the `appium` connector serves no tools from the next start — only when the user asks | **yes** |
@@ -75,7 +77,7 @@ Two checks, in two calls so each fits in one 10-minute shell call (Claude Code's
    stdio, and must list `appium_session_management` and `appium_get_page_source`. Only then is it recorded.
 2. **One page source from the phone** (`smoke`, when `ensure` says `"phone_check": "due"`) — a session on the
    phone without launching any app, `appium_get_page_source` saved to a file, the session closed, the server
-   stopped. The phone is the project's UDID setting when it is set (`APOLLO_UDID`, read from the project's
+   stopped. The phone is the project's UDID setting when it is set (`MYAPP_UDID`, read from the project's
    setup script), else the first phone connected over USB.
 
 A check that passes is kept as `proof` in the `automation` block, so a phone unplugged later doesn't undo
@@ -83,9 +85,47 @@ A check that passes is kept as `proof` in the `automation` block, so a phone unp
 a locked or untrusted one, or WebDriverAgent that won't start makes `status: "pending"` with the reason and what
 the person should do. Setup checks again on its next run, the way it re-tests a pending Jira board.
 
-`ensure` records `pending` before it installs anything, so a run the CLI stops early is finished next time. It
-never replaces an `appium` server the user added themselves, and when a new version doesn't answer it puts the
-working one back into any config that lost it.
+`ensure` records `pending` before it installs anything, so a run the CLI stops early is finished next time. When a
+new version doesn't answer, the record keeps the version that works, so the connector goes on starting it.
+
+## In setup
+
+`/bc:setup` gets these tools ready **without a question of its own**: it detects, plans, and puts the plan in its
+recap, where the one "Save?" covers it.
+
+1. **Detect**: `bc_tools.py detect --project '<project>'`. `test_project: false` or `applies: false` → this part is
+   skipped silently: no recap line, nothing downloaded. Otherwise its `lines` go in the recap as they are,
+   `plan.shared` says which shared tools the Mac is missing, and `setup_script` names the project's own setup script.
+2. **The project's own check**, when `setup_script` is set: `bc_tools.py project --project '<project>' --mode check`
+   with a 10-minute timeout (it stops the script after 9). It runs the project's code, so it reaches the normal
+   permission prompt. Its `line` goes in the recap, and when it reports `problems`, up to four of them and then
+   `its fix runs after you save`.
+3. **Recap**: the automation lines go last, then `(say "leave out automation" to skip it)`. They already say what
+   gets installed, how big it is, which phone and app were found, and what only the user can do.
+
+"Leave out automation" saves `{"automation": {"enabled": false}}` with the rest of the settings, and setup never
+brings it up by itself again. Anything else the user says about it — "don't install the Android tools" — is applied
+before saving, like any correction to the recap.
+
+## After the save
+
+Only when the recap listed the tools, with no further questions:
+
+1. **The project's fix**, when its check reported problems: `bc_tools.py project --project '<project>' --mode fix`.
+   Show its `line`; a `needs_you` is shown in its own words — `run ./setup in a terminal for what needs you: …`.
+2. **Install and prove**: `bc_tools.py ensure --project '<project>'`, adding `--shared jdk`, `--shared android-sdk`,
+   or `--shared jdk,android-sdk` only for what the recap named. The first install is about 620 MB and takes one to
+   three minutes: say so first, and give the call a 10-minute timeout. It records the `automation` block itself.
+3. **One screen from the phone**, when `ensure` reported `"phone_check": "due"`: `bc_tools.py smoke --project
+   '<project>'`, also with a 10-minute timeout.
+4. **Show each call's `lines`** as they are. `pending` names what is missing and what to do; the next `/bc:setup`
+   checks again. The `appium` connector loads appium-mcp when the assistant starts, so after a first install or a
+   new version the user restarts the assistant once — `ensure`'s lines say so (ADR 0002).
+
+**On a re-check**, when the settings say `automation.enabled: true`: `bc_tools.py status --project '<project>'`.
+When its `needs` is empty, say nothing more. Otherwise — a plugin update changed a pin (`install`), the connector's
+record is missing or stale (`record`), or something was pending (`retry`) — run `ensure`, then `smoke` when it says
+`"phone_check": "due"`, and show their `lines`. A pending result never holds up the rest of setup.
 
 ## Rules
 
@@ -95,6 +135,6 @@ working one back into any config that lost it.
   Run `--mode fix` only when the recap said the project's fix would run.
 - **Whatever needs a person is passed on, not attempted**: `sudo`, the App Store, signing, and the phone. When the
   project's fix leaves problems, `project` returns `needs_you` — show it as "run ./setup in a terminal".
-- **Never write the `appium` entry by hand**, never add `appium_*` write tools to an allowlist, and never call
-  `remove` unless the user asked for it.
+- **Never write the record by hand** (`~/.buddy-council/tools/appium-mcp.json`: `ensure` writes it once the server
+  answers), never add `appium_*` write tools to an allowlist, and never call `remove` unless the user asked for it.
 - Never delete anything under `~/.buddy-council/tools` with `rm`; `prune` and `remove` are the only ways.

@@ -35,7 +35,7 @@ Lookups search every requirement in scope, so they need a run of the whole scope
 1. Unless the user asked for fresh data ("refresh", "re-read Jama"), ask for a recent run:
 
    ```
-   python3 <script> recent --project '<absolute path of the current working directory>' --max-age-minutes 30
+   python3 <script> recent --project '<the project folder>' --max-age-minutes 30
    ```
 
    When it returns a `run_dir`, print
@@ -55,7 +55,7 @@ python3 <script> search --run '<run_dir>' --query '<the ask>' --concept '<own wo
 
 It answers with a JSON summary — `files`, `matched` (how many requirements match every concept and at least
 one), `top`, `by_feature`, `unmatched_wordings`, `suggested_terms`, `warnings` — and writes the results to the
-run folder. Read every file in `files`, in order. They hold:
+run folder. Read every file in `files`, in order, with your view tool — each fits one read. They hold:
 
 - **Where the matches are** — the features and folders the top results sit in.
 - **Ranked requirements** — the top 25, each with the concepts it matched and through which wording, its
@@ -114,10 +114,10 @@ Rules:
 ## Step 6: In-flight work — the Data Contract's board source
 
 When `jira.board` is configured and `jira.pending` is not `true`, follow
-`howtos/fetch-board-issues.md` once for the board and print its `Fetch:` line;
-otherwise print its skip line. An issue is **in flight** for this ask when its `linked_ids` hit a requirement
-you placed, or its title or description describes the asked behavior. A configured board that errors is a
-failed source: say so and ask whether to continue — the answer is then **PARTIAL**.
+`howtos/fetch-board-issues.md` once for the board, narrowed to the ask (its *A lookup's ask* case), and print its
+`Fetch:` line; otherwise print its skip line. An issue is **in flight** for this ask when its `linked_ids` hit a
+requirement you placed, or its title or description describes the asked behavior. A configured board that errors
+is a failed source: say so and ask whether to continue — the answer is then **PARTIAL**.
 
 ## Step 7: Answer
 
@@ -127,7 +127,7 @@ keep it short.
 - **Already specified** — at least one active requirement covers the ask.
 - **Partly specified** — requirements cover part of it; name the part that no requirement states.
 - **Not specified** — only after Step 4; name the closest requirements and the folder where it would belong.
-  When background states it, say where: "not in the requirements in scope — but H-GMS-31 in the System
+  When background states it, say where: "not in the requirements in scope — but CWA-SYS-31 in the System
   Requirements says …".
 - Lead with **Conflicts with <ID>** whenever an active requirement conflicts — it matters most.
 
@@ -142,12 +142,22 @@ Conflicts
 Related
 - CWA-REQ-90 — <one line>
 Background elsewhere in the project
-- H-GMS-31 · GMS Requirement · System Requirements / GMS RS — "<the line that bears on the ask, verbatim>" · <link>
+- CWA-SYS-31 · System Requirement · System Requirements / System RS — "<the line that bears on the ask, verbatim>" · <link>
 Where it lives: Alerts / Alert Triggers (12 of the top 25), Patient Onboarding / Sensor Warm-up (2)
 In flight: PROJ-1234 — <title> (In Progress) — touches CWA-REQ-87
 Tested without a requirement: TC-789 — "<title>"
 Gap: <what no requirement states> — it would belong in <folder>
+
+Fetch: requirements → 312 from Jama project 42 (…)
+Fetch: background → 2890 items from the rest of Jama project 42, context for answers, never counted (…)
+Fetch: test cases → 1206 read from TestRail suite 12
+Enrichment: fetched 0 of 0 GitHub-linked requirement docs
+Readiness: 312 requirements, 1206 test cases for scope "all"
+Fetch: board issues → 14 fetched from board 77
 ```
+
+End every answer with the run's `lines` — each `Fetch:`, `Enrichment:`, and `Readiness:` line exactly as `summary`
+or `recent` printed it, one per line, never shortened or merged — then the board's `Fetch:` line.
 
 Leave out any section with nothing in it. When the run was reused, say how old it is. A follow-up about the
 same ask reads the same results; a new topic is a new search on the same run. If the user wants the gap

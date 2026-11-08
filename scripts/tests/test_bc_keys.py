@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import bc_keys  # noqa: E402
 
-SECRETS = ("tr-key-A", "tr-key-B", "jama-secret", "jira-token", "dc-pat", "old-tr-key")
+SECRETS = ("tr-key-A", "tr-key-B", "jama-secret", "jira-token", "dc-pat", "old-tr-key", "old-gh-token", "gh-key")
 
 
 class Home(unittest.TestCase):
@@ -205,6 +205,25 @@ class Store(Home):
         with self.assertRaises(bc_keys.KeyStoreError):
             self.save("jira", "https://jira.acme.com", personal_token="dc-pat", ssl_verify="no")
 
+    def test_check_names_who_a_key_signs_in_as_and_never_the_secret(self):
+        self.save("jira", "https://acme.atlassian.net", username="qa@acme.com", api_token="jira-token")
+        self.save("jama", "https://acme.jamacloud.com", client_id="cid", client_secret="jama-secret")
+        self.assertEqual(bc_keys.check("https://acme.atlassian.net", "jira")["user"], "qa@acme.com")
+        self.assertNotIn("user", bc_keys.check("https://acme.jamacloud.com", "jama"))
+        self.assertNotIn("jira-token", json.dumps(bc_keys.check("https://acme.atlassian.net", "jira")))
+
+    def test_a_github_key_belongs_to_the_host_and_never_travels_over_http(self):
+        path = self.save("github", "https://github.com/acme/app/blob/main/docs/sds.md", token="gh-key")
+        self.assertEqual(path.name, "github.com.json")
+        key = bc_keys.read_key("https://github.com/acme/other/tree/main/docs", "github")
+        self.assertEqual((key["token"], key["url"], key["auth"]), ("gh-key", "https://github.com", "read-only token"))
+        self.assertEqual(bc_keys.base_url("github", "https://github.acme.com/team/app/blob/main/a.md"),
+                         "https://github.acme.com", "GitHub Enterprise works the same way")
+        with self.assertRaises(bc_keys.KeyStoreError):
+            bc_keys.read_key("github.acme.com", "github")
+        with self.assertRaises(bc_keys.KeyStoreError):
+            self.save("github", "http://github.acme.com", token="gh-key")
+
     def test_forget_deletes_one_sites_key(self):
         self.save("testrail", "https://a.testrail.io", username="qa", api_key="tr-key-A")
         self.save("testrail", "https://b.testrail.io", username="qa", api_key="tr-key-B")
@@ -245,7 +264,7 @@ class Migration(Home):
         self.secrets.write_text(json.dumps({
             "testrail": {"username": "qa@acme.com", "api_key": "old-tr-key"},
             "jama": {"client_id": "cid", "client_secret": "jama-secret"},
-            "github": {"token": "not-a-connector-key"},
+            "github": {"token": "old-gh-token"},
         }))
         self.env = bc / "atlassian.env"
         self.env.write_text("JIRA_URL=https://acme.atlassian.net\nJIRA_USERNAME=qa@acme.com\nJIRA_API_TOKEN=jira-token\n"
@@ -257,7 +276,10 @@ class Migration(Home):
         self.before = {path: path.read_bytes() for path in (self.secrets, self.env, self.copilot)}
 
     def write_copilot(self, testrail, jama, root=None):
-        root = root or self.home / "plugins" / "bc"
+        if root is None:  # bc's install, which older setups ran the servers from: its manifest names bc
+            root = self.home / "plugins" / "bc"
+            (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+            (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "bc"}))
         servers = {"docker": {"type": "local", "command": "docker"},
                    "testrail": self.entry("testrail", testrail, root, BC_SECRETS_FILE="~/.buddy-council/secrets.json"),
                    "jama": self.entry("jama", jama, root, BC_SECRETS_FILE=str(self.secrets))}
@@ -287,6 +309,8 @@ class Migration(Home):
         report = bc_keys.migrate_legacy()
         self.assertEqual(sorted((m["provider"], m["site"]) for m in report["migrated"]),
                          [("jama", "acme.jamacloud.com"), ("jira", "acme.atlassian.net"), ("testrail", "acme.testrail.io")])
+        self.assertEqual(bc_keys.sites("github"), [], "a token is saved only as a last resort (Q17)")
+        self.assertTrue(bc_keys.has_legacy_github_token())
         self.assertEqual(bc_keys.read_key(None, "testrail")["api_key"], "old-tr-key")
         self.assertEqual(bc_keys.read_key(None, "jama")["client_secret"], "jama-secret")
         jira = bc_keys.read_key(None, "jira")
@@ -359,6 +383,40 @@ class Migration(Home):
         bc_keys.migrate_legacy()
         self.assertEqual(self.migrated("testrail"), ["acme.testrail.io"])
         self.assertEqual(bc_keys.read_key(None, "testrail")["url"], "https://acme.testrail.io")
+
+    def test_a_server_folder_named_like_bcs_in_another_plugin_never_decides_a_site(self):
+        other = self.home / ".copilot" / "installed-plugins" / "tools" / "other"
+        (other / "plugin.json").parent.mkdir(parents=True)
+        (other / "plugin.json").write_text(json.dumps({"name": "other"}))
+        self.write_copilot("https://vendor-demo.testrail.io", "https://acme.jamacloud.com", root=other)
+        report = bc_keys.migrate_legacy()
+        self.assertEqual(self.migrated("testrail"), [], "the folder's name alone isn't bc's")
+        self.assertIn("no site was saved", [s for s in report["skipped"] if s["provider"] == "testrail"][0]["reason"])
+        self.assertFalse(bc_keys.is_bc_entry("testrail", json.loads(self.copilot.read_text())["mcpServers"]["testrail"], False))
+
+    def test_the_old_files_are_described_without_their_keys(self):
+        (self.home / ".buddy-council-secrets.json").write_text(json.dumps({"testrail": {"api_key": "older-tr-key"}}))
+        sections = bc_keys.legacy_sections()
+        self.assertEqual(sorted((Path(s["path"]).name, s["provider"]) for s in sections),
+                         [(".buddy-council-secrets.json", "testrail"), ("secrets.json", "github"), ("secrets.json", "jama"),
+                          ("secrets.json", "testrail")])
+        self.assertEqual(bc_keys.legacy_jira_url(), "https://acme.atlassian.net")
+        text = json.dumps(sections) + str(bc_keys.legacy_jira_url())
+        for secret in ("old-tr-key", "older-tr-key", "jama-secret", "old-gh-token", "jira-token", "cid"):
+            self.assertNotIn(secret, text)
+
+    def test_the_old_github_token_becomes_a_key_only_when_asked_and_never_replaces_one(self):
+        bc_keys.migrate_legacy()
+        self.assertTrue(bc_keys.has_legacy_github_token())
+        entry = {"command": "github-mcp-server", "env": {"GITHUB_TOKEN": "old-gh-token"}}
+        self.assertTrue(bc_keys.legacy_entry_uses_github_token(entry))
+        self.assertFalse(bc_keys.legacy_entry_uses_github_token({"env": {"GITHUB_TOKEN": "users-own-token"}}))
+        self.assertEqual(bc_keys.move_legacy_github_token(), {"moved": True, "site": "github.com"})
+        self.assertEqual(bc_keys.read_key("github.com", "github")["token"], "old-gh-token")
+        self.assertFalse(bc_keys.has_legacy_github_token())
+        bc_keys.write_key("github", "https://github.com", {"token": "new-key"})
+        self.assertFalse(bc_keys.move_legacy_github_token()["moved"])
+        self.assertEqual(bc_keys.read_key("github.com", "github")["token"], "new-key")
 
     def test_a_server_that_isnt_bcs_never_decides_a_site(self):
         data = json.loads(self.copilot.read_text())

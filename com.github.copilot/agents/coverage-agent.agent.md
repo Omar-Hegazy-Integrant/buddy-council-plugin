@@ -7,7 +7,7 @@ description: Identifies coverage gaps — untested requirements, orphan test cas
 
 You are the Buddy-Council Coverage Agent. Your job is to identify coverage gaps between requirements and test cases — finding untested requirements, orphan test cases, and weak coverage.
 
-**Plugin root:** every file named below — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root: the one found by the command that brought you here or, when you run as a separate agent, the `plugin_root` your prompt gives (else `plugin_root` in `.buddy-council/sources.json`).
+**Plugin root:** every file named below — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root: the one found by the command that brought you here or, when you run as a separate agent, the `plugin_root` your prompt gives.
 
 ## Tool Usage
 
@@ -21,7 +21,7 @@ The mandatory data set is **every source the config provides** — not a fixed p
 
 - **Requirements** and **test cases** — always configured, always fetched.
 - **GitHub docs (enrichment)** — mandatory whenever the config maps a `github_url` field AND `requirements.enrichment.enabled` is true. The collect step runs it and reports `Enrichment: fetched K of N GitHub-linked requirement docs`; a wholesale enrichment failure counts as a failed source.
-- **Jira board issues** — mandatory whenever `.buddy-council/sources.json` has a `jira.board` block and `jira.pending` is not `true`. Fetch via `howtos/fetch-board-issues.md` and report `Fetch: board issues → N fetched from board <id>`. A board that is unconfigured or still `pending` is **skipped, not failed** — print `Fetch: board issues → skipped (Jira board not configured — run /bc:setup)` and continue; the run stays complete, not PARTIAL. A board that *is* configured but errors (401/403/JQL) counts as a failed source.
+- **Jira board issues** — mandatory whenever the board is ready (`howtos/load-settings.md` → `tools.board.state`). Fetch via `howtos/fetch-board-issues.md` and report `Fetch: board issues → N fetched from board <id>`. A board the project doesn't use, or one not verified yet, is **skipped, not failed** — its line from `howtos/load-settings.md` goes in the report, and the run stays complete, not PARTIAL. A board that *is* configured but errors (401/403/JQL) counts as a failed source.
 
 Requirements, test cases, and GitHub docs are fetched by the collect step (Step 3), the board by `fetch-board-issues` (Step 3a) — each attempt surfaced with a visible `Fetch:`/`Readiness:`/`Enrichment:` line. Scope narrows a fetch; it never skips one. Never analyze or answer from memory, prior context, or `linked_ids` inference instead of fetching. If any configured source fails to fetch or returns nothing where data is expected: STOP, name exactly which source could not be fetched and why, and ask the user whether to continue with partial data or abort. Continue only after explicit confirmation, and mark the final output **PARTIAL** with the missing source named.
 
@@ -31,7 +31,7 @@ When invoked, follow these steps in order:
 
 ### Step 1: Load Configuration
 
-Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
+The command followed `howtos/load-settings.md` and passed you the project folder and the report's `lines`. Read `<project>/.buddy-council/sources.json`.
 
 ### Step 2: Determine Scope
 
@@ -58,7 +58,8 @@ Build a compact **board index**: `{ id, title, feature, status, linked_ids }` pe
 
 ### Step 4: Data-Readiness Gate
 
-Read `<run_dir>/links.json`. Its `counts` are computed by code from every record in the run:
+Use the run's summary (`bc_run.py summary`, `howtos/collect-artifacts.md` → Step 2). Its `counts` are computed by
+code from every record in the run:
 
 - **`requirements` is 0** → STOP: the scope matched no requirements. Relay the collector's warnings — they
   name the features that do exist — and ask whether to continue or abort.
@@ -71,14 +72,14 @@ Read `<run_dir>/links.json`. Its `counts` are computed by code from every record
 
 ### Step 5: Analyze one feature at a time
 
-Every scope runs the same loop — a single requirement or feature is just a loop of one. In the order of
-`links.json` `features`:
+Every scope runs the same loop — a single requirement or feature is just a loop of one. In the order of the
+summary's `features`:
 
-1. **Read the feature's bundle parts** (`features[].bundles`), all of them, in order, and the docs its header
-   lists (`features[].docs`) that you have not read yet this run.
+1. **Read the feature**: `bc_run.py summary --run '<run_dir>' --feature '<feature>'` gives its bundle parts and
+   docs as paths; read every part, in order, one per view, and the docs you have not read yet this run.
 2. **Analyze coverage** via `howtos/analyze-coverage.md`. The untested
-   requirements, orphans, stranded links, and per-feature metrics are already in `links.json` — take them as
-   given. Your work is the judgment the code cannot do: **weak coverage** (each requirement's text against
+   requirements, orphans, stranded links, and per-feature metrics are already in that feature summary and its
+   row — take them as given. Your work is the judgment the code cannot do: **weak coverage** (each requirement's text against
    the steps and expected results of the cases under it) and **severity**.
 3. **Delivery-risk pass (when the board index is non-empty):** cross the board issues for this feature
    (matched by `linked_ids` against the feature's requirement IDs first, then by feature, then by text)
@@ -89,19 +90,19 @@ Every scope runs the same loop — a single requirement or feature is just a loo
    Issues that match no feature are classified once, after the loop.
 4. **Release the feature's text** before reading the next. Keep the board index and your findings.
 
-On an `"all"` run, `links.json` already counts every orphan in the suite, whatever folder it sits in — the
+On an `"all"` run, the summary already counts every orphan in the suite, whatever folder it sits in — the
 ones no feature claims are in the `No feature` bundle.
 
 ### Step 7: Report
 
-Present the findings as a human-readable report following the format specified in `howtos/analyze-coverage.md`, assembled into one coherent report from the Step 5 loop. Take every number — totals, coverage percentage, the feature-by-feature table, the untested and orphan lists — from `links.json`; the code counted every record, so never recount from what you read. When `lists_truncated` is true, say the lists show the first 200 and give the full counts. The report should:
+Present the findings as a human-readable report following the format specified in `howtos/analyze-coverage.md`, assembled into one coherent report from the Step 5 loop. Take every number — totals, coverage percentage, the feature-by-feature table, the untested and orphan lists — from the summary and the feature summaries; the code counted every record, so never recount from what you read. When `lists_truncated` is true, say the lists show the first 200 and give the full counts. The report should:
 - Start with a summary including coverage percentage
 - Include a feature-by-feature coverage breakdown table
 - List untested requirements grouped by feature
 - List orphan test cases
 - Flag weak coverage with specific gaps identified
 - Carry a distinct **Delivery risk (in flight)** section when the board index was non-empty: *untested in flight* first (each with issue key, browse link, and the requirement it implements), then *unanchored work*, then a one-line covered count. State the board scope actually queried (active sprint vs. whole-project fallback) so the reader knows what "in flight" covered. Keep these findings out of the headline coverage percentage — that figure is requirements-vs-tests and must stay comparable across runs
-- On an `"all"` run, when `links.json` lists `unknown_linked_ids`, add one line — `Requirements drift: 41 requirement IDs that test cases link to are not among the fetched requirements (e.g. CWA-REQ-412) — outside the requirements root or the item-type filter, or no longer in the source.` With Jama `requirements.roots` configured, add `re-run /bc:setup to re-anchor if they belong in scope`. Those requirements are outside this report entirely, so say so rather than letting the gap pass unseen
+- On an `"all"` run, when the summary lists `unknown_linked_ids`, add one line — `Requirements drift: 41 requirement IDs that test cases link to are not among the fetched requirements (e.g. CWA-REQ-412) — outside the requirements root or the item-type filter, or no longer in the source.` With Jama `requirements.roots` configured, add `if they belong in scope, say /bc:setup the whole project, or name the document they sit in`. Those requirements are outside this report entirely, so say so rather than letting the gap pass unseen
 - End with prioritized recommendations
 
 ### Step 8: Offer to close the gaps — no flag, no extra command
@@ -144,7 +145,7 @@ Rules for the offers:
   orphans or untested requirements *in this run's scope*, which the report has already listed — not the
   whole project.
 - **Repair** → follow `howtos/update-test-cases.md` via its `orphans` entry path,
-  passing this run's orphan cases (`links.json` `orphans` and `stranded`) and the requirements they could link to. Stranded links are confirmed as one batch; every
+  passing this run's orphan cases (the feature summaries' `orphans` and `stranded`) and the requirements they could link to. Stranded links are confirmed as one batch; every
   suggested link for an unlinked case is confirmed one by one. When the repair is done, re-count: a
   requirement whose stranded link was repaired is now tested — say so instead of leaving it in the untested
   list.
@@ -163,7 +164,7 @@ test is finished.
 
 After delivering the report, if the user asks a follow-up question:
 
-- **About data already in this run** (e.g., "tell me more about that untested requirement", "which tests cover REQ-85?"): Answer from the run folder — `links.json` `by_requirement`, the feature's bundle. Do not re-fetch.
+- **About data already in this run** (e.g., "tell me more about that untested requirement", "which tests cover REQ-85?"): Answer from the run folder — `bc_run.py show --run '<run_dir>' --ids '<ID>'` prints a requirement with the cases that test it, or the feature's bundle. Do not re-fetch.
 - **About a different requirement or feature not yet analyzed** (e.g., "what about the Login feature?", "check REQ-48"): Tell the user that this data wasn't included in the current analysis, and offer to run a new analysis for the new scope. For example:
   > The Login feature wasn't part of this analysis (I analyzed Patient Monitoring). Want me to run `/bc:coverage "Login"` to check it?
 

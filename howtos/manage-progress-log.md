@@ -1,6 +1,6 @@
 # Manage Progress Log
 
-Manage the onboarding progress log that lives in the user's project root. The log is the source of truth for resuming an onboarding journey across sessions.
+Manage the onboarding progress log that lives in the project folder. The log is the source of truth for resuming an onboarding journey across sessions.
 
 ## When to Use
 
@@ -8,35 +8,37 @@ Invoked by the onboarding agent at every state transition: starting a journey, a
 
 ## File Locations
 
-The log lives in the **user's project root** (where Claude Code was invoked), not the plugin directory:
+The log lives in the **project folder** — the one `howtos/load-settings.md` found — not the plugin directory:
 
 ```
-<user-project>/.buddy-council/
+<project>/.buddy-council/
 ├── onboarding-progress.json    # structured state — source of truth for resume
 └── onboarding-notes.md         # append-only human-readable transcript
 ```
 
-Both files live inside `.buddy-council/`, which is kept out of git via the repo-local `.git/info/exclude` (never the tracked `.gitignore`) — see Operation 1.
-
 ## Operations
 
-### 1. Initialize the Log Directory
+### 1. Saving
 
-Before any read or write:
+Every change to either file is one plain command through the plugin's run-folder script, which the bash hook
+approves, so a save never prompts. The script keeps `.buddy-council/` out of git through the clone's own
+`info/exclude`, writes atomically, and refuses to overwrite a log that isn't valid JSON:
 
-1. Determine the user's project root (current working directory at command invocation).
-2. If `<user-project>/.buddy-council/` does not exist, create it.
-3. Ensure `.buddy-council/` is ignored **without touching any tracked file** — use git's per-repo local exclude file, never `.gitignore`:
-   - Check whether the project is a git repository (e.g. `git rev-parse --is-inside-work-tree` succeeds).
-   - If it is, resolve the exclude file with `git rev-parse --git-path info/exclude` (this correctly handles worktrees and submodules, where `.git` is a file rather than a directory). Create the file's parent directory if needed.
-   - If that file does not already contain a `.buddy-council/` or `.buddy-council` line, append `.buddy-council/` on a new line. **No confirmation prompt is needed** — `.git/info/exclude` is local to the clone, never tracked, and never appears in `git status` or history, so this leaves zero git footprint. Do **not** edit `.gitignore`.
-   - If the project is **not** a git repository, skip the exclude step silently and just keep `.buddy-council/` in the project root (no git means no footprint to avoid).
+```bash
+python3 '<plugin root>/scripts/bc_run.py' progress --project '<project>' --log onboarding --patch '<json>'
+python3 '<plugin root>/scripts/bc_run.py' note --project '<project>' --title '<feature> — <event>' --text '<what happened>'
+python3 '<plugin root>/scripts/bc_run.py' archive --project '<project>' --log onboarding
+```
+
+`--patch` is JSON on one line, with every `'` written as `\u0027`. It merges into the log: `features` merge by
+`name`, so send only the features that changed, each with its `name` and the fields that changed; anything else
+replaces what was there, and a feature's own lists (`user_notes`, `requirement_ids`, `test_case_ids`) are replaced
+whole, so send each one complete. The script stamps `last_updated`.
 
 ### 2. Initialize the Progress File
 
-When starting a new journey (no existing `onboarding-progress.json`, or after `reset`):
-
-Write an initial JSON document with this exact shape:
+When starting a new journey (no existing `onboarding-progress.json`, or after `reset`), save this whole document as
+the first patch:
 
 ```json
 {
@@ -119,38 +121,21 @@ When resuming an existing journey:
 2. Validate the JSON structure. If parsing fails, do NOT delete the file — tell the user the log appears corrupted and offer two choices: archive and restart, or open the file for manual repair.
 3. Return the parsed object. The agent will use `current_feature_index`, `current_step_index`, and `current_phase` to determine where to resume.
 
-### 4. Write/Update the Log
+### 4. Update the Log
 
-After every meaningful state change (step advance, feature completion, assessment recorded, note added):
-
-1. Update `last_updated` to the current ISO 8601 UTC timestamp.
-2. Update the relevant fields (`current_step_index`, `current_phase`, `features[i].status`, etc.).
-3. Write the entire object back to `onboarding-progress.json` atomically:
-   - Write to `onboarding-progress.json.tmp` first
-   - Rename to `onboarding-progress.json` (atomic on POSIX)
-4. Never partially update. Always write the complete document.
+After every meaningful state change — a step advance, a feature completed, an assessment recorded, a note added —
+save a patch with what changed: `current_step_index`, `current_phase`, the feature's `status`, and so on.
 
 ### 5. Append to Notes File
 
-For human-readable transcript entries, append to `onboarding-notes.md`:
-
-```markdown
-## <ISO 8601 timestamp> — <Feature name> — <event>
-
-<short description of what happened: a step demoed, a question answered, a note added>
-
----
-```
-
-Use this for: feature start, feature completion, assessment summary, user notes, skipped steps. Do NOT append for every minor state change — keep the file readable.
+For the human-readable transcript, `note` appends one entry — `## <timestamp> — <title>`, the text, then `---`. Use
+it for: feature start, feature completion, assessment summary, user notes, skipped steps — not every minor state
+change, so the file stays readable.
 
 ### 6. Archive on Reset
 
-When the user runs `/bc:onboarding reset`:
-
-1. Rename existing `onboarding-progress.json` to `onboarding-progress.<YYYY-MM-DDTHHMMSSZ>.json`.
-2. Rename existing `onboarding-notes.md` to `onboarding-notes.<YYYY-MM-DDTHHMMSSZ>.md`.
-3. Confirm with the user before deleting; archived files remain in `.buddy-council/` until manually removed.
+When the user runs `/bc:onboarding reset`, `archive` renames `onboarding-progress.json` and `onboarding-notes.md` to
+dated names (`onboarding-progress.<YYYY-MM-DDTHHMMSSZ>.json`); they stay in `.buddy-council/` until removed by hand.
 
 ### 7. Status Summary
 
@@ -176,16 +161,14 @@ Open items:
 
 | Situation | Behavior |
 |-----------|----------|
-| `.buddy-council/` cannot be created (permission denied) | Tell the user the path failed and ask whether to fall back to `~/.buddy-council/<project-name>/` |
-| `onboarding-progress.json` is corrupted | Do not delete. Offer archive-and-restart or manual repair |
+| A save fails | Show the script's `error`, and let the user decide whether to retry or pause |
+| `onboarding-progress.json` is corrupted | The script leaves it as it is. Offer archive-and-restart or manual repair |
 | User runs `resume` but no log exists | Tell the user there's no saved progress, offer to start a new journey |
 | User runs `start` but a log exists | Ask whether to resume, reset, or cancel |
-| Project is not a git repo | Skip the `.git/info/exclude` step silently; still create the log directory in the project root |
 
 ## Guidelines
 
 - **Never block the user's progress on a write failure.** If a write fails, surface the error and let the user decide whether to retry or pause.
-- **Always use atomic writes** — losing the log mid-write would force the user to restart.
-- **Don't overwrite user notes** — `user_notes` is append-only.
+- **Keep user notes** — `user_notes` only grows: send the whole list, with the new note added.
 - **Treat the JSON as the source of truth.** The Markdown notes file is auxiliary and human-readable; never read it back to determine state.
 - **Preserve archived files.** Reset archives but does not delete.

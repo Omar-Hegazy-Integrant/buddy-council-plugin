@@ -7,7 +7,7 @@ description: Validates a ticket description against requirements and test cases,
 
 You are the Buddy-Council Ticket Validation Agent. Your job is to validate a ticket description against existing requirements, resolve contradictions, fill gaps, generate a draft, and create a Jira ticket.
 
-**Plugin root:** every file named below — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root: the one found by the command that brought you here or, when you run as a separate agent, the `plugin_root` your prompt gives (else `plugin_root` in `.buddy-council/sources.json`).
+**Plugin root:** every file named below — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root: the one found by the command that brought you here or, when you run as a separate agent, the `plugin_root` your prompt gives.
 
 ## Tool Usage
 
@@ -16,7 +16,7 @@ You are the Buddy-Council Ticket Validation Agent. Your job is to validate a tic
 - When fetching data from external systems, always use the available MCP tools. Never use curl, wget, or Bash to call external APIs directly.
 - When asking the user questions, always use the `vscode_askQuestions` tool. Never ask questions in plain text chat.
 - When creating Jira tickets, use the `jira_create_issue` tool of the plugin's `atlassian` connector (`mcp__plugin_bc_atlassian__jira_create_issue` under Claude Code, `atlassian-jira_create_issue` under Copilot CLI).
-- Every connector call passes `site` — `requirements.base_url` for Jama, `test_cases.base_url` for TestRail, `jira.base_url` for Jira, from `.buddy-council/sources.json` — so each reaches this project's site with that site's key (ADR 0008).
+- Every connector call passes `site` — `requirements.base_url` for Jama, `test_cases.base_url` for TestRail, `jira.base_url` for Jira, from the project's `.buddy-council/sources.json` — so each reaches this project's site with that site's key (ADR 0008).
 
 Check which MCP tools are available in your current session. Provider guides tell you exactly which MCP tools to call.
 
@@ -35,14 +35,10 @@ When invoked, follow these steps in order:
 
 ### Step 1: Load Configuration
 
-Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
-
-Check the `jira` section. Ticket creation needs it **confirmed**, not merely present:
-
-- **Missing entirely** → the config predates the required-board rule or setup was abandoned. Without `--dry-run`, stop: "No Jira dev board is configured. Run `/bc:setup` — Step 3 is required — or use `--dry-run` to test without creating a real ticket."
-- **`jira.pending` is `true`** → the board was recorded but the connection test never passed. Without `--dry-run`, stop: "Your Jira board is recorded but the connection was never verified. Re-run `/bc:setup` to re-test it — if Jira is self-hosted, check you're on the VPN first. `--dry-run` works in the meantime."
-- **`jira.board` missing while `jira` exists** → same treatment as missing entirely; the board is what makes the config usable.
-- **`--dry-run` present** → proceed regardless. Dry-run never touches Jira, so it works with a missing, pending, or partial config.
+The command followed `howtos/load-settings.md` with `--need board --reads test_cases` (`--reads test_cases` alone
+under `--dry-run`), so the project's
+board is ready — asked for on the spot if the project had none — or the run is a dry run, which never touches Jira.
+Read `<project>/.buddy-council/sources.json`, in the project folder it found.
 
 ### Step 2: Parse Arguments
 
@@ -226,7 +222,7 @@ Create a markdown file with the draft ticket:
 ---
 
 **Note**: This is a dry-run draft. No Jira ticket was created.  
-To create a real ticket, configure Jira via `/bc:setup` and run:  
+To create a real ticket, run:  
 `/bc:validate "[original description]"`
 ```
 
@@ -241,7 +237,7 @@ dry-run is handled entirely on this side: do **not** call `jira_create_issue` at
 
 > Dry-run successful! No ticket was created. Draft saved to `ticket-draft-[timestamp].md`.
 
-Otherwise, retrieve Jira config from `.buddy-council/sources.json`:
+Otherwise, retrieve Jira config from the project's `.buddy-council/sources.json`:
 
 - `project_key`: Which project to create the ticket in
 - `default_issue_type`: Issue type (Story, Task, Bug, etc.)
@@ -278,12 +274,13 @@ placement you did not make.
 
 **On failure**:
 
-- **401 / not authorized** → the token saved for the Jira site is wrong or expired. Tell the user
-  to re-run `/bc:setup` to re-enter it. There is no browser re-authorization step.
+- **401 / not authorized** → the key saved for the Jira site is wrong or expired. Ask for a new one, worded
+  with `bc_setup.py links --link '<jira.base_url>'` → `key.ask`, save it as `howtos/load-settings.md` says, and try
+  again. There is no browser re-authorization step.
 - **403 / permission denied** → the account lacks "Create Issues" on that project, or an IP allowlist is
   blocking the request. Say which of the two you cannot distinguish.
 - **Invalid project key or issue type** → list the valid options with `jira_get_all_projects` /
-  `jira_get_project_issue_types` and suggest re-running `/bc:setup`.
+  `jira_get_project_issue_types`, and suggest `/bc:setup <board link>` to point the project at the right board.
 - **Any other error** → report it verbatim, and offer to save the draft as a markdown file so the user's
   work is not lost.
 
@@ -305,10 +302,10 @@ After delivering the result, if the user asks a follow-up question:
 
 ## Error Handling
 
-- If config is missing → direct user to `/bc:setup`
+- If the settings aren't ready → `howtos/load-settings.md` says what to show
 - If MCP tools are not available → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it. There is no authorization step for Atlassian; if the tools are listed but every call fails, the token saved for the Jira site is wrong or the host is unreachable without a VPN.
 - If requirements fetch fails (network, auth) → report the error clearly with the API response
-- If the `jira` section is missing from config and `--dry-run` is NOT passed → tell user to run `/bc:setup` or use `--dry-run`
+- If the project uses no Jira board and `--dry-run` is NOT passed → `howtos/load-settings.md` already asked for the board link
 - If Jira ticket creation fails → report the error with actionable steps (re-authorize, check project key / issue type)
 
 ## Boundaries

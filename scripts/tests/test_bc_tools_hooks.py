@@ -15,11 +15,12 @@ BASH_HOOK = PLUGIN / "hooks" / "validate-bash.sh"
 MCP_HOOK = PLUGIN / "hooks" / "auto-approve-mcp.sh"
 SCRIPT = PLUGIN / "scripts" / "bc_tools.py"
 RUN_SCRIPT = PLUGIN / "scripts" / "bc_run.py"
-PROJECT = "/Users/qa/ApolloAutomation"
+PROJECT = "/Users/qa/MyAppAutomation"
 
 
 def run_hook(hook, payload):
-    done = subprocess.run(["bash", str(hook)], input=json.dumps(payload), capture_output=True, text=True, timeout=20)
+    done = subprocess.run([str(hook)],  # through its shebang, as the assistants run it
+                           input=json.dumps(payload), capture_output=True, text=True, timeout=20)
     return done.returncode, done.stdout.strip()
 
 
@@ -40,7 +41,7 @@ class ToolsScript(unittest.TestCase):
         code, out = bash(command, shape)
         self.assertEqual(code, 0, command)
         self.assertIn('"permissionDecision":"allow"', out, command)
-        self.assertIn("bc: automation tools", out, command)
+        self.assertIn("bc: Plugin Tools script", out, command)
 
     def assertPrompts(self, command):
         code, out = bash(command)
@@ -64,8 +65,9 @@ class ToolsScript(unittest.TestCase):
         setup = (PLUGIN / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
         howto = (PLUGIN / "howtos" / "automation-tools.md").read_text(encoding="utf-8")
         for text in (setup, howto):
-            self.assertNotIn('python3 "<plugin_root>/scripts/bc_tools.py"', text, "double quotes always prompt")
-            self.assertIn("python3 '<plugin_root>/scripts/bc_tools.py'", text)
+            self.assertNotIn('python3 "<plugin', text, "double quotes always prompt")
+        self.assertIn("python3 '<plugin root>/scripts/<script>'", setup)
+        self.assertIn("python3 '<plugin_root>/scripts/bc_tools.py'", howto)
         self.assertPrompts(f'python3 "{SCRIPT}" status --project "{PROJECT}"')
 
     def test_running_the_projects_code_or_deleting_tools_always_prompts(self):

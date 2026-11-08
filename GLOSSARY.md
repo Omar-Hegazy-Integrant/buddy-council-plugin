@@ -22,6 +22,10 @@ _Avoid_: instance, server, host
 What a site needs before it lets the plugin in, such as an API key, a personal access token, or a client ID and secret.
 _Avoid_: credential, secret
 
+**Link**:
+The address of a page in a provider that the user pastes into setup, such as a Jama project, a TestRail suite, or a Jira board. It names the provider and the site.
+_Avoid_: URL (alone), board URL
+
 ### Running the plugin
 
 **Assistant**:

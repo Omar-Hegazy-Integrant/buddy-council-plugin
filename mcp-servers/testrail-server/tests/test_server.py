@@ -62,6 +62,7 @@ READ_TOOLS = {
     "testrail_get_case_types",
     "testrail_get_priorities",
     "testrail_get_templates",
+    "testrail_get_authoring_defaults",
     "testrail_get_requirement_ids",
     "testrail_get_linked_cases",
     "testrail_get_canonical_cases",
@@ -189,7 +190,11 @@ class FakeTestRail:
         if name == "get_projects":
             return httpx.Response(200, json={"offset": 0, "limit": 250, "size": 1, "projects": [{"id": 1, "name": "CWA"}]})
         if name == "get_suites":
-            return httpx.Response(200, json=[{"id": 9, "name": "Master"}])
+            return httpx.Response(200, json=[{"id": 9, "name": "Master", "project_id": 1}])
+        if name == "get_suite":
+            if arg != "9":
+                return self._error(400, "Field :suite_id is not a valid test suite.")
+            return httpx.Response(200, json={"id": 9, "name": "Master", "project_id": 1})
         if name == "get_case_fields":
             if self.fields_status != 200:
                 return self._error(self.fields_status, "You are not allowed to read case fields")
@@ -436,6 +441,17 @@ class LinkIndex(ServerTestCase):
     def reads_of(self, endpoint):
         return sum(1 for method, name, _ in self.fake.requests if method == "GET" and name.startswith(endpoint))
 
+    async def test_requirement_ids_can_go_to_a_run_file_whole(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp, "proj", ".buddy-council", "runs", "20261108-120000-setup")
+            run_dir.mkdir(parents=True)
+            target = run_dir / "requirement_ids.json"
+            answer = json.loads(await server.testrail_get_requirement_ids(
+                project_id=1, requirement_field=REQ_FIELD, save_to=str(target)))
+            written = json.loads(target.read_text())
+            self.assertEqual((written["kind"], written["ids"]), ("requirement_ids", ["CWA-REQ-85", "CWA-REQ-86", "CWA-REQ-87"]))
+            self.assertEqual((answer["saved_ids"], answer["saved_to"]), (3, str(target.resolve())))
+
     async def test_requirement_ids_are_summarised(self):
         result = await self.ids()
         self.assertEqual(result["requirement_field"], REQ_FIELD)
@@ -652,6 +668,37 @@ class CanonicalCases(ServerTestCase):
         self.assertEqual(victim.read_text(), "keep")
 
 
+class AuthoringDefaults(ServerTestCase):
+    async def test_one_small_answer_holds_every_id_creating_cases_needs(self):
+        found = json.loads(await server.testrail_get_authoring_defaults(project_id=1, suite_id=9))
+        self.assertEqual(found["template"], {"id": 2, "name": "Test Case (Steps)", "steps": True})
+        self.assertEqual((found["case_type"]["id"], found["priority"]["id"]), (7, 2))
+        self.assertEqual(found["requirement_field"], REQ_FIELD)
+        self.assertEqual(found["candidates"][0], {"system_name": REQ_FIELD, "label": "Jama Req ID", "cases_with_ids": 3})
+        self.assertEqual((found["placement"], found["sampled"]), ({"section_strategy": "linked", "section_root": None}, 4))
+        self.assertIn("on 3 of 4 sampled cases", found["summary"])
+        self.assertEqual(self.fake.posts(), [])
+
+    async def test_no_field_holding_requirement_ids_is_null_never_a_guess(self):
+        for case in self.fake.cases.values():
+            case[REQ_FIELD] = None
+        found = json.loads(await server.testrail_get_authoring_defaults(project_id=1, suite_id=9))
+        self.assertIsNone(found["requirement_field"])
+        self.assertEqual(found["placement"], {"section_strategy": "feature", "section_root": "V&V"})
+
+
+class Suites(ServerTestCase):
+    async def test_a_suite_link_resolves_its_project(self):
+        [suite] = json.loads(await server.testrail_get_suites(suite_id=9))
+        self.assertEqual((suite["id"], suite["project_id"]), (9, 1))
+        self.assertIn(("GET", "get_suite/9", None), self.fake.requests)
+
+    async def test_a_project_lists_its_suites_and_one_id_is_needed(self):
+        self.assertEqual([s["id"] for s in json.loads(await server.testrail_get_suites(project_id=1))], [9])
+        with self.assertRaises(ValueError):
+            await server.testrail_get_suites()
+
+
 class AddCases(ServerTestCase):
     async def test_created_cases_report_updated_on(self):
         result = json.loads(await server.testrail_add_cases(project_id=1, cases=[{"title": "Brand new"}], section_id=5))
@@ -672,6 +719,7 @@ class Contract(ServerTestCase):
             "testrail_get_case_types": {},
             "testrail_get_priorities": {},
             "testrail_get_templates": {"project_id": 1},
+            "testrail_get_authoring_defaults": {"project_id": 1, "suite_id": 9},
             "testrail_get_requirement_ids": {"project_id": 1, "requirement_field": REQ_FIELD},
             "testrail_get_linked_cases": {"project_id": 1, "requirement_field": REQ_FIELD, "requirement_ids": ["CWA-REQ-85"]},
             "testrail_get_canonical_cases": {"project_id": 1, "requirement_field": REQ_FIELD},
@@ -838,8 +886,11 @@ class FirstUse(unittest.IsolatedAsyncioTestCase):
         (home / ".buddy-council").mkdir(exist_ok=True)
         (home / ".buddy-council" / "secrets.json").write_text(json.dumps({"testrail": {"username": "qa@old.test", "api_key": "old-key"}}))
         (home / ".copilot").mkdir(exist_ok=True)
+        plugin = home / ".copilot" / "installed-plugins" / "buddy-council" / "bc"  # bc's install: its manifest names bc
+        (plugin / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "bc"}))
         old_entry = {"command": "/opt/homebrew/bin/uv", "env": {"TESTRAIL_BASE_URL": "https://old.testrail.test"},
-                     "args": ["run", "--directory", "/plugins/bc/mcp-servers/testrail-server", "mcp", "run", "server.py"]}
+                     "args": ["run", "--directory", f"{plugin}/mcp-servers/testrail-server", "mcp", "run", "server.py"]}
         (home / ".copilot" / "mcp-config.json").write_text(json.dumps({"mcpServers": {"testrail": old_entry}}))
         seen = []
 

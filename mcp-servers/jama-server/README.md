@@ -82,7 +82,10 @@ project instead of the requirements: every item outside the roots, or of another
 minus `item_type_exclude` types and `exclude_ids` subtrees. Each item has type `"background"`, its nearest
 folder as `feature`, and its location in `raw_fields.folder_path`. The plugin's `/bc:ask` lookups search it
 to enrich their answers — system requirements, risks, labeling, standards, design — and never count it as a
-requirement. It is read from the cached tree, so it costs no extra Jama requests beyond pick-list names.
+requirement. It is read from the cached tree, so it costs no extra Jama requests beyond pick-list names. A
+lookup writes both files in one call: `save_to` for the requirements plus `background_save_to` for the rest, from
+the same read and the same arguments — the item-type filter decides what counts as background, so a second call
+that left it off would quietly move items between the two.
 
 `jama_get_requirements` takes a `scope`:
 
@@ -123,7 +126,7 @@ hundreds of kilobytes, so the server is built around request count and latency:
 - **`save_to` keeps large results out of the conversation.** `jama_get_requirements` with `save_to` writes
   every requirement in scope to a JSON file in a run folder and answers with the counts and the path. The
   path must be a `.json` file directly inside an existing `<project>/.buddy-council/runs/<run>/` folder, never
-  a symbolic link; the server creates no directory. This is its only local side effect — nothing is ever
+  a symbolic link; the server creates no directory. `background_save_to` follows the same rules. This is its only local side effect — nothing is ever
   written to Jama.
 - **Each result is sent once, as text.** Every tool sets `structured_output=False`; otherwise FastMCP adds a
   structured copy of the same JSON, Copilot CLI hands the model both, and every response doubles. The test

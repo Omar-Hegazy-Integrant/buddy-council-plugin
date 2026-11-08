@@ -28,12 +28,9 @@ The text the user typed after the command, if any. Step 3 below parses it.
 
 ## Execution
 
-1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
-   > Configuration not found. Please run `/bc:setup` to configure your data sources first.
+1. Follow `howtos/load-settings.md` with `--reads test_cases`: it finds the project folder — the nearest folder at or above the current one that holds `.buddy-council/` — and stops when the settings aren't ready. The progress log lives there, at `.buddy-council/onboarding-progress.json`.
 
-2. Determine the user's project root. This is the **current working directory** where the user started their assistant, not the plugin directory. The progress log lives there at `.buddy-council/onboarding-progress.json`.
-
-3. Parse the arguments:
+2. Parse the arguments:
    - No args or `start` → start new journey, or resume if a log already exists (ask the user)
    - `resume` → load log and continue from `current_feature_index` / `current_step_index`
    - `status` → load log and print summary; do not proceed
@@ -41,7 +38,7 @@ The text the user typed after the command, if any. Step 3 below parses it.
    - `reset` → archive existing log to `onboarding-progress.<timestamp>.json` and start fresh
    - `--quick` / `--review` → mode flags passed to the agent
 
-4. Run the onboarding agent's steps in this session: follow `com.github.copilot/agents/onboarding-agent.agent.md`, passing the parsed arguments and the user's project root.
+3. Run the onboarding agent's steps in this session: follow `com.github.copilot/agents/onboarding-agent.agent.md`, passing the parsed arguments and the project folder.
 
 ## What the Agent Does
 

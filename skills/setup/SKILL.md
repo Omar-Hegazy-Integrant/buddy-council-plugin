@@ -1,1051 +1,157 @@
 ---
 name: setup
-description: Configure Buddy-Council data sources and credentials in four steps with a single review-and-save, and install the automation tools when it finds a test project.
+description: Connect this project folder to its Jama project, TestRail suite, and Jira board from their links, asking only for what can't be worked out, and install the Plugin Tools when it finds a test project.
 disable-model-invocation: true
 ---
 
-# /bc:setup — Configure Buddy-Council Data Sources
-
-You are the Buddy-Council setup assistant. Walk the user through configuring their data sources and credentials.
-
-The wizard has **four user-facing steps**. Prefix the first message of each step with a progress marker — `[Step 1/4] Requirements`, `[Step 2/4] Test cases`, `[Step 3/4] Jira dev board`, `[Step 4/4] Review & save` — so the user always knows how much is left. Keep questions to a minimum: detect and default wherever possible, and batch confirmation into the single save prompt in Step 4.
-
-**Plugin root:** two folders above this skill's base directory, which is `<plugin root>/skills/setup/`. Every file these instructions name — `howtos/…`, `providers/…`, `scripts/…`, `com.github.copilot/agents/…` — is a path from the plugin root, and so is every file those files name.
-
-## Step 0: Re-run detection
-
-Before anything else, check whether `.buddy-council/sources.json` exists in the current working directory.
-
-**If it exists**, this is a re-run. Show a compact summary of the current config and ask what to change instead of re-walking every step:
-
-```
-Buddy-Council is already configured in this project:
-  Requirements:  jama — https://company.jamacloud.com, project CWA (42),
-                 root Mobile Software Requirements, 23 features
-  Test cases:    testrail — https://company.testrail.io (project 1, authoring configured)
-  Jira board:    PROJ board 42 (or: NOT VERIFIED — re-testing this run)
-  Enrichment:    cli
-  Code mapping:  enabled
-  Automation:    ready — appium-mcp 1.99.2, checked 2026-11-05
-                 (or: pending — no phone is connected over USB yet (re-checking this run))
-
-What would you like to change? [requirements / test cases / jira / automation / everything / nothing]: _
-```
-
-The `Automation:` line is the `line` that `python3 '<plugin_root>/scripts/bc_tools.py' status --project '<cwd>'`
-prints (resolve `<plugin_root>` first, per Step 4a-bis); omit it when that `line` is `null` (no test project here).
-
-Only walk the steps for the sections the user names; carry every other section over unchanged when writing config in Step 4.
-
-**A test project found for the first time joins this run without a question.** When `status` reports
-`"enabled": null` with `"test_project": true` — a test project, and no `automation` block yet — its line already
-says so. Whatever the user answers, even "nothing", run the **Automation** section below and include it in the
-Step 4 recap and its single save question; "leave out automation" there skips it. Once left out, setup only
-mentions it (`Automation: left out — say "automation" to add it`) and never brings it up again by itself.
-
-**Two exceptions, because the Jira board is required** — both run even when the user answers "nothing":
-
-- **Missing `jira` block** → the config predates the requirement, or an earlier run was abandoned. Say so and walk Step 3 regardless of what they asked to change.
-- **`jira.pending` is `true`** → re-test now, using the full 3a-bis procedure (`jira_get_user_profile` with `site`). On success drop `pending` and report `Jira board: PROJ board 42 — verified`. If it still fails, leave `pending` as it is and remind them `/bc:validate` stays blocked until it clears. Never silently keep a stale `pending: true` that would now verify — and never leave it set without having attempted a call this run.
-
-**Excel configs** — also unconditional: when `requirements.provider` is `excel`, say in one line that
-requirements now come only from Jama, and walk Step 1 for the Jama project, whatever the user answered.
-
-**Pre-0.21.1 config migration** — also unconditional, because these configs cannot work as written:
-
-- **`jira.cloud_id` present, or `jira.deployment` missing** → the config targets Atlassian's hosted Cloud-only server. Drop `cloud_id`, detect `deployment` from `base_url`, and walk Step 3a to collect the credential the plugin's Jira connector needs. Explain in one line why: the plugin no longer uses the hosted server, and it never worked against Jira Server/Data Center at all.
-- **No Jira key saved for `jira.base_url`** — `python3 '<plugin_root>/scripts/bc_keys.py' check --url '<jira.base_url>' --provider jira` reports `"ok": false` → the credential was never collected. Walk Step 3a.
-
-**Keys from older setups.** Before the checks above, run `python3 '<plugin_root>/scripts/bc_keys.py' migrate`. Keys
-live one file per site in `~/.buddy-council/keys/` now (ADR 0008); this copies the TestRail and Jama keys an older
-setup kept in `~/.buddy-council/secrets.json`, and the Jira token in `~/.buddy-council/atlassian.env`, each to the
-site it was set up for. It prints sites only — never a key — runs once per computer, never replaces a saved key, and
-leaves the old files where they are. A key whose site it can't tell is listed under `skipped`: ask for that site's
-key in its step, as for a new site. (The connectors run the same migration on their first call, so everyday use
-keeps working before setup runs.)
-
-**If it does not exist**, run all steps in order.
-
-In both cases, resolve the **plugin install path** now, using the procedure in Step 4a-bis — the key store, the
-automation tools, and the Jama server's connection check run from it (`uv run` provisions Python and its
-dependencies automatically, so nothing needs to be installed). Reuse the resolved value when writing `plugin_root`
-in Step 4.
-
-### Step 0a: Path health check (runs on every re-run, including "nothing")
-
-Claude Code's install path embeds the plugin version, so **every plugin update invalidates the `plugin_root` recorded
-by the previous setup**. Before asking the user anything, compare the freshly resolved install path against
-`plugin_root` in `.buddy-council/sources.json`.
-
-If it differs — or points at a directory that no longer exists — **repair it automatically**, without a
-confirmation prompt (this is a path correction, not a configuration change; nothing else in the file is touched).
-Then report it in one line:
-
-```
-Updated plugin path after version change:
-  /Users/you/.claude/plugins/cache/buddy-council/bc/0.14.0
-  → /Users/you/.claude/plugins/cache/buddy-council/bc/0.15.0
-  Repaired: .buddy-council/sources.json
-```
-
-The connectors need no repair: they ship inside the plugin, and each assistant starts them from the plugin's own
-manifests.
-
-This repair happens **even when the user answers "nothing"** to the question above — answer the question after the check, and if they say "nothing", stop *after* the path is fixed. If the path already matches, say nothing and continue silently.
-
-**Then the automation tools** — only when `.buddy-council/sources.json` has `automation.enabled: true`, and also
-before answering "nothing". Run `status` (the same command as in Step 0). When its `needs` is empty, do nothing
-and say nothing. Otherwise — a plugin update changed a pin (`install`), the record the plugin's `appium` connector
-starts appium-mcp from is missing or stale (`wire`), or something was pending (`retry`) — run the same two calls
-as 4d steps 2–3, each with a 10-minute timeout:
-
-```bash
-python3 '<plugin_root>/scripts/bc_tools.py' ensure --project '<cwd>'
-python3 '<plugin_root>/scripts/bc_tools.py' smoke --project '<cwd>'
-```
-
-`smoke` only when `ensure` reported `"phone_check": "due"`. `ensure` installs a pin a plugin update changed —
-keeping the old version in use until the new server answers, then removing it — and retries a failed download.
-Both ask nothing, and the bash hook approves both. Show their `lines`, then use a fresh `status` line in the
-summary. A pending result never blocks the rest of setup.
-
-## Saving a key (used by Steps 1a, 2 and 3)
-
-Keys belong to sites, not projects: one file per site in `~/.buddy-council/keys/`, mode 600 in a 700 folder
-(ADR 0008). The plugin's connectors look a site's key up on the call that needs it, so a key works the moment it is
-saved — no restart. A key is only ever sent to the site it was saved for. One key per site: saving again replaces it.
-
-1. **Before asking for a key**, check whether this computer already has one for the site:
-   `python3 '<plugin_root>/scripts/bc_keys.py' check --url '<base url>' --provider <testrail|jama|jira>`. When it
-   reports `"ok": true`, don't ask — test the connection, and ask for a new key only if the site refuses it.
-2. **Find where it goes:** `python3 '<plugin_root>/scripts/bc_keys.py' path --url '<base url>' --provider <provider>`
-   prints the key file's `path` (and makes its folder private).
-3. **Write that file with your file tool** — never through a shell command, so the key stays out of command lines
-   and the tool log — holding the provider, the site's base URL, and the credential fields the step names:
-
-   ```json
-   { "provider": "jama", "url": "https://company.jamacloud.com", "client_id": "…", "client_secret": "…" }
-   ```
-
-4. **Check it:** run the `check` command from item 1 again. It confirms the key is complete and makes the file
-   private. Neither command ever prints a key.
-
-Never echo a key back, and never put one in `sources.json`, a command line, or any assistant's settings.
-
-## Step 1 of 4: Requirements (Jama)
-
-Requirements come from Jama, read live through the plugin's read-only Jama server. Run **Step 1a (Jama)**,
-then **GitHub enrichment detection** (Step 1b) if a GitHub doc-link field was mapped.
-
-### Step 1a (Jama): Connection, project, and features
-
-Jama is read through the plugin's own **read-only** MCP server (`mcp-servers/jama-server/`): every tool is
-`jama_get_*`, and its HTTP client can only issue GET requests, so nothing the plugin does can change Jama.
-Features are Jama **folders** — each requirement belongs to its nearest folder.
-
-1. **Base URL.** Ask for the address the team opens Jama at (e.g. `https://company.jamacloud.com`, or a
-   self-hosted `https://jama.company.com`). Accept a pasted link to any Jama page: keep the scheme, host, and
-   any context path before `/perspective.req`, and if the link carries `projectId=<n>` or `/projects/<n>`,
-   remember that id for item 4. Require `https://` — the server refuses to send credentials over plain HTTP.
-
-2. **Credentials.** Ask for a Jama API **client ID and client secret** — Jama → profile menu → **Set API
-   Credentials** → Create. That is OAuth client credentials: no browser login, revocable on its own, and never
-   the account password. Only when the instance offers no API credentials (some older self-hosted versions),
-   fall back to username + password, and say plainly that this stores the account password. Recommend
-   creating them on an account with **read-only** project permissions — defense in depth on top of the
-   server's own guarantee.
-
-   Save them **now**, as described in *Saving a key*, because the connection test reads them — with exactly one
-   auth style:
-
-   ```json
-   { "provider": "jama", "url": "<base url>", "client_id": "<client id>", "client_secret": "<client secret>" }
-   ```
-
-   (`username` + `password` replace the pair only on instances without API credentials.)
-
-3. **Test the connection — always produce a verdict.** Call `jama_get_current_user` with `site` set to the base
-   URL — the plugin's `jama` connector is already running, and reads the key the moment it is saved. When the Jama
-   tools aren't available in this assistant, run the server's one-shot check instead. It reads the key from the key
-   store, so nothing secret goes on the command line:
-
-   ```bash
-   uv run --quiet --directory "<plugin_root>/mcp-servers/jama-server" python server.py --check --site '<base url>'
-   ```
-
-   Either prints JSON — `{"ok": true, "user": {...}, "projects": [...], "summary": "..."}` from the check, or
-   `{"base_url", "auth", "user"}` from the tool — or an error. Report the verdict:
-   `Jama: connected as Jane Doe — company.jamacloud.com (OAuth API credentials)`. Map failures honestly:
-
-   | The error says | What to tell the user |
-   |---|---|
-   | rejected the API client ID/secret | Wrong or revoked credentials — offer to re-collect them. |
-   | HTTP 403 / Managed Access Control | The credentials work, but the account may not use the REST API. A Jama admin enables it under Admin → REST API → Managed Access Control. |
-   | redirected … single sign-on | The base URL is wrong, or the REST API sits behind SSO. Confirm the URL. |
-   | Could not reach | The host is unreachable from here — **ask whether it needs the corporate VPN**. Behind a TLS-inspecting proxy, `SSL_CERT_FILE` must point at the company CA bundle. |
-
-   Offer one retry. If it still fails, Jama cannot be verified this run: say so, and stop here — every analysis
-   command needs requirements, so there is nothing useful to save until Jama answers.
-
-4. **Project.** List the projects from `jama_get_projects` (or the check) and ask which one — unless the pasted
-   URL named a project id that is in the list, in which case use it and show it in the recap instead of asking.
-
-5. **Inspect the project.** Call `jama_get_item_types` with `project_id` and `jama_get_features` (or run the check
-   again with `--project <id>` appended). Pass `site` on every Jama call. It reads the project tree once and
-   reports item-type counts, folders (features), document-key samples, and field candidates. Decide the
-   following **without asking**, surfacing each in the Step 4 recap:
-
-   - **Features are folders.** Write `feature_inference: { "strategy": "hierarchical_folder",
-     "folder_item_type": "Folder" }`, and show the folder count with a few paths (`features.sample`). If the
-     project has **no folders**, say requirements will group by their Set or Component instead, and ask once
-     whether another item type marks features (e.g. a "Feature" type) — record its display name as
-     `folder_item_type`. In a large project that count mostly measures how much *else* the project holds —
-     other documents, archives — so do not dwell on it: Step 2b scopes the requirements to the document the
-     test suite links to, and keeps the rest as background.
-   - **Item types.** Folders, Sets, and Components are never requirements — the server drops them itself.
-     Write `item_type_exclude` with `Text` (narrative) plus any test-management type present, such as
-     `Test Case` — this plugin reads test cases from TestRail. Every other type is included.
-   - **Field mapping** — one confirmation. Fill the rows from
-     `field_candidates`, and leave a row as `(none)` when nothing matched:
-
-     ```
-     Proposed field mapping (Jama → canonical):
-       Requirement ID   ← document key (always)
-       Title            ← Name (always)
-       Description      ← Description (always)
-       Status           ← Status
-       Rationale        ← Rationale
-       GitHub doc URL   ← Linked to Github   (e.g. https://github.com/org/repo/blob/main/docs/sds.md)
-
-     Look right? [Enter to accept, or tell me what to change]: _
-     ```
-
-     Persist it as `field_mapping`, keyed `status` / `rationale` / `github_url`, with the field **labels** as
-     values. Omit a key whose row is `(none)`.
-
-### Step 1b: GitHub enrichment (auto-detected — no strategy question)
-
-**Only run this step if a `github_url` field was mapped in Step 1a.** Otherwise skip silently and proceed to Step 2.
-
-Detect available GitHub access strategies in parallel:
-
-- **CLI**: run `gh --version` and `gh auth status` (capture exit codes). If both succeed, CLI is available; capture the authenticated user from `gh auth status`.
-- **MCP**: check whether this assistant already has a GitHub connection with a `get_file_contents` tool — Copilot CLI's built-in GitHub server has one, and in Claude Code it is `mcp__github__get_file_contents` when the user added GitHub's server.
-
-Pick the strategy automatically — do **not** ask the user to choose:
-
-- **CLI available** (regardless of whether MCP also is) → use `cli`. Nothing more to configure — `gh auth login` already handles auth. Report in one line: `GitHub docs will be fetched via gh CLI (authenticated as <user>).` Write `enrichment.strategy: "cli"`.
-- **Only MCP available** → use `mcp`, through the assistant's own GitHub connection. Nothing to configure: setup registers no GitHub server and saves no GitHub token. Write `enrichment.strategy: "mcp"`.
-- **Neither available** → warn-and-continue. Write `enrichment.enabled: false`, tell the user enrichment is disabled (links will be detected but not fetched at runtime), and offer install hints:
-  - For CLI: `brew install gh && gh auth login` (macOS) or visit https://cli.github.com/
-  - For MCP: connect GitHub in the assistant itself (Claude Code: https://github.com/github/github-mcp-server)
-
-#### Smoke test
-
-After the strategy is chosen, try fetching one example URL end-to-end: the `first_url` the Step 1a check reported for the mapped field. If a URL is found, fetch it via the chosen strategy (CLI: `gh api repos/.../contents/...` and base64-decode; MCP: call the assistant's `get_file_contents`). Show the user the first 200 chars of the decoded content as a preview:
-
-```
-Smoke test: fetching <first URL from sheet>...
-  Fetched 4,231 chars from <url>
-  Preview: "# Patient Monitoring Architecture\n\nThe patient monitoring..."
-```
-
-Do **not** ask to save here — config is saved once, in Step 4. If the smoke test fails (auth, repo not accessible, network), offer to retry, switch strategy, or continue with enrichment disabled.
-
-## Step 2 of 4: Test Cases (TestRail)
-
-Test cases come from **TestRail** — currently the only supported test-case source, so there is no menu here. Tell the user you're configuring TestRail, then:
-
-- Ask for: base URL (e.g., `https://company.testrail.io`)
-- Ask for: username (email) and API key — unless this computer already has a key for the site (*Saving a key*, item 1)
-- Save the key as described in *Saving a key*: `{"provider": "testrail", "url": "<base url>", "username": "…", "api_key": "…"}`
-- Test the connection with `testrail_get_projects`, passing `site` set to the base URL — the plugin's `testrail`
-  connector is already running and reads the key the moment it is saved. Pass `site` on every TestRail call setup
-  makes. If the TestRail tools aren't available in this assistant, its connectors didn't start: say so, and point
-  to the README's *Troubleshooting* (usually `uv` isn't installed) rather than testing another way.
-- If successful, ask which project to use (list the projects returned)
-- Ask if they want to filter by suite (optional)
-
-### Step 2a: Case authoring defaults (no questions, only when the tools are live)
-
-`/bc:vnv-sprint-prep` phase 7 writes test cases into this instance. Creating a case needs three ids that
-differ per instance and a folder policy, so resolve them **now**, once, rather than on every run. **Nothing
-here is a question** — the ids are detected, the folder policy is defaulted from how the suite is already
-organized, and the Step 4 recap shows both in plain words, where the user can change them.
-
-Skip this sub-step entirely when the TestRail tools aren't available in this assistant: omit `authoring`, and the
-next `/bc:setup` run fills it in. Phase 7 skips itself with a visible line until it exists, which is correct
-— it must never guess a template.
-
-With the tools live:
-
-1. `testrail_get_templates` for the project. **Pick the steps-style template automatically** — the one whose
-   name contains "Steps" — because scenarios are written as Given/When/Then and only that template has the
-   `custom_steps_separated` field to hold them. If no steps template exists, take the default and say that
-   steps will be written as plain text into `custom_steps`/`custom_expected` instead.
-2. `testrail_get_case_types` → default to the type named "Functional", else the instance default.
-3. `testrail_get_priorities` → default to the middle priority, else the instance default.
-4. **Resolve the requirement-link field — the one that silently breaks everything.** Call
-   `testrail_get_case_fields` and find the custom field this instance uses to reference requirements: match
-   a `system_name` containing `req`, `jama`, `requirement`, or `story` (`custom_jama_req_id` is the common
-   one). Confirm the guess against reality by reading a handful of existing cases with `testrail_get_cases`
-   and checking which field actually holds requirement-shaped IDs — the config's `project.id_patterns`
-   (e.g. `CWA-REQ-\d+`) tells you what those look like.
-
-   Record it as `requirement_field`. **If nothing matches, say so plainly and record `null`** — do not guess
-   a field name. `/bc:coverage` builds `linked_ids` from this field, so a wrong name means every case the
-   plugin creates comes back an orphan while its requirement still reads untested. That failure is silent:
-   TestRail accepts a payload with an unknown `custom_*` key and discards the value without an error.
-
-   State what you found: `Requirement link: custom_jama_req_id (found on 18 of 20 sampled cases)`.
-5. **Choose where generated cases go — do not ask.** Folder placement can't be judged in the abstract at
-   setup time, and doesn't need to be: every path that creates cases — `/bc:vnv-sprint-prep`, the
-   `/bc:coverage` gap-fill, and `/bc:ask` scenario mapping — shows each case's folder in its plan and waits
-   for a yes before writing. Default from what step 4 found:
-
-   - The requirement field was populated on **most** sampled cases → `section_strategy: "linked"`,
-     `section_root: null`. The suite already organizes its cases, and new ones belong among them.
-   - Otherwise → `section_strategy: "feature"`, `section_root: "V&V"`. With few links there is little to file
-     beside, and one `V&V` folder keeps generated cases together instead of scattering new feature folders
-     across the suite.
-
-   **On a re-run, keep an existing `section_strategy` and `section_root`** — the user may have chosen them —
-   unless they ask to change them.
-
-   Show the placement as one line in the Step 4 recap, using the wording below verbatim — no config keys and
-   no command names, since the reader may not have run any command yet. When the user wants something else,
-   at the recap or on any later run, map their words onto the config:
-
-   | Placement | Config | Recap line |
-   |---|---|---|
-   | Beside existing cases (default) | `"linked"`, root `null` | `new cases are saved next to existing cases for the same requirement or feature` |
-   | Their own folder, one subfolder per feature | `"feature"`, root `"V&V"` or the folder they name | `new cases are saved in a <root> folder, one subfolder per feature` |
-   | A folder per feature, among the existing ones | `"feature"`, root `null` | `new cases are saved in a folder named after their feature` |
-   | Everything in one folder | `"fixed"`, root = the folder they name | `new cases are all saved in <root>` |
-
-Write the block, and show the resolved names (not just ids) in the Step 4 recap so the user can veto:
-
-```json
-"authoring": {
-  "template_id": 2,
-  "type_id": 7,
-  "priority_id": 4,
-  "requirement_field": "custom_jama_req_id",
-  "section_strategy": "linked",
-  "section_root": null,
-  "create_missing_sections": true
-}
-```
-
-`section_strategy` is `"linked"` (beside the existing cases for the same requirement, else the same feature,
-else a feature folder), `"feature"` (folder path from each requirement's feature), or `"fixed"` (everything in
-`section_root`). `section_root` is `null` for an un-prefixed placement.
-`create_missing_sections` defaults to `true`; set it to `false` only if the user says their suite structure
-is fixed and a missing folder should be an error.
-
-### Step 2b: Anchor the requirements on the test suite (no questions)
-
-A large Jama project holds far more than the requirements this team tests — other documents, system
-requirements, risk analyses, archives. The test suite already knows which part matters: its cases link to
-specific requirements, and those live in one **document** — a Jama Set, such as `Mobile App SRS`. That whole
-document becomes the requirements **root**, so every requirement in it is in scope and one without a linked
-case shows as untested instead of vanishing. The **features** stay the folders where the links concentrate,
-however deep the document nests them. Everything else in the project is **background**: `/bc:ask` lookups
-search it to enrich their answers, and no report ever counts it.
-
-Decide all of it from the evidence, **without asking**. Roots, depths, and anchors are not something a person
-can weigh in the abstract — and they don't need to: the Step 4 recap shows the result in plain words, and the
-user changes it there or on any later run.
-
-Run this when the TestRail tools are live and Step 2a resolved a
-`requirement_field`. Otherwise skip it with a visible line — `Requirements root: not anchored yet — re-run
-/bc:setup once the TestRail tools are live` — and save without `roots`: everything still works on the whole
-project, with every folder a feature.
-
-1. **What the tests link to.** Call `testrail_get_requirement_ids` with `site`, the project, suite,
-   `requirement_field`, and `sample_size: 2000`. It returns counts, the ID prefixes in use, and the IDs —
-   all of them when the suite links to 2,000 or fewer distinct IDs, otherwise an even spread. Passing every
-   ID makes the "not tested yet" list exact. When `distinct_ids` exceeds the sample, say that the per-feature
-   link counts come from a sample, so a feature listed as not tested may still have a few links.
-2. **Where those live in Jama.** Call `jama_get_scope_proposal` with `site`, `document_keys` set to the sample,
-   and the Step 1a `item_type_exclude`. When the Jama tools aren't available in this assistant, write the sample to
-   a temp file, one ID per line, and run the check — it prints JSON with a `scope_proposal`:
-
-   ```bash
-   uv run --quiet --directory "<plugin_root>/mcp-servers/jama-server" python server.py --check --site '<base url>' \
-     --project <id> --anchors-file <temp file> --item-type-exclude Text
-   ```
-
-   The proposal finds where the links concentrate (`linked_folders`), widens that to its whole document
-   (`roots`), and counts `feature_depth` from the root so the features stay the folders the links sit in.
-3. **Record** for the Step 4 save, straight from the proposal:
-   - `requirements.roots`: each of `roots` as `{"id": <id>, "path": "<path>"}` — the id is what the server
-     uses; the path is for people reading the config
-   - `requirements.feature_inference.depth`: the proposal's `feature_depth`
-   - `requirements.item_type_filter`: the proposal's `proposed_item_types` — the types the tests link to
-   - `requirements.exclude`: on a re-run, the saved entries that still sit inside the new root; otherwise omit it
-
-   On a re-run whose proposal differs from the saved `roots`, the recap says what the root was, so a root the
-   user chose earlier is never replaced unseen.
-4. **Show it in the Step 4 recap, in plain words** — the reader may never have opened Jama's tree, so no ids
-   and no "root", "depth", "anchor", or "item type filter":
-
-   ```
-     In scope:      the whole "Mobile App SRS (SRS-1000003-01)" document — the one your test cases link to
-                    420 requirements in 11 features (General Requirements, App Setup, Alerts, …)
-                    every one has a linked test case
-     Background:    the rest of the project — 3,190 items (system requirements, design, labeling,
-                    standards, …) — is searched to enrich answers, never counted in reports
-   ```
-
-   Add a line only for what applies, in these words:
-   - Features without a linked case (`features.without_links`): `not tested yet: Non-Functional (25) — say
-     "leave out Non-Functional" if it is an archive`. Only the user knows whether an untested folder is a gap
-     or an archive, so list them and never drop one on your own.
-   - Same-type requirements outside the document (`requirements.of_type_outside_where`): `25 more of the same
-     kind sit in Archive / Archive- MAS Software Requirement Specifications — background, not counted`
-   - Links outside the document (`outliers`): `41 of the IDs your tests link to sit outside this document
-     (e.g. CWA-REQ-412 in Product / Legacy / Import) — not counted`
-   - IDs Jama does not have (`anchors.not_found`): `2 IDs your test cases link to are not in Jama
-     (NO_REQUIREMENTS_OK, TBD) — deleted or mistyped`
-   - A re-run that changed it: `was: Mobile App SRS / REQUIREMENTS / Functional Requirements — say "keep the
-     previous scope" to keep it`
-5. **When the user asks for a change** — at the recap, or on any later run — preview it with the same tool
-   (`root_ids`, `exclude_ids`, `feature_depth`; on the CLI `--root`, `--exclude`, `--feature-depth`), then
-   show the recap again. Folder ids are in the proposal's `candidates`, `linked_folders`, and
-   `features.list`; with `root_ids`, `feature_depth` counts from that root.
-   - "leave out <folder>" → add its id to `exclude_ids`
-   - "only <folder>" or "use <folder>" → `root_ids` = its id, `feature_depth` 1
-   - "split the features one level deeper" → the same `root_ids`, `feature_depth` + 1
-   - "the whole project" → save no `roots`
-   - "keep the previous scope" → the saved `roots`, `exclude`, and `depth`, unchanged
-
-Edge cases — still no question; each becomes a recap line:
-
-- **No root proposed** — the links are spread across the project. Save no root, and say so: `In scope: the
-  whole project — your test cases link to requirements all over it, so nothing narrower fits`.
-- **`anchors.resolved` is 0** — none of the IDs exist in this Jama project: either it is the wrong project, or
-  the requirement field holds something other than Jama document keys. Save no root and lead the recap with
-  `None of the 1,480 requirement IDs your test cases link to exist in this Jama project — check the project
-  before saving.`
-
-## Code mapping — automatic, no questions
-
-The `/bc:onboarding` command can optionally map each feature to the code that implements it, between the demo and assessment phases. This only fires when `/bc:onboarding` is run from inside a codebase. This section runs **silently** between Steps 2 and 3 — it should produce at most one question (the multi-prefix ID case below); everything else is detected, defaulted, and surfaced in the Step 4 review summary.
-
-Probe the cwd for these markers:
-
-| Marker | Indicates |
-|--------|-----------|
-| `package.json` | Node/JS/TS |
-| `pyproject.toml`, `setup.py`, `requirements.txt` | Python |
-| `Cargo.toml` | Rust |
-| `go.mod` | Go |
-| `pom.xml`, `build.gradle` | JVM |
-| `*.csproj` | .NET |
-| `Gemfile` | Ruby |
-| `composer.json` | PHP |
-| `.git/` | any git repo (fallback signal) |
-
-If at least one marker is present, enable code mapping **without asking** — `project.enabled: true` — and note the detection in the Step 4 summary (e.g. `Code mapping: enabled (detected Node project)`). If none are present, set `project.enabled: false`, also silently (the user is running setup from a docs-only directory; code mapping wouldn't have anything to map).
-
-#### Requirement ID pattern — infer from the requirements source
-
-Do **not** ask the user to type the ID pattern blind. Infer it from real IDs. For **Jama**, use the `document_key_samples` the Step 1a project check returned (a few keys per item type — e.g. `CWA-REQ-85`, `CWA-SRS-12`), keeping only the types that were not excluded.
-
-From the sample values, derive a grep regex: escape the literal prefix and generalize the numeric part to `\d+` (e.g. samples `CWA-REQ-85, CWA-REQ-86, CWA-REQ-92` → `CWA-REQ-\d+`). Then:
-
-- **Exactly one prefix detected** (the normal case) → accept it automatically, no prompt. Show it in the Step 4 review summary (`ID patterns: CWA-REQ-\d+, TC-\d+`).
-- **Multiple distinct prefixes** → produce one pattern per prefix and confirm them with the user in a single question.
-- **Sampling fails** (no Jama samples) → ask, with the default `CWA-REQ-\d+, TC-\d+`.
-
-Always also append a test-case ID pattern for code references (default `TC-\d+`; adjust if the team uses a different convention).
-
-#### Ignore directories — defaults, silently
-
-Do **not** prompt. Use the defaults (`node_modules, dist, .next, build, vendor, __pycache__, .venv, target`) and note in the Step 4 summary that extra directories can be added by editing `project.ignore_dirs` in `.buddy-council/sources.json`.
-
-Persist as `project: { enabled, ignore_dirs, id_patterns }` in `.buddy-council/sources.json` (see Step 4a).
-
-## Step 3 of 4: Jira (Required)
-
-**This step is not optional — do not offer to skip it.** The dev board is where the team's in-flight work
-lives, and every analysis command reads it: `/bc:contradiction` and `/bc:coverage` compare board issues
-against requirements and test cases, and `/bc:validate` files new tickets onto it.
-
-Jira runs on **`mcp-atlassian`** (<https://github.com/sooperset/mcp-atlassian>), pinned to `mcp-atlassian@0.23.1`.
-The plugin's `atlassian` connector routes each call to a copy of it for that call's site, started from the site's
-key, so nothing needs installing ahead of time — `uv` provisions it on the first call. It speaks to **both
-Atlassian Cloud and Jira Server/Data Center** — Atlassian's hosted server is Cloud-only — and it exposes real
-**board and sprint tools**, which is what lets this plugin address a board by id instead of approximating it with a
-project-wide JQL.
-
-Unlike the plugin's earlier Jira integration, this step **does collect a credential** — `mcp-atlassian`
-authenticates as the user, not by browser OAuth. It is saved as the site's key (*Saving a key*), never into
-`sources.json`, any assistant's settings, or any committed file.
-
-### 3a: Site and credentials
-
-Ask for the Jira base URL first, then derive everything you can from it:
-
-> What's your Jira base URL? For Cloud it looks like `https://yourorg.atlassian.net`;
-> for a self-hosted instance it's whatever your team browses to, e.g. `https://jira.company.com`.
-
-**Detect the deployment from the host — do not ask.** A host ending in `.atlassian.net` (or `.jira.com`) is
-**Cloud**; anything else is **Server/Data Center**. Record it as `jira.deployment` (`"cloud"` or `"server"`),
-because it decides the auth method and which fields `/bc:validate` can set. State the detection so a user on an
-unusual vanity domain can correct it:
-`Detected Jira Server/Data Center from jira.company.com — say "it's Cloud" if that's wrong.`
-
-Then ask for the one credential that deployment needs — unless this computer already has a key for the site
-(*Saving a key*, item 1):
-
-| Deployment | Ask for | Key fields | Where the user gets it |
-|---|---|---|---|
-| Cloud | account email + API token | `username`, `api_token` | <https://id.atlassian.com/manage-profile/security/api-tokens> |
-| Server / Data Center | Personal Access Token only | `personal_token` | Jira → profile menu → **Personal Access Tokens** → Create token |
-
-Server/DC takes **no username** — the PAT identifies the user. Asking for one makes `mcp-atlassian` prefer basic
-auth and fail with a confusing 401, so don't.
-
-Save it as described in *Saving a key*:
-
-```json
-{ "provider": "jira", "url": "https://jira.company.com", "personal_token": "<the PAT>" }
-```
-
-For Cloud, `username` + `api_token` take the place of `personal_token`. The connector sets mcp-atlassian's
-toolsets and tool list itself; there is nothing else to configure. Never print a token back to the screen or into
-the Step 4 recap.
-
-**Self-signed certificates.** If the connection test below fails TLS verification against a Server/DC host,
-tell the user they can add `"ssl_verify": false` to the site's key, and say plainly that it disables
-certificate checking. Never add it without asking.
-
-### 3a-bis: Test the connection
-
-**Always produce a verdict here — this step never ends in "unknown".** This mirrors the TestRail check in
-Step 2, and it is the difference between a working config and a silent `pending: true`.
-
-1. Call `jira_get_user_profile` with `site` set to the base URL and `user_identifier` set to the configured
-   account (the email on Cloud; on Server/DC pass `currentUser()`, or omit it and let the server resolve the
-   token's owner). The plugin's `atlassian` connector is already running and uses the key the moment it is saved;
-   its first call for a site downloads mcp-atlassian, which can take half a minute — if it answers that it is still
-   starting, call again. Report the verdict:
-   `Jira: connected as Omar Hegazy — jira.company.com (Server/Data Center)`. Pass `site` on every Jira call setup
-   makes. If the Jira tools aren't available in this assistant, its connectors didn't start: say so, and point to
-   the README's *Troubleshooting* (usually `uv` isn't installed).
-
-2. **Only a failed call defers.** Map the error honestly rather than reporting a generic failure:
-
-   | Result | What to say |
-   |---|---|
-   | `401` | The token is wrong, expired, or (Cloud) paired with the wrong email. Offer to re-collect it. |
-   | `403` | The credential is valid but the account can't use the API — often a Jira permission or an IP allowlist. |
-   | `404` | The base URL is wrong or points at a proxy. Confirm the URL. |
-   | TLS error | Self-signed certificate — see `ssl_verify` above. |
-   | Connection refused / timeout | The host is unreachable from here. **Ask whether it needs a corporate VPN** — a self-hosted Jira usually does, and this is the most common cause on a laptop that is off the network. |
-
-   Offer one retry, then continue with `"pending": true` per *Deferral* below. Never write `pending: true`
-   after a successful call.
-
-Do not silently skip this test. If you could not run it at all, say why in one line.
-
-### 3b: The dev board
-
-Ask for the board itself:
-
-> Paste the URL of your team's dev board in Jira — open the board and copy the address bar.
-> It looks like `https://yourorg.atlassian.net/jira/software/projects/PROJ/boards/42`, or
-> `https://jira.company.com/secure/RapidBoard.jspa?rapidView=42` on a self-hosted instance.
-
-Parse it rather than asking for the pieces separately. Accept every layout Jira produces:
-
-| Layout | Example | Extract |
-|---|---|---|
-| Team-managed / company-managed | `.../jira/software/projects/PROJ/boards/42` | id `42`, key `PROJ` |
-| Company-managed with `/c/` | `.../jira/software/c/projects/PROJ/boards/42` | id `42`, key `PROJ` |
-| With a tab suffix | `.../boards/42/backlog`, `.../boards/42/timeline` | id `42`, key `PROJ` |
-| Classic RapidBoard | `.../secure/RapidBoard.jspa?rapidView=42&projectKey=PROJ` | id `42`, key `PROJ` |
-| Classic RapidBoard, no key | `.../secure/RapidBoard.jspa?rapidView=42` | id `42`, key **derived** (below) |
-
-Take the board id from `boards/(\d+)` or `rapidView=(\d+)`, and the project key from `projects/([A-Z][A-Z0-9_]+)`
-or `projectKey=([A-Z][A-Z0-9_]+)`.
-
-**Derive the project key rather than asking for it.** The classic RapidBoard layout usually carries no key,
-and that is the common case on Server/DC. When the URL has no key and the tools are live, call
-`jira_get_board_issues` with `board_id`, `jql: "ORDER BY created DESC"`, `limit: 1`, and take the key prefix
-off the returned issue key (`CWA-1234` → `CWA`). Say where it came from:
-`Board 1656 → project CWA (derived from its issues)`. Only ask the user if the board is empty or the tools
-are not live.
-
-Then:
-
-- **Project key from the board wins** over anything inferred earlier — the board is the thing being
-  configured. If they disagree, say so plainly and use the board's, e.g. "Board 42 belongs to `PROJ`, not
-  `OTHER` — using `PROJ`."
-- If the URL has no recognizable board id, show what you tried to match and ask again. Do **not** invent an
-  id and do **not** proceed with a partial board block.
-- **Verify the board as a board**, whenever the tools are live — not as a project:
-  1. `jira_get_agile_boards` with `project_key: <key>` — find the entry whose `id` matches and report its
-     name and type: `Board check: 1656 "CWA Scrum Board" (scrum)`.
-  2. `jira_get_board_issues` with `board_id`, `jql: "statusCategory != Done ORDER BY updated DESC"`, and a
-     small `limit` — report the count, e.g. `37 open issues`. A zero count is not a failure; report it and
-     move on.
-
-  If the id is not in the project's board list, say so and ask again — never record a board id the server
-  does not recognize.
-
-**The board reference is exact.** `mcp-atlassian` reads issues by board id
-(`howtos/fetch-board-issues.md`), so analysis sees the board's actual rows —
-including boards whose filter spans projects or excludes issue types. No project-wide approximation is
-involved, and nothing about this needs caveating to the user.
-
-### 3c: V&V board and workflow settings (for `/bc:vnv-sprint-prep`)
-
-The V&V team's own board, plus the few settings `/bc:vnv-sprint-prep` needs. **Ask, but allow a skip** — unlike the dev
-board, `/bc:vnv-sprint-prep` can collect this itself on first run (`--board`, or it prompts). Do not turn this into a
-second mandatory gate.
-
-> Do you also run the V&V (Validation & Verification) workflow? If so, paste the V&V board URL — `/bc:vnv-sprint-prep`
-> clones sprint stories onto it. Skip if you don't use `/bc:vnv-sprint-prep` yet.
-
-If given, parse and verify it with the same rules as 3b, and record
-`jira.vnv_board = {url, id, project_key, discriminator}`.
-
-**A V&V board in the same Jira project as the dev board is supported and common.** Plenty of teams run one
-project with several boards, each backed by a different filter. Because the plugin reads and writes boards by
-id, the two are never confused. The only hard rule is that the **board ids must differ** — refuse a V&V board
-id equal to the dev board id, since that would clone stories onto the board they came from.
-
-#### The clone discriminator
-
-A Jira board is a saved filter, so a new issue lands on whichever boards' filters match it. When the V&V board
-sits in its **own project**, the project key alone does that job and no discriminator is needed — record
-`"discriminator": null`.
-
-When both boards share a project, `/bc:vnv-sprint-prep` needs to know what makes an issue appear on the V&V
-board and not the dev board. Work it out by sampling rather than asking:
-
-1. Call `jira_get_board_issues` for **each** board with `jql: "ORDER BY updated DESC"`, `limit: 50`, and
-   `fields: "summary,labels,components,issuetype,status"`.
-2. Compare the two samples for an attribute that is near-universal on the V&V board and near-absent on the dev
-   board — check in this order: **label**, **component**, **issue type**. Require it on ≥ 80% of V&V issues
-   and ≤ 5% of dev issues; anything weaker is not a discriminator.
-3. Show the finding and confirm it in one question:
-   `Board 1568 looks filtered by label "vnv" (47/50 V&V issues, 0/50 dev issues). Stamp that on every clone?`
-4. Record the confirmed answer:
-
-   ```json
-   "discriminator": { "kind": "label", "value": "vnv", "confidence": "sampled", "sampled_at": "2026-09-01T12:00:00Z" }
-   ```
-
-   `kind` is one of `label`, `component`, `issue_type`, or `sprint`. `confidence` is `"sampled"` when derived
-   as above and `"stated"` when the user supplied it.
-
-If sampling is inconclusive — mixed signals, both boards empty, or the tools aren't live — **ask outright**
-rather than guessing:
-
-> Both boards are in CWA, so I need to know what puts an issue on board 1568 rather than 1656.
-> Usually it's a label, a component, or an issue type. What does the V&V board's filter key off?
-
-Accept `sprint` as an answer too: `/bc:vnv-sprint-prep` then creates the clone and calls
-`jira_add_issues_to_sprint` for the V&V board's active sprint instead of stamping a field.
-
-If the user doesn't know, record `"discriminator": null` and warn once, here, that clones will land in the
-shared project and may surface on the dev board until someone adjusts the filter. Don't block setup over it —
-but don't pretend the placement is solved either.
-
-#### Platform and reviewer
-
-Then collect two more things, both with working defaults so this stays one or two questions:
-
-- **Platform field.** `/bc:vnv-sprint-prep` checks that each iOS story has an Android counterpart. Default to the `OS`
-  field; if the tools are live, resolve it with `jira_search_fields` (`keyword: "OS"`) or
-  `jira_get_project_fields` and cache the returned custom-field id as `jira.platform.field_id`. If no such
-  field exists, say so and record `field_name` anyway — the how-to falls back to title prefixes and flags
-  lower confidence.
-- **Scenario reviewer.** Who approves high-level scenarios. Ask for an email or display name, resolve it with
-  `jira_search_assignable_users` (or `jira_get_user_profile`) when available, and store
-  `{account_id, display_name}`. On Server/DC the identifier is a username rather than an account id — store
-  whatever the server returns in `account_id`. If it cannot be resolved, store the display name alone;
-  `/bc:vnv-sprint-prep` re-resolves later.
-
-Write the block with defaults filled in:
-
-```json
-"platform": {
-  "field_name": "OS",
-  "field_id": "customfield_10050",
-  "values": { "ios": ["iOS"], "android": ["Android"] },
-  "require_parity": ["ios", "android"],
-  "title_prefix_fallback": true
-},
-"vnv_workflow": {
-  "reviewer": { "account_id": "5b10a2844c20165700ede21g", "display_name": "Jane Doe" },
-  "approval_phrases": ["approved", "lgtm", "looks good"],
-  "labels": {
-    "pending_validation": "pending-validation",
-    "pending_questions": "pending-questions",
-    "pending_scenario_validation": "pending-scenario-validation",
-    "ready_for_test_cases": "ready-for-test-case-creation"
-  }
-}
-```
-
-Never prompt for the label names or approval phrases — write the defaults and mention in the Step 4 recap
-that they can be hand-edited in `.buddy-council/sources.json`. If the user skipped the V&V board, omit
-`vnv_board` and `vnv_workflow` entirely, but still write `platform` if the `OS` field was confirmed — the
-parity data is useful to `/bc:coverage` regardless.
-
-### Deferral (when the connection could not be verified)
-
-The requirement is firm, but it must not strand a user who is off the VPN or still waiting on a token. If the
-connection test in 3a-bis failed even after a retry:
-
-- Say plainly that the board is required and setup will keep asking until it is confirmed.
-- Still collect what they can give: the base URL → `base_url`, the detected deployment → `deployment`, the
-  board URL → `board.url` + `board.id` + `project_key`, and the default issue type.
-- Still save the site's key — a credential that turns out to be fine once they're on the VPN should never need
-  re-entering, and the connector uses it the moment the site answers.
-- Write the `jira` block with **`"pending": true`**.
-- Finish the wizard normally. `/bc:contradiction` and `/bc:coverage` keep working — they skip the board
-  source with a visible line rather than failing. Only `/bc:validate` is blocked.
-- On every later `/bc:setup` re-run, re-verify a pending block first (Step 0) and clear `pending` once the
-  connection test succeeds.
-
-Never write `"pending": true` when verification actually succeeded, and never leave the `jira` block out
-entirely — an absent block now means "the user has not been through Step 3", which the re-run flow treats
-as unfinished setup.
-
-## Automation — automatic, no questions
-
-`/bc:automate` turns TestRail cases into automated tests by driving the app on a phone through **appium-mcp**.
-This section gets the tools for that ready **without a single extra question**: it detects, plans, and puts the
-plan in the Step 4 recap, where the one save confirmation covers it. It runs after Step 3 so every question is
-answered before the slower checks start. Follow `howtos/automation-tools.md`; the
-steps here are the setup-specific part.
-
-1. **Detect.** Run, from the current working directory:
-
-   ```bash
-   python3 '<plugin_root>/scripts/bc_tools.py' detect --project '<cwd>'
-   ```
-
-   - `test_project: false`, or `applies: false` → **skip this section silently**: no recap line, nothing
-     downloaded. Analysis-only projects never hear about automation.
-   - Otherwise keep the result: its `lines` go into the recap as they are, `plan.shared` says which shared
-     tools the Mac is missing, and `setup_script` names the project's own setup script, if it has one.
-
-2. **The project's own check.** When `setup_script` is not `null`, run its check-only mode:
-
-   ```bash
-   python3 '<plugin_root>/scripts/bc_tools.py' project --project '<cwd>' --mode check
-   ```
-
-   This one reaches the normal permission prompt — it runs the project's own code — and can take a few
-   minutes: give it a 10-minute timeout. The script stops the project's script itself after 9 minutes. Add its `line` to the recap and, when it reports `problems`, up to four of them, then the line
-   `its fix runs after you save` (the fix runs in 4d). A check that finds nothing wrong adds only its `line`.
-
-3. **Recap.** The automation lines go last in the Step 4 recap, followed by
-   `(say "leave out automation" to skip it)`. They already say what will be installed, how big it is, which
-   phone and app it found, and what only the user can do — plugging in the phone, `sudo`, the App Store,
-   signing. Add nothing that implies a question.
-
-On **"leave out automation"**, write `"automation": { "enabled": false }` in 4a and skip 4d. Anything else the
-user says about automation in the save answer — "don't install the Android tools" — is applied before saving,
-like any other correction to the recap.
-
-## Step 4 of 4: Review & Save
-
-Before writing anything, show one compact recap of everything collected and ask a **single** save question — this replaces all per-section save prompts:
+# /bc:setup — Connect a project folder to its tools
+
+**Plugin root:** two folders above this skill's base directory, which is `<plugin root>/skills/setup/`. Every file these instructions name — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root, and so is every file those files name.
+
+Setup works from **links**. A link to the Jama project, the TestRail suite, or the Jira board names the tool and its
+site; everything else is worked out from the tools themselves and shown in one **recap**, followed by one question:
+"Save?". Ask anything else only for a missing link or key, or when something fails or can't be found.
+
+**Each script call is its own command**: `python3 '<plugin root>/scripts/<script>' <subcommand> …`, the plugin root
+written out in full, every argument bare or in single quotes, JSON in one single-quoted argument on one line with
+every `'` written as `\u0027`. That is the shape the bash hook approves, so these calls ask nothing — a `cd`, a
+variable, `&&`, `;`, a pipe, or a redirect turns one into a permission prompt. Read the guides, the settings, and a
+tool result saved to a file with your view or grep tool.
+
+**Every connector call passes `site`**: the tool's `base_url`, from its link or from the settings. Without it, a
+call reaches whichever key this computer holds for that tool.
+
+## 1. Where things stand
+
+1. `bc_setup.py status --from '<the folder this session started in>'` gives `project` — the project folder: the
+   nearest folder at or above that one holding `.buddy-council/`, else that one — plus `exists`, `update` (set up
+   by an older version), `tools` (each tool's `state` and site), `keys` (how many sites this computer has keys
+   for), and `legacy`. A `stop` about the home folder or the plugin's folder ends the run.
+2. When `legacy` is true, `bc_setup.py migrate`. It moves the keys older setups saved into one file per site, in
+   code, so no key passes through you, and lists in `verify` the sites to check before `cleanup`. Its `lines` go in
+   the recap, and its `keys` replaces the count from `status`: the moved keys count.
+3. Pick the run from the text the user typed after the command:
+
+| Typed | Run |
+|---|---|
+| nothing, no settings | **First setup** — every tool |
+| nothing, settings saved | **Re-check** — below |
+| one or more links | **Change** — the tools the links name |
+| a sentence: `no Jira`, `leave out Release 3 Drafts`, `put new cases in V&V`, `the whole project` | **Change** — that part only |
+| `forget <site>` | `bc_setup.py forget --url '<site>'`, show its `lines`, done |
+
+Requirements still on Excel (`tools.requirements.state` is `excel`): say in one line that requirements come from
+Jama only now, and ask for the Jama project link.
+
+## 2. Links and keys
+
+Ask for every link the run needs in **one** message: the Jama project (required), the TestRail suite, and the Jira
+dev board, where "none" is an answer for the last two (ADR 0009). When `keys` is 0 — a computer with no keys yet —
+ask for the keys in the same message: TestRail email and API key; Jama API client ID and secret; for Jira, the email
+and an API token on Cloud, or a personal access token on Server/Data Center.
+
+`bc_setup.py links --link '<link>' --link '<link>' …` reads them all: each gives its `provider`, `base_url`, `site`,
+the ids in it, and `key` — whether one is `saved`, and how to `ask` for one. Ask for every key not saved in one
+message, worded with its `key.ask` and site. A link with a `problem` is asked for again.
+
+**Saving a key** — one file per site in `~/.buddy-council/keys/` (ADR 0008):
+
+1. `bc_keys.py path --url '<base_url>' --provider <provider>` prints the file's `path`.
+2. Write that file with your file tool: `{"provider": "<provider>", "url": "<base_url>", …the key's fields}`. The
+   key stays out of every command line, and the assistant's own prompt before the write is the approval — ask
+   nothing more about it.
+3. `bc_keys.py check --url '<base_url>' --provider <provider>` confirms it is complete and makes it private.
+
+A key appears nowhere after that: not in the recap, a command, or the settings.
+
+## 3. Connect and work each tool out
+
+Follow each guide for the tools this run touches, in this order — Jama's scope reads the test suite, so it waits
+for TestRail:
+
+1. `providers/jama/setup.md` — *Connect*, *Project*, *Fields*
+2. `providers/testrail/setup.md` — *Connect*, *Suite*, *Authoring*
+3. `providers/jama/setup.md` — *Scope*
+4. `providers/jira/setup.md` — *Connect*, *Board*
+5. `providers/github/setup.md` — when Jama's fields map a GitHub link
+6. *Code mapping*, below
+7. `howtos/automation-tools.md` → *In setup* — its `detect` decides whether it applies
+
+A failed connection gets the guide's diagnosis and one retry; still failing, the tool is saved as not verified
+(`"pending": true`), and the next `/bc:setup` connects again. Each guide ends with its recap lines and the settings
+it saves.
+
+## 4. Recap, then "Save?"
+
+The recap is the text of the question that asks "Save?" — the message itself when an ask tool asks it — so the user
+decides on what they can see. Each guide owns its recap lines (its *Recap* section); this is only their order:
 
 ```
 Ready to save:
-  Requirements:  jama — https://company.jamacloud.com, project CWA "Clinical Window App" (42) — read-only
-                 connected as Jane Doe (OAuth API credentials)
-  In scope:      the whole "Software Requirements" document — the one your test cases link to
-                 1,512 requirements in 23 features (Login, Patient Monitoring, Alarms, …)
-                 not tested yet: Release 3 Drafts (40) — say "leave out Release 3 Drafts" if it is an archive
-  Background:    the rest of the project — 2,900 items (system requirements, hazards, design, …) —
-                 is searched to enrich answers, never counted in reports
-  Field mapping: status ← Status, rationale ← Rationale, GitHub doc URL ← Linked to Github
-  Item types:    Mobile SRS (Text and Test Case excluded)
-  Enrichment:    cli (gh CLI, smoke test OK)
-  Test cases:    testrail — https://company.testrail.io, project 1
-  Case authoring: template "Test Case (Steps)", type "Functional", priority "Medium"
-                 requirement link → custom_jama_req_id (+ built-in References)
-                 new cases are saved next to existing cases for the same requirement or feature
-                 (want them somewhere else? say where before saving)
-  Jira:          connected as Jane Doe — jira.company.com (Server/Data Center)
-  Jira board:    PROJ board 42 "PROJ Scrum Board" (scrum) — 37 open issues
-  V&V board:     PROJ board 77 "V&V Board" — same project, clones stamped label "vnv"
-                 parity on OS field; reviewer Jane Doe
-                 (labels/approval phrases: edit jira.vnv_workflow in .buddy-council/sources.json)
-  Code mapping:  enabled — detected Node project; ID patterns CWA-REQ-\d+, TC-\d+
-                 (extra ignore dirs: edit project.ignore_dirs in .buddy-council/sources.json)
-  Automation:    Appium test project (Java, TestNG, Gradle) — iOS and Android
-                 drives the phone through the project's own Appium 2.19.0 (uiautomator2 4.2.9, xcuitest 9.10.5)
-                 phone: QA iPhone (APOLLO_UDID) · app: ~/Desktop/apollo.ipa · language: the phone's own
-                 installs bc's own Node 26.13.0 and appium-mcp 1.99.2 into ~/.buddy-council/tools — about 620 MB on disk, never on PATH
-                 the project's ./setup --check: 31 OK, 1 warning, 1 problem
-                   ❌ WebDriverAgent isn't signed for QA iPhone
-                 its fix runs after you save
-                 (say "leave out automation" to skip it)
+  Requirements, In scope, Background, Fields, Left out   ← providers/jama/setup.md → Recap
+  Test cases, New cases                                  ← providers/testrail/setup.md → Recap
+  Board                                                  ← providers/jira/setup.md → Recap
+  Design docs                                            ← providers/github/setup.md → Recap
+  Code mapping                                           ← Code mapping, below
+  Automation                                             ← howtos/automation-tools.md → In setup
+  migrate's lines
 
-Save? [y]: _
+Save?
 ```
 
-On yes, write the config and confirm the keys (4a–4b below), then install the automation tools (4d) when the recap included them. On
-no, ask what to change — unless the answer already says — fix it, and re-show the recap.
+A change run recaps only what changes, as `before → after`, and a tool set to none says what that turns off:
 
-### 4a: Write source config
+```
+  Board:  PROJ board 42 "PROJ Kanban Board" on acme.atlassian.net → none
+          analysis reads no board issues; /bc:validate asks for a board link before it creates a ticket;
+          /bc:vnv-sprint-prep can't run
 
-Config lives at `.buddy-council/sources.json` **in the user's project root** (the current working directory) — not the plugin folder, and not home. Both Claude Code and Copilot CLI find it relative to the project, with no plugin-path token. Config is therefore **per-project**: each project the user runs the plugin in gets its own.
-
-Ensure the directory exists, then make sure `.buddy-council/` is git-excluded via the repo-local `.git/info/exclude` exactly as the onboarding log does (follow `manage-progress-log` Operation 1 step 3 — no `.gitignore` edit):
-
-```bash
-mkdir -p .buddy-council
+Save?
 ```
 
-**Migration:** if an older `config/sources.json` exists inside the plugin directory (from before this move), copy its contents into `.buddy-council/sources.json` and tell the user it was migrated.
+"Save?" is the run's one question about choices. A correction instead ("put new cases in V&V") updates the recap
+and asks again.
 
-Write `.buddy-council/sources.json` with the selected providers and non-secret settings. Include the field-mapping, enrichment, and project blocks as collected in Steps 1a, 1b, and the code-mapping section. No credentials, ever — those are saved per site in `~/.buddy-council/keys/`. Each `base_url` is what every command passes as `site`, so it must be the address the key was saved with:
+On yes, save everything in one call: `bc_setup.py save --project '<project>' --patch '<the guides' settings,
+merged into one object>'`, adding `--unset <block>` for a tool whose link now names another site or project
+(`requirements`, `test_cases`, or `jira`), so its old settings go with it. The script checks the settings against
+`config/sources.example.json`, keeps `.buddy-council/` out of git, and names any problem; fix it and save again.
 
-```json
-{
-  "requirements": {
-    "provider": "jama",
-    "base_url": "https://company.jamacloud.com",
-    "project_id": 42,
-    "project_key": "CWA",
-    "project_name": "Clinical Window App",
-    "roots": [{ "id": 1001, "path": "Product / Software Requirements" }],
-    "exclude": [{ "id": 1950, "path": "Product / Software Requirements / Archive" }],
-    "feature_inference": {
-      "strategy": "hierarchical_folder",
-      "folder_item_type": "Folder",
-      "depth": 1
-    },
-    "item_type_filter": ["Mobile SRS"],
-    "item_type_exclude": ["Text", "Test Case"],
-    "field_mapping": {
-      "status": "Status",
-      "rationale": "Rationale",
-      "github_url": "Linked to Github"
-    },
-    "enrichment": {
-      "enabled": true,
-      "strategy": "cli",
-      "max_doc_chars": 50000
-    }
-  },
-  "test_cases": {
-    "provider": "testrail",
-    "base_url": "https://company.testrail.io",
-    "project_id": 1,
-    "suite_id": null,
-    "authoring": {
-      "template_id": 2,
-      "type_id": 7,
-      "priority_id": 4,
-      "requirement_field": "custom_jama_req_id",
-      "section_strategy": "linked",
-      "section_root": null,
-      "create_missing_sections": true
-    }
-  },
-  "jira": {
-    "base_url": "https://jira.company.com",
-    "deployment": "server",
-    "project_key": "PROJ",
-    "default_issue_type": "Story",
-    "board": {
-      "url": "https://jira.company.com/secure/RapidBoard.jspa?rapidView=42",
-      "id": 42
-    },
-    "vnv_board": {
-      "url": "https://jira.company.com/secure/RapidBoard.jspa?rapidView=77",
-      "id": 77,
-      "project_key": "PROJ",
-      "discriminator": {
-        "kind": "label",
-        "value": "vnv",
-        "confidence": "sampled",
-        "sampled_at": "2026-09-01T12:00:00Z"
-      }
-    },
-    "platform": {
-      "field_name": "OS",
-      "field_id": "customfield_10050",
-      "values": { "ios": ["iOS"], "android": ["Android"] },
-      "require_parity": ["ios", "android"],
-      "title_prefix_fallback": true
-    },
-    "vnv_workflow": {
-      "reviewer": { "account_id": "5b10a2844c20165700ede21g", "display_name": "Jane Doe" },
-      "approval_phrases": ["approved", "lgtm", "looks good"],
-      "labels": {
-        "pending_validation": "pending-validation",
-        "pending_questions": "pending-questions",
-        "pending_scenario_validation": "pending-scenario-validation",
-        "ready_for_test_cases": "ready-for-test-case-creation"
-      }
-    },
-    "pending": false
-  },
-  "project": {
-    "enabled": true,
-    "ignore_dirs": ["node_modules", "dist", ".next", "build", "vendor", "__pycache__", ".venv", "target"],
-    "id_patterns": ["CWA-REQ-\\d+", "TC-\\d+"]
-  }
-}
+Then, in order:
+
+1. The Plugin Tools, when the recap listed them: `howtos/automation-tools.md` → *After the save*.
+2. When `migrate` listed sites to `verify`: `bc_setup.py cleanup --verified '<the ones that answered, comma-separated>'`
+   — it removes what older setups left for those sites, and names once what it leaves alone. Show its `lines`.
+3. One closing line naming what is ready — `/bc:coverage`, `/bc:contradiction`, `/bc:validate`, `/bc:ask`. Nothing
+   needs a restart: the connectors were running before setup began, and read each key on the call that needs it.
+   The one exception is installing or updating the Plugin Tools, whose lines say so (ADR 0002).
+   When reads still prompt in Copilot CLI, point to the README's *Copilot CLI — fewer permission prompts*.
+
+## Re-check
+
+A bare re-run checks every site and setting the project uses: each entry of `status`'s `checks`, through the guide
+section it names — Jama, TestRail, and Jira unless a tool is none, the GitHub link when enrichment is on, and the
+Plugin Tools when the settings have them. The re-check is done when every entry has a verdict. It redoes only
+what broke. An expired key asks for that site's key; a deleted board
+or suite asks for a new link; an unverified tool connects again, and one that answers now is saved verified.
+
+- **Nothing changed**: ask nothing — say so, one line per tool, and stop. What a check only records — a tool that
+  answers now, the GitHub link it read — is saved without asking.
+- **Set up by an older version** (`update`): once the checks pass, save with `--patch '{}'` — it drops
+  `plugin_root` and brings the settings up to this version — then `cleanup`. When everything still connects, this
+  asks nothing.
+- **Something changed**: recap `before → after`, then "Save?".
+
+## Code mapping
+
+`/bc:onboarding` and `/bc:codemap` map features to the code that implements them. Code mapping is on when
+`status`'s `code` lists a marker of code in the project folder (`package.json`, `pyproject.toml`, `.git`, …), and off
+when it lists none. Recap: `Code mapping:  on — Node project; requirement IDs CWA-REQ-\d+, TC-\d+`, or `off — no code
+here`.
+Requirement ID patterns come from Jama's `document_key_samples` for the item types in scope: the literal prefix
+with the number as `\d+` (`CWA-REQ-85` → `CWA-REQ-\d+`), one pattern per prefix, plus `TC-\d+`. A re-check keeps
+saved patterns and ignored folders.
+
+```json settings
+{ "project": { "enabled": true, "ignore_dirs": ["node_modules", "dist", ".next", "build", "vendor", "__pycache__", ".venv", "target"], "id_patterns": ["CWA-REQ-\\d+", "TC-\\d+"] } }
 ```
-
-The `"jira"` section is **always written** — Step 3 is required. If the connection test failed, write it with `"pending": true`. `board.id` and `vnv_board.id` are integers, not strings. `deployment` is `"cloud"` or `"server"`, detected from the host. `vnv_board.project_key` **may equal** `project_key` — that is a supported layout, and `discriminator` is what keeps the two boards apart; set it to `null` when the V&V board has its own project. There is no `cloud_id`: every Jira call names its site with `site` — the `jira.base_url` — and the connector hands it to an mcp-atlassian copy bound to that site. If a `cloud_id` survives from a pre-0.21.1 config, drop it. If no `github_url` field was mapped, or no GitHub strategy is available, set `requirements.enrichment.enabled: false` and omit `strategy`. Omit `item_type_exclude` when the project has none of the excluded types. If the cwd is not a code project, set `project.enabled: false`. On a re-run (Step 0), carry over unchanged sections verbatim.
-
-**Never write the `automation` block yourself** — `bc_tools.py ensure` writes it in 4d, from what it actually
-installed and proved, and every later `ensure` keeps it current. On a re-run, carry an existing block over
-verbatim. The one exception is "leave out automation", which writes `"automation": { "enabled": false }`.
-
-`project_id` is an integer. `base_url` is the normalized root (no `/rest/v1`, no `/perspective.req…`).
-`roots`, `exclude`, `feature_inference.depth`, and `item_type_filter` come from Step 2b; omit all four when
-the requirements were not anchored, and every folder in the project is then a feature.
-
-### 4a-bis: Record the plugin install path (`plugin_root`)
-
-The plugin's scripts — the key store, the automation tools, the run folders, the Jama check — live **inside the plugin's install directory**, which commands reach by an absolute path that works on the current machine. Determine the absolute install path and store it as a top-level `plugin_root` in `.buddy-council/sources.json`:
-
-1. The **plugin root** — two folders above this skill's base directory, as the top of this file says — when it contains `mcp-servers/`. This works in every assistant.
-2. Otherwise auto-detect: search Copilot's real install locations for a directory containing `scripts/bc-mcp` — in this order:
-   - `~/.copilot/installed-plugins/*/*/` — installed from a marketplace, e.g. `~/.copilot/installed-plugins/buddy-council/bc/`
-   - `~/.copilot/installed-plugins/_direct/*/` — installed straight from the repo URL, or run with `--plugin-dir`. Copilot flattens `owner/repo` into `owner--repo` here, so this looks like `_direct/Omar-Hegazy-Integrant--buddy-council-plugin/`. **That owner segment is normal** — it is the GitHub account the plugin was installed from, not a per-user path.
-
-   If exactly one matches → use it. If several match (both a marketplace and a direct install), prefer the marketplace copy and tell the user which was chosen.
-3. Otherwise, ask the user for the absolute path to the installed plugin.
-
-**Always re-resolve — never trust a stored value.** Claude Code's install path embeds the plugin version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so a `plugin_root` written by an earlier setup points at the *previous* version's directory after any update. A stale path either fails outright or, if the old directory still exists, silently runs old scripts against new commands. Copilot's install path is version-less and unaffected.
-
-Write the resolved absolute path, e.g. `"plugin_root": "/Users/<you>/.copilot/plugins/buddy-council"`. **This value is per-machine** and lives only in the git-excluded `.buddy-council/sources.json` — never hardcode a path into a committed file.
-
-### 4b: Keys
-
-Every key was saved in its own step, one file per site (*Saving a key*). Confirm each site this project uses —
-`requirements.base_url` (provider `jama`), `test_cases.base_url` (`testrail`), and `jira.base_url` (`jira`) — with
-`python3 '<plugin_root>/scripts/bc_keys.py' check --url '<base url>' --provider <provider>`, which also makes each
-file private. A deferred Jira site keeps its key too.
-
-Keys saved by an older setup — `~/.buddy-council/secrets.json` and `~/.buddy-council/atlassian.env` — were copied
-into per-site files in Step 0 and are left where they are; nothing reads them any more. Setup never writes either
-file again. GitHub needs no key here: `gh` keeps its own, and the `mcp` strategy uses the assistant's own GitHub
-connection.
-
-### 4c: Connectors — nothing to register
-
-The connectors — `testrail`, `jama`, `atlassian` (Jira), and `appium` — ship inside the plugin, and every
-assistant starts them from the plugin's own manifests (`mcp.json`, and `.claude-plugin/plugin.json` for Claude
-Code) through `scripts/bc-mcp`, which finds `uv` even when the assistant was opened from the Dock. So setup writes
-no connector settings for any assistant, and there is nothing to restart: the connectors were already running when
-setup began, and each reads a site's key on the call that needs it (ADR 0002).
-
-An older setup registered `testrail`, `jama`, and `atlassian` in `~/.copilot/mcp-config.json` and the plugin
-folder's `.mcp.json`. The plugin's own connectors carry the same names and take their place — Copilot gives a
-plugin's server precedence over a same-named one in its config — so leave those entries alone.
-
-**There is no browser authorization step for Jira or Jama.** The Jira connector starts mcp-atlassian with the
-site's token, and the Jama connector exchanges the API client ID/secret for a token itself on the first call. Do
-not tell the user to run `/mcp` → Authenticate.
-
-### 4d: Automation tools (only when the recap included them)
-
-Skip this step when the Automation section found no test project, or the user said "leave out automation".
-Otherwise, in this order, with no further questions:
-
-1. **The project's fix, when its check reported problems.** Run:
-
-   ```bash
-   python3 '<plugin_root>/scripts/bc_tools.py' project --project '<cwd>' --mode fix
-   ```
-
-   It reaches the normal permission prompt (it runs the project's own code). Without a terminal, a script like
-   ApolloAutomation's `./setup` fixes what needs no answer and reports the rest. Show its `line`; when it
-   returns `needs_you`, show that too, in its own words — `run ./setup in a terminal for what needs you: …` —
-   because a password, tapping Trust on the phone, or choosing a signing profile can only be done there.
-
-2. **Install, prove the server answers, and record it:**
-
-   ```bash
-   python3 '<plugin_root>/scripts/bc_tools.py' ensure --project '<cwd>'
-   ```
-
-   Add `--shared jdk`, `--shared android-sdk`, or `--shared jdk,android-sdk` only for what the recap said it
-   would install. The first run installs about 620 MB and usually takes one to three minutes — say so before
-   running it, and give the call a 10-minute timeout (Claude Code's limit; under Copilot CLI, wait for it). The
-   bash hook approves it, so it asks nothing. It records `pending` before installing, so a run stopped early is
-   finished by the next `/bc:setup`. Once the new server has answered, it records how the plugin's `appium`
-   connector starts it (`~/.buddy-council/tools/appium-mcp.json`) — no assistant's settings are written — and it
-   records the result in `.buddy-council/sources.json`. Until that first install the `appium` connector serves no
-   tools, so after it, tell the user to restart the assistant once to load appium-mcp's tools.
-
-3. **Read one screen from the phone** — only when `ensure` reported `"phone_check": "due"`:
-
-   ```bash
-   python3 '<plugin_root>/scripts/bc_tools.py' smoke --project '<cwd>'
-   ```
-
-   Also a 10-minute timeout: the first session on an iPhone builds WebDriverAgent, which can take a few
-   minutes. It opens one session without launching any app, saves one page source, and closes it.
-
-4. **Show the `lines` of each call as they are.** `ready` means the server answered and a page source was read
-   from the phone. `pending` names what is missing — most often the phone — and what to do; the next
-   `/bc:setup` checks again by itself (Step 0a), the way it re-tests a pending Jira board. A phone that passed
-   once stays `ready` when it is unplugged later; a check that fails on a connected phone makes it `pending`
-   again. A pending result never makes the rest of setup fail.
-
-## After saving: validate
-
-- Confirm `.buddy-council/sources.json` was written
-- Confirm `bc_keys.py check` reports `"ok": true` for each site the project uses (4b), and that the Jira site's key holds exactly one auth style (`personal_token`, or `username` + `api_token`) — never both
-- Confirm `.buddy-council/sources.json` has a `jira` block with `deployment`, `board.id`, and `board.url`, and that `pending` is `false` whenever the connection test actually succeeded
-- If a V&V board was configured, confirm its `id` differs from the dev board's, and that `discriminator` is set whenever the two share a `project_key`
-- Confirm `requirements.provider` is `"jama"` with an integer `project_id`, and any `roots`/`exclude` entries carry integer `id`s
-- If automation was included, confirm `ensure` (and `smoke`, when it ran) returned `"ok": true` with a `status` — `ready` or `pending` — and that `.buddy-council/sources.json` now has an `automation` block. The script itself checks the rest (the server answered before it was recorded, and the record names files that exist); do not re-check it by hand
-- Tell the user:
-  1. Everything is live already — the connectors were running before setup began, and each key works from the moment it was saved. The one exception: after automation's first install, restart the assistant once so the `appium` connector loads appium-mcp's tools
-  2. Then run `/bc:contradiction` to detect contradictions or `/bc:validate` to create tickets
-
-## After saving: reduce permission prompts
-
-The bundled hooks run in **Claude Code, Copilot CLI, and VS Code** (Claude Code loads `hooks/hooks.json`; Copilot CLI and VS Code load `com.github.copilot/hooks/hooks.json` — same scripts). They auto-approve the plugin's read-only operations — including every connector read, in each spelling those assistants give the plugin's tools — **and writes to its own generated files** (`.buddy-council/` config and progress log). Saving a key always asks first. No action is needed.
-
-If reads still prompt (an older Copilot version without plugin hooks), print a ready-to-paste `--allow-tool` launch recipe covering the connectors' read tools, and tell the user it's only needed if prompts appear (writes like Jira creation still prompt by design):
-
-- Always include the TestRail read tools:
-  `testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates),testrail(testrail_get_requirement_ids),testrail(testrail_get_linked_cases),testrail(testrail_get_canonical_cases)` — deliberately **not** `testrail(testrail_add_case)`, `testrail(testrail_add_cases)`, `testrail(testrail_add_section)`, `testrail(testrail_update_case)`, or `testrail(testrail_update_cases)`, which must keep prompting
-- If Jira was configured, also add the Atlassian read tools: `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)` — deliberately **none** of `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, or `jira_add_issues_to_sprint`, which must keep prompting
-- If GitHub enrichment uses the `mcp` strategy, also add the assistant's GitHub server's file read — `github-mcp-server(get_file_contents)` for Copilot's built-in one
-- Also add the Jama tools: `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — that is every tool the server has, because it has no write tools
-- If automation was set up, also add appium-mcp's read tools: `appium(appium_mobile_device_info),appium(appium_find_element),appium(appium_find_elements),appium(appium_get_text),appium(appium_get_element_attribute),appium(appium_get_active_element),appium(appium_get_window_size),appium(generate_locators),appium(appium_get_page_source),appium(appium_screenshot)` — deliberately **none** of `appium_session_management`, `appium_gesture`, `appium_set_value`, `appium_app_lifecycle`, or anything else that taps, types, opens a session, or launches an app, which must keep prompting
-
-Present it as a single command, e.g.:
-
-```bash
-copilot --allow-tool='<comma-separated list from above>'
-```
-
-If the user's Copilot version predates plugin hooks, tell them to also append the entries the hooks would otherwise cover — `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/onboarding-progress.json)` — and to choose **"always allow"** when a connection test first prompts. This step is informational only — do **not** edit any Copilot config files (Copilot manages `~/.copilot/config.json` itself; there is no documented per-tool allowlist file to write).
-
-## Important
-
-- NEVER write credentials into `.buddy-council/sources.json` — that file is user-specific and contains no secrets
-- Keys go only into their site's file in `~/.buddy-council/keys/`, written with the file tool as in *Saving a key* — never into a command line, `sources.json`, or any assistant's settings, and never echoed back to the user. One key per site, and a key is only ever sent to the site it was saved for
-- Setup writes no connector settings for any assistant: the connectors ship inside the plugin (4c)
-- Step 3 (Jira) is **required** — never offer to skip it. When the connection test fails, record the answers with `"pending": true` and finish the wizard; do not abandon the run and do not omit the `jira` block
-- ALWAYS test the Jira connection in 3a-bis, with `jira_get_user_profile` and `site`. A `pending: true` written without an attempted call is a bug, not a safe default
-- A V&V board **may** share a project with the dev board. Refuse only a duplicate board *id*, and record a `discriminator` when the projects match
-- Jama is read **only** through the plugin's read-only `jama` connector. Its credential is the site's key and nowhere else — the connector never reads one from the environment. The one direct call setup may make is the server's own `--check --site` mode, when the Jama tools aren't available in the assistant
-- Never register Jama's hosted MCP server (Jama Connect MCP via `mcp-remote`) in place of the vendored one: it exposes write tools and no bulk reads
-- Automation adds **no question** of its own: it is detected, planned, and shown in the Step 4 recap, and the one save confirmation covers it. Never install anything the recap didn't list, and pass `--shared` only for what it named
-- bc's automation tools live only in `~/.buddy-council/tools`: never on PATH, never shared, and setup never edits a shell profile, `JAVA_HOME`, or `ANDROID_HOME`, and never replaces a working tool the Mac already has. Only `bc_tools.py` writes the record the `appium` connector starts appium-mcp from, and the `automation` block
-- What only a person can do — `sudo`, the App Store, signing, the phone — is passed on in the recap and the result lines, never attempted

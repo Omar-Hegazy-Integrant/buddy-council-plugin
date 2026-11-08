@@ -4,8 +4,10 @@ Fetch test cases from the configured source. This how-to reads the user's config
 
 ## How It Works
 
-1. Read `.buddy-council/sources.json` from the project root (the current working directory)
-2. Check the `test_cases.provider` field
+1. Read `.buddy-council/sources.json` in the project folder — the one `howtos/load-settings.md` found
+2. Check the `test_cases.provider` field. `none` — a project that uses no test cases — returns no cases and prints
+   `Fetch: test cases → skipped (not used in this project)`; the command's report carries the line saying how to add
+   them
 3. Delegate to the matching provider:
 
 | Provider | Delegate To |
@@ -29,6 +31,6 @@ Fetch test cases from the configured source. This how-to reads the user's config
 
 ## Error Handling
 
-- If `.buddy-council/sources.json` does not exist → tell the user to run `/bc:setup` first
+- If the settings aren't ready → `howtos/load-settings.md` already stopped the command with what to say
 - If the configured provider file does not exist → report which provider was expected and that it's not yet implemented
 - If MCP tools specified by the provider are not available → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it

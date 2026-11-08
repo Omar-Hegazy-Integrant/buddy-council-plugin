@@ -5,6 +5,7 @@
 Standard library only; they must pass on Python 3.9 (macOS's /usr/bin/python3) as well as current versions.
 """
 
+import ast
 import json
 import re
 import subprocess
@@ -138,7 +139,7 @@ class Skills(unittest.TestCase):
 
     def test_how_tos_are_plain_files_outside_skills(self):
         howtos = sorted(PLUGIN.glob("howtos/*.md"))
-        self.assertEqual(len(howtos), 24)
+        self.assertEqual(len(howtos), 25)
         for path in howtos:
             self.assertIsNone(frontmatter(path), f"{path.name} is a plain file, not a skill")
             self.assertFalse((PLUGIN / "skills" / path.stem).exists(), path.stem)
@@ -177,6 +178,71 @@ class Paths(unittest.TestCase):
                           f"`<plugin root>/skills/{name}/`.", text)
 
 
+class Setup(unittest.TestCase):
+    GUIDES = {PLUGIN / "skills" / "setup" / "SKILL.md", *PLUGIN.glob("providers/*/setup.md")}
+
+    def test_the_setup_skill_is_short_and_each_provider_has_a_guide(self):
+        size = (PLUGIN / "skills" / "setup" / "SKILL.md").stat().st_size
+        self.assertLessEqual(size, 12_000, "about 10 KB: the order, the questions, the recap, the save rule")
+        for provider in ("jama", "testrail", "jira", "github"):
+            self.assertTrue((PLUGIN / "providers" / provider / "setup.md").exists(), provider)
+
+    def test_every_connector_call_names_its_site_on_every_kind_of_run(self):
+        skill = (PLUGIN / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
+        rule = skill.find("Every connector call passes `site`")
+        self.assertGreaterEqual(rule, 0)
+        self.assertLess(rule, skill.find("## 1."), "a rule for every run, not only for the Connect step")
+        for provider in ("jama", "testrail", "jira"):
+            text = (PLUGIN / "providers" / provider / "setup.md").read_text(encoding="utf-8")
+            recheck = text.split("## Re-check", 1)[1].split("\n## ", 1)[0]
+            calls = re.findall(r"`((?:jama|testrail|jira)_[a-z_]+)`([^,.;—]*)", recheck)
+            self.assertTrue(calls, provider)
+            for tool, rest in calls:
+                self.assertIn("with `site`", rest, f"{provider} Re-check: {tool} — a re-check reads only this section")
+
+    def test_nothing_outside_the_guides_names_a_setup_step_number(self):
+        for path in instruction_files() + [PLUGIN / "AGENTS.md", PLUGIN / "README.md"]:
+            if path in self.GUIDES:
+                continue
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if "setup" in line.lower():
+                    self.assertIsNone(re.search(r"\bSteps? \d", line), f"{path.relative_to(PLUGIN)}: {line.strip()[:120]}")
+
+    def test_every_command_finds_its_project_folder_through_the_settings_script(self):
+        for name in COMMANDS - {"setup"}:
+            text = (PLUGIN / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("howtos/load-settings.md", text, name)
+        self.assertIn("scripts/bc_setup.py' status", (PLUGIN / "howtos" / "load-settings.md").read_text(encoding="utf-8"))
+
+    def test_no_instruction_reads_a_plugin_path_from_the_settings(self):
+        for path in instruction_files() + [PLUGIN / "AGENTS.md", PLUGIN / "README.md"]:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn('"plugin_root":', text, path.name)
+            self.assertNotIn("plugin_root` in `.buddy-council/sources.json", text, path.name)
+            for paragraph in re.split(r"\n\s*\n", text):
+                if "plugin_root" in paragraph and "sources.json" in paragraph:
+                    self.assertRegex(paragraph, r"plugin_root`? is gone|drops `plugin_root`|dropped plugin_root",
+                                     f"{path.name} reads plugin_root from the settings:\n{paragraph[:300]}")
+
+
+class Scripts(unittest.TestCase):
+    def test_the_scripts_import_one_way(self):
+        ours = {"bc_keys", "bc_run", "bc_setup", "bc_tools"}
+        imports = {}
+        for name in ours:
+            tree = ast.parse((PLUGIN / "scripts" / f"{name}.py").read_text(encoding="utf-8"))
+            imports[name] = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
+                             for alias in node.names} & ours
+        self.assertEqual(imports, {"bc_keys": set(), "bc_run": {"bc_keys"}, "bc_setup": {"bc_keys", "bc_run"},
+                                   "bc_tools": {"bc_setup"}}, "bc_keys ← bc_run ← bc_setup ← bc_tools, never back")
+
+    def test_every_connector_reads_keys_through_the_one_key_store(self):
+        for server in ("testrail-server", "jama-server", "jira-router"):
+            text = (PLUGIN / "mcp-servers" / server / "server.py").read_text(encoding="utf-8")
+            self.assertIn("import bc_keys", text, server)
+            self.assertNotIn("spec_from_file_location", text, f"{server} copies a loader of its own")
+
+
 class Hooks(unittest.TestCase):
     def test_both_hook_files_run_the_same_scripts(self):
         claude = read_json(PLUGIN / "hooks" / "hooks.json")
@@ -187,7 +253,7 @@ class Hooks(unittest.TestCase):
         script = re.compile(r"/hooks/([a-z0-9-]+\.sh)")
         names = {name for command in claude_commands for name in script.findall(command)}
         self.assertEqual(names, {name for command in copilot_commands for name in script.findall(command)})
-        self.assertEqual(len(names), 4)
+        self.assertEqual(names, {"validate-bash.sh", "auto-approve-mcp.sh", "log-tool-use.sh"})
         for name in names:
             self.assertTrue((PLUGIN / "hooks" / name).stat().st_mode & 0o111, f"{name} is executable")
         for command in claude_commands:
@@ -195,6 +261,15 @@ class Hooks(unittest.TestCase):
         for command in copilot_commands:
             self.assertTrue(command.startswith('"${PLUGIN_ROOT:-.}"/hooks/'), command)
         self.assertFalse((PLUGIN / "hooks.json").exists(), "Agent Plugins read com.github.copilot/hooks/hooks.json")
+
+    def test_no_hook_approves_a_file_write(self):
+        # Settings and progress logs are saved by bc_setup.py and bc_run.py, which validate-bash.sh approves; a file
+        # the assistant writes itself — a key above all — always reaches the assistant's own prompt.
+        claude = read_json(PLUGIN / "hooks" / "hooks.json")
+        copilot = read_json(PLUGIN / "com.github.copilot" / "hooks" / "hooks.json")
+        self.assertEqual([g["matcher"] for g in claude["hooks"]["PreToolUse"]], ["Bash", "mcp__.*"])
+        self.assertEqual([h.get("matcher") for h in copilot["hooks"]["preToolUse"]], ["bash", None])
+        self.assertFalse((PLUGIN / "hooks" / "auto-approve-plugin-writes.sh").exists())
 
 
 if __name__ == "__main__":

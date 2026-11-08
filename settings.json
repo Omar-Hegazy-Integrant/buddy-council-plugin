@@ -25,6 +25,8 @@
     "mcp__plugin_bc_testrail__testrail_get_priorities",
     "mcp__testrail__testrail_get_templates",
     "mcp__plugin_bc_testrail__testrail_get_templates",
+    "mcp__testrail__testrail_get_authoring_defaults",
+    "mcp__plugin_bc_testrail__testrail_get_authoring_defaults",
     "mcp__testrail__testrail_get_requirement_ids",
     "mcp__plugin_bc_testrail__testrail_get_requirement_ids",
     "mcp__testrail__testrail_get_linked_cases",

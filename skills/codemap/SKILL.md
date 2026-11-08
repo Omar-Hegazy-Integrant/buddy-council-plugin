@@ -24,8 +24,7 @@ The text the user typed after the command: a feature name, a requirement ID, or 
 
 ## Execution
 
-1. Verify that `.buddy-council/sources.json` exists. If not, tell the user:
-   > Configuration not found. Please run `/bc:setup` to configure your data sources first.
+1. Follow `howtos/load-settings.md` with `--reads test_cases`: it finds the project folder and stops when the settings aren't ready.
 
 2. Verify that the current working directory contains code repo markers (per `howtos/map-feature-to-code.md` Step 1). If not, tell the user:
    > This command needs to run from inside a code repository. The current directory doesn't look like one — no `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle`, `*.csproj`, `Gemfile`, `composer.json`, `requirements.txt`, `setup.py`, or `.git/` was found here.
@@ -36,7 +35,7 @@ The text the user typed after the command: a feature name, a requirement ID, or 
    - **Empty** → interactively prompt the user for a feature name (offering the list from the onboarding progress log if it exists)
 
 4. Locate the feature definition. Try in order:
-   a. **Onboarding progress log** at `<user-project>/.buddy-council/onboarding-progress.json` — read `features[]` and find the matching `name` (case-insensitive) or the entry whose `requirement_ids` contains the given ID. Use that feature's stored requirement IDs and test case IDs. This is the cheapest path.
+   a. **Onboarding progress log** at `<project>/.buddy-council/onboarding-progress.json` — read `features[]` and find the matching `name` (case-insensitive) or the entry whose `requirement_ids` contains the given ID. Use that feature's stored requirement IDs and test case IDs. This is the cheapest path.
    b. **Live fetch** — if no progress log exists or the feature isn't in it, follow `howtos/fetch-requirements.md` and `howtos/fetch-test-cases.md` with the feature name as scope, then normalize via `howtos/normalize-artifacts.md`.
    c. **No match** — if neither finds the feature, list the available features (from the log, if present) and ask the user to pick one.
 

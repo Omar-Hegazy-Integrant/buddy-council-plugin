@@ -16,6 +16,13 @@ TestRail, and when they ask to change specific test cases, edit them.
 
 The user's question: the text they typed after the command.
 
+## First
+
+Follow `howtos/load-settings.md` with `--reads test_cases,board`: it finds the project folder, stops when the
+settings aren't ready, and gives the `lines` every answer prints. A route that reads or writes test cases —
+contradictions, coverage, mapping scenarios, editing cases — needs them: run it with
+`--need test_cases --reads board`, so a project without a suite is asked for its link on the spot.
+
 ## Intent Classification
 
 Analyze the user's question and classify it into one of these intents:
@@ -111,11 +118,11 @@ Do not guess — ask.
 
 When the intent is a general question about requirements or test cases:
 
-1. **Load configuration**: Read `.buddy-council/sources.json`. If missing, direct the user to `/bc:setup`.
+1. **Load configuration**: read `<project>/.buddy-council/sources.json` — the project folder *First* found.
 
 2. **Determine the scope** from the question — a requirement ID, a feature name, or "all". Scope narrows each fetch; it never skips one.
 
-3. **Fetch every configured source — always (Data Contract, MANDATORY).** Every answer must be grounded in freshly fetched data. Follow `howtos/fetch-requirements.md` **and** `howtos/fetch-test-cases.md`, both narrowed to the scope. When the config maps a `github_url` field and `requirements.enrichment.enabled` is true, GitHub doc enrichment is a mandatory third source — the fetch-requirements router runs it; include its `Enrichment: fetched K of N` line in the trace. When `jira.board` is configured and `jira.pending` is not `true`, the dev board is a mandatory fourth source — follow `howtos/fetch-board-issues.md`, narrowed to the same scope. Never answer from memory, general knowledge, or previously seen data instead of fetching. Make every attempt visible by printing:
+3. **Fetch every configured source — always (Data Contract, MANDATORY).** Every answer must be grounded in freshly fetched data. Follow `howtos/fetch-requirements.md` **and** `howtos/fetch-test-cases.md`, both narrowed to the scope. When the config maps a `github_url` field and `requirements.enrichment.enabled` is true, GitHub doc enrichment is a mandatory third source — the fetch-requirements router runs it; include its `Enrichment: fetched K of N` line in the trace. When the board is ready (`tools.board.state`), it is a mandatory fourth source — follow `howtos/fetch-board-issues.md`, narrowed to the same scope. Never answer from memory, general knowledge, or previously seen data instead of fetching. Make every attempt visible by printing:
 
    ```
    Fetch: requirements → <N> fetched
@@ -123,7 +130,7 @@ When the intent is a general question about requirements or test cases:
    Fetch: board issues → <K> fetched from board <id>
    ```
 
-   An unconfigured or still-`pending` board prints `Fetch: board issues → skipped (Jira board not configured — run /bc:setup)` and does **not** make the answer PARTIAL; a configured board that errors does.
+   A board the project doesn't use, or one not verified yet, is skipped with its line from `howtos/load-settings.md` and does **not** make the answer PARTIAL; a ready board that errors does.
 
    If any configured source fails (provider error, MCP unavailable, enrichment failure) — or you could not attempt it — STOP before answering. Name exactly which source could not be fetched and why, then ask the user whether to continue with partial data or abort. Continue only after explicit confirmation, and mark the answer **PARTIAL**, stating which data was missing.
 
@@ -141,6 +148,6 @@ When the intent is a general question about requirements or test cases:
 
 ## Error Handling
 
-- If config is missing → direct user to `/bc:setup`
+- If the settings aren't ready → `howtos/load-settings.md` says what to show
 - If MCP tools are unavailable → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it
 - If no artifacts match the question → report clearly what was searched and that nothing matched

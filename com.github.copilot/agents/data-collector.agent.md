@@ -46,11 +46,11 @@ The caller's prompt gives:
 
 1. **Read `<project>/.buddy-council/sources.json`.** Note `requirements` (provider, `base_url`, `project_id`,
    `roots`, `exclude`, `feature_inference`, `item_type_filter`, `item_type_exclude`, `field_mapping`,
-   `enrichment`), `test_cases` (`base_url`, `project_id`, `suite_id`, `authoring.requirement_field`), and
-   `plugin_root`.
+   `enrichment`) and `test_cases` (`provider`, `base_url`, `project_id`, `suite_id`,
+   `authoring.requirement_field`).
 
-2. **Find the script.** It is `<plugin_root>/scripts/bc_run.py`, using `plugin_root` from your
-   input, else from `sources.json`. Confirm it exists by reading its first 5 lines. If it does not, stop and
+2. **Find the script.** It is `<plugin_root>/scripts/bc_run.py`, using the `plugin_root` your input gives.
+   Confirm it exists by reading its first 5 lines. If it does not, stop and
    return `failed: [{"source": "collector", "error": "bc_run.py not found at <path>"}]`.
 
 3. **Create the run folder:**
@@ -59,22 +59,23 @@ The caller's prompt gives:
    python3 <script> new --project <project> --command <command> --scope '<scope>'
    ```
 
-   It prints JSON with `run_dir`, `requirements`, `background`, and `test_cases` — the exact paths to use below.
+   It prints JSON with `run_dir`, `requirements`, and `test_cases` — the exact paths to use below — and, for a
+   lookup only, `background`.
 
 4. **Requirements.**
    - Provider `jama`: call `jama_get_requirements` with `site` = `requirements.base_url`, `project_id`, `scope`,
      and `save_to` = the `requirements` path, plus whichever of these the config has: `root_ids` (each `roots[].id`),
      `exclude_ids` (each `exclude[].id`), `feature_depth` (`feature_inference.depth`), `feature_item_type`
      (`feature_inference.folder_item_type`), `item_type_filter`, `item_type_exclude`, `field_mapping`.
+     **When `new` printed a `background` path**, add `background_save_to` = that path to the same call: it also
+     writes the **background** — the rest of the project that lookups search to enrich their answers — from the
+     same read and the same arguments. Never read the background in a call of its own.
      If it answers `"loading": true`, call it again with the same arguments — that joins the read already
      running. Keep calling until it answers with `saved_to` (a large project takes a minute or two).
-   - Provider `jama` and `command` `lookup` — then also the **background**, the rest of the project that
-     lookups search to enrich their answers: call `jama_get_requirements` again with exactly the same
-     arguments plus `background: true`, and `save_to` = the `background` path. It reuses the tree the first
-     call read, so it answers in seconds.
 
-5. **Test cases.** Call `testrail_get_canonical_cases` with `site` = `test_cases.base_url`, `project_id` and
-   `suite_id` from `test_cases`,
+5. **Test cases** — only when `test_cases.provider` is `testrail`; a project that uses none skips this step,
+   and the link step says so. Call `testrail_get_canonical_cases` with `site` = `test_cases.base_url`,
+   `project_id` and `suite_id` from `test_cases`,
    `requirement_field` = `test_cases.authoring.requirement_field` (else `custom_jama_req_id`), and `save_to` =
    the `test_cases` path. Pass no other filter — the link step scopes them.
 

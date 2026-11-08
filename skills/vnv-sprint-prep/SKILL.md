@@ -21,7 +21,7 @@ only the tickets whose blocking condition has cleared.
 ```
 /bc:vnv-sprint-prep                          # Dry run — report what would happen, write nothing
 /bc:vnv-sprint-prep --apply                  # Perform the writes, after one batch confirmation per phase
-/bc:vnv-sprint-prep --board <url>            # Use/record a different V&V board for this project
+/bc:vnv-sprint-prep --board <url>            # Use a different V&V board for this project, and save it
 /bc:vnv-sprint-prep PROJ-123                 # Restrict the run to one story (and its platform counterpart)
 ```
 
@@ -32,7 +32,10 @@ The text the user typed after the command:
 - **Scope** (optional): a story key to restrict the run to. Default: every story in the dev board's current sprint.
 - **Flags**:
   - `--apply`: perform the writes. **Without it nothing is created, commented, or labelled** — the run reports the full plan and stops.
-  - `--board <url>`: supply the V&V board URL. Required on the first run if `/bc:setup` never recorded one; otherwise it overrides and updates the stored value.
+  - `--board <url>`: the V&V board link. Without it, the first run asks for the link — the one question this command adds — and later runs use the saved board.
+
+Anything else the user says about the plan — `reviewer is Jane`, `V&V issues carry the label vnv` — changes it, is
+saved, and the plan is shown again.
 
 ## Safety Posture
 
@@ -44,16 +47,14 @@ This workflow writes to tickets other people own. Three rules hold at all times:
 
 ## Execution
 
-1. Verify `.buddy-council/sources.json` exists. If not: tell the user to run `/bc:setup` first.
-2. Verify the dev board is configured and not `pending` (`jira.board`, `jira.pending`). If it is pending, stop — the workflow reads the dev sprint and cannot proceed without a verified board.
-3. Resolve the V&V board: `--board` if given, else `jira.vnv_board`. If neither exists, ask for the URL now, parse it, and record it. **Refuse only if it resolves to the same board *id* as the dev board.** A shared project is supported — resolve `vnv_board.discriminator` (what the V&V board's filter keys off) so clones land on the right board.
-4. Run the V&V sprint agent's steps in this session: follow `com.github.copilot/agents/vnv-sprint-prep-agent.agent.md`, passing the scope and flags.
+1. Follow `howtos/load-settings.md` with `--need board,vnv_board --reads test_cases` — or `--need board --reads test_cases` when `--board` gave the link. The dev sprint can't be read without a verified dev board, so an unverified one stops the run; a project with no board or no V&V board is asked for the link on the spot.
+2. Run the V&V sprint agent's steps in this session: follow `com.github.copilot/agents/vnv-sprint-prep-agent.agent.md`, passing the scope, the flags, and the project folder.
 
 ## The Seven Phases
 
 | # | Phase | What it does | Writes? |
 |---|---|---|---|
-| 1 | **Board** | Accept or confirm the V&V board link; validate it is a different board from the dev board, and resolve the clone discriminator when they share a project | config only |
+| 1 | **Board** | Take the V&V board link, refuse the dev board, and work out what puts an issue on the V&V board and who approves scenarios — the person running it, unless they name someone. Both show in the plan | settings only |
 | 2 | **Sprint + parity** | Fetch the dev board's current-sprint stories; group by the `OS` field; flag any story whose platform counterpart is missing or unlinked | no |
 | 3 | **Clone** | Create a matching story on the V&V board for each in-scope dev story, carrying summary, description, a `src-<DEV-KEY>` back-reference, and label `pending-validation` | yes |
 | 4 | **Validate** | Check each clone against requirements and test cases for gaps, conflicts, and contradictions. Concerns → comment on the **original dev story**, label the clone `pending-questions` | yes |
@@ -65,7 +66,7 @@ Phase 7 writes **skeleton** cases — title, preconditions, one step per Given/W
 expand. It creates nothing from a scenario that traces to no requirement, and nothing from a scenario phase 5
 already marked as covered by an existing case. It skips itself with a visible line when
 `test_cases.authoring` is unconfigured, because the template alone decides which body fields a case has and
-guessing it writes the steps into a field nobody reads. Run `/bc:setup` to fill it in.
+guessing it writes the steps into a field nobody reads. `/bc:setup` fills it in.
 
 ### Revising approved scenarios
 
@@ -112,12 +113,13 @@ transition removes the previous one rather than stacking:
 | `pending-scenario-validation` | Scenarios written, waiting on the reviewer | Phase 5 |
 | `ready-for-test-case-creation` | Approved — terminal | Phase 6 |
 
-Rename any of them in `jira.vnv_workflow.labels` in `.buddy-council/sources.json`; the workflow reads the
-config, never the hardcoded strings. Clones additionally carry a permanent `src-<DEV-KEY>` label and their
+Rename any of them in `jira.vnv_workflow.labels` in the project's `.buddy-council/sources.json`; the workflow reads
+the settings, never the hardcoded strings. Clones additionally carry a permanent `src-<DEV-KEY>` label and their
 platform (`ios` / `android`) — those are not pipeline states and are never stripped, and neither is any
 label a human adds.
 
-State lives in `.buddy-council/vnv-progress.json` in your project root, alongside the onboarding log. Jira
+State lives in `.buddy-council/vnv-progress.json` in the project folder, alongside the onboarding log, saved by
+`scripts/bc_run.py` so it never prompts. Jira
 labels remain the source of truth — if someone changes a label in Jira, the next run follows Jira, not the
 local file, and repairs the file. A ticket found with no pipeline label is treated as `pending-validation`;
 one found with several is repaired to the furthest-along, and the repair is reported.
@@ -134,10 +136,10 @@ reports which pairs are label-only, so someone can link them in the UI in one pa
 
 ## Error Handling
 
-- **Dev board pending or unconfigured** → stop; run `/bc:setup`.
-- **V&V board missing** → ask for the URL, or accept `--board`.
+- **Dev board not verified** → stop; `/bc:setup` checks it again. A project with no dev board is asked for its link.
+- **V&V board missing** → ask for its link, or accept `--board`.
 - **V&V board id equals the dev board id** → stop and explain; this is a configuration error, not something to work around. A shared *project* is supported — see the discriminator below.
-- **V&V board shares a project with the dev board and no discriminator is known** → derive one by sampling both boards, or ask. If it stays unresolved, warn that clones may surface on the dev board and let the user decide.
+- **V&V board shares a project with the dev board and no discriminator is known** → derive one by sampling both boards. If the samples settle nothing, the plan shows that as the default, warns that clones may surface on the dev board, and says how to change it (`stamp label vnv`) — never a question.
 - **No `OS` field on the project** → phase 2 falls back to the title prefix and says so loudly; parity results are marked lower-confidence.
 - **No active sprint** → report it and stop. There is nothing to clone.
-- **401 / 403 from Atlassian** → 401 means the token saved for the Jira site is wrong or expired (re-run `/bc:setup`); 403 means the account lacks permission on that project, or an IP allowlist is blocking the request.
+- **401 / 403 from Atlassian** → 401 means the key saved for the Jira site is wrong or expired: ask for a new one and save it (`howtos/load-settings.md`); 403 means the account lacks permission on that project, or an IP allowlist is blocking the request.

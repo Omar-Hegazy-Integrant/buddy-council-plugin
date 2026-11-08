@@ -24,15 +24,14 @@ The text the user typed after the command: a requirement ID, a feature name, or 
 
 ## Execution
 
-1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
-   > Configuration not found. Please run `/bc:setup` to configure your data sources first.
+1. Follow `howtos/load-settings.md` with `--need test_cases --reads board`: it finds the project folder, stops when the settings aren't ready, asks on the spot for a missing suite link or key, and gives the `lines` the report prints.
 
-2. Run the contradiction agent's steps in this session: follow `com.github.copilot/agents/contradiction-agent.agent.md`, passing any arguments as the analysis scope.
+2. Run the contradiction agent's steps in this session: follow `com.github.copilot/agents/contradiction-agent.agent.md`, passing any arguments as the analysis scope, the project folder, and the `lines`.
 
 3. The agent will:
    - Fetch requirements from Jama
    - Fetch test cases from TestRail
-   - Fetch the in-flight issues on the configured Jira dev board, and check those against the requirements too — so a sprint ticket that contradicts a requirement is caught before it ships. Skipped with a visible line if the board isn't configured or isn't verified yet
+   - Fetch the in-flight issues on the Jira dev board, and check those against the requirements too — so a sprint ticket that contradicts a requirement is caught before it ships. A project that uses no board, or one not verified yet, gets one line in the report saying so
    - Normalize and cross-link all artifacts
    - Analyze for 7 types of contradictions
    - Return a human-readable report with severity-classified findings

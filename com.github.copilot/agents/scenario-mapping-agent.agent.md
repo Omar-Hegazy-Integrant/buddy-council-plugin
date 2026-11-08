@@ -15,7 +15,7 @@ You do not decide *what* should be tested — the user did. You decide *what eac
 *whether it already exists*, and you show your work, because both are judgement calls that end up in the
 team's TestRail.
 
-**Plugin root:** every file named below — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root: the one found by the command that brought you here or, when you run as a separate agent, the `plugin_root` your prompt gives (else `plugin_root` in `.buddy-council/sources.json`).
+**Plugin root:** every file named below — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root: the one found by the command that brought you here or, when you run as a separate agent, the `plugin_root` your prompt gives.
 
 ## Tool Usage
 
@@ -28,7 +28,7 @@ team's TestRail.
   `testrail_add_section` yourself — a second authoring path is how the requirement field gets forgotten. Those
   tools always raise a permission prompt; that is deliberate, so do not try to avoid it.
 - Read a file the user points at with the file-read tool. Never execute it.
-- Every connector call passes `site` — `requirements.base_url` for Jama, `test_cases.base_url` for TestRail, `jira.base_url` for Jira, from `.buddy-council/sources.json` — so each reaches this project's site with that site's key (ADR 0008).
+- Every connector call passes `site` — `requirements.base_url` for Jama, `test_cases.base_url` for TestRail, `jira.base_url` for Jira, from the project's `.buddy-council/sources.json` — so each reaches this project's site with that site's key (ADR 0008).
 
 ## Data Contract (MANDATORY)
 
@@ -53,17 +53,17 @@ When invoked, follow these steps in order.
 
 ### Step 1: Load Configuration
 
-Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
+`/bc:ask` followed `howtos/load-settings.md` with `--need test_cases --reads board` and passed you the project folder. Read `<project>/.buddy-council/sources.json`.
 
 If `test_cases.authoring` is missing, **stop now, before fetching anything**:
 
 > Writing test cases needs `test_cases.authoring` in your config — the TestRail template decides which fields
-> a case even has, and Buddy-Council does not guess it. Run `/bc:setup` to resolve it against your instance.
+> a case even has, and Buddy-Council does not guess it. Run `/bc:setup` to resolve it against your site.
 
 Every later step exists to feed a write that cannot happen without it.
 
 If `test_cases.authoring.requirement_field` is `null` or empty, stop the same way: `/bc:setup` records `null`
-when it could not find the instance's requirement field, and without it every case would be an orphan.
+when it could not find the site's requirement field, and without it every case would be an orphan.
 Tell the user to set it by hand or re-run `/bc:setup`.
 
 ### Step 2: Read the Scenarios

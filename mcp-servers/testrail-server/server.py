@@ -24,9 +24,9 @@ import asyncio
 import contextlib
 import contextvars
 import html
-import importlib.util
 import os
 import re
+import sys
 import json
 import tempfile
 import time
@@ -44,16 +44,10 @@ from pydantic import Field
 # ---------------------------------------------------------------------------
 
 
-def _key_store():
-    """scripts/bc_keys.py, imported by path from the plugin root this server ships in."""
-    path = Path(__file__).resolve().parents[2] / "scripts" / "bc_keys.py"
-    spec = importlib.util.spec_from_file_location("bc_keys", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-bc_keys = _key_store()
+_SCRIPTS = str(Path(__file__).resolve().parents[2] / "scripts")  # the plugin root this server ships in
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+import bc_keys  # noqa: E402 — the plugin's one key store (scripts/bc_keys.py), shared by every connector
 
 Site = Annotated[
     str | None,
@@ -226,7 +220,7 @@ async def _request(
         if response.status_code == 401:
             raise TestRailError(
                 f"{method} {endpoint} → HTTP 401: {site.id} no longer accepts the key saved for it "
-                f"({_error_message(response)}). Run /bc:setup to save a new one."
+                f"({_error_message(response)}). Ask for a new key for {site.id}, save it, and try again."
             )
         if 300 <= response.status_code < 400:
             raise TestRailError(
@@ -947,15 +941,21 @@ async def testrail_get_projects(site: Site = None) -> str:
 
 
 @mcp.tool(structured_output=False)
-async def testrail_get_suites(project_id: int, site: Site = None) -> str:
-    """List all test suites for a given project.
+async def testrail_get_suites(project_id: int | None = None, suite_id: int | None = None, site: Site = None) -> str:
+    """List all test suites for a given project, or read one suite by its id.
 
     Args:
-        project_id: The TestRail project ID.
+        project_id: The TestRail project ID, to list its suites.
+        suite_id: A suite ID, to read that one suite — for example from a pasted
+            `index.php?/suites/view/<id>` link. Its `project_id` names the project it belongs to.
 
-    Returns a JSON array of suites with id, name, and description fields.
+    Returns a JSON array of suites with id, name, description, and project_id fields.
     """
     _use(site)
+    if suite_id is not None:
+        return json.dumps([await _get(f"get_suite/{suite_id}")], indent=2)
+    if project_id is None:
+        raise ValueError("Pass project_id to list a project's suites, or suite_id to read one suite.")
     data = await _get(f"get_suites/{project_id}")
     return json.dumps(data, indent=2)
 
@@ -1117,6 +1117,87 @@ async def testrail_get_templates(project_id: int, site: Site = None) -> str:
     return json.dumps(data, indent=2)
 
 
+_REQUIREMENT_SHAPED = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*[-_]\d+$")
+_REQUIREMENT_HINTS = ("req", "jama", "requirement", "story")
+
+
+def _named(items: Any, *keys: str) -> dict[str, Any] | None:
+    return {key: items.get(key) for key in keys} if isinstance(items, dict) else None
+
+
+@mcp.tool(structured_output=False)
+async def testrail_get_authoring_defaults(
+    project_id: int,
+    suite_id: int | None = None,
+    sample_size: int = 50,
+    site: Site = None,
+) -> str:
+    """What creating test cases in this project needs, worked out in one small answer: the template, case type,
+    and priority to write with, the custom field that holds requirement links, and where new cases should go.
+
+    TestRail takes ids, not names, and they differ per site. The requirement field is the one a mistake makes
+    silent — TestRail drops an unknown custom field's value without an error — so it is confirmed on a sample of the
+    suite's cases: the candidate (a field whose system name mentions req, jama, requirement, or story) holding
+    requirement-shaped IDs on the most cases. Read-only.
+
+    Args:
+        project_id: The TestRail project ID.
+        suite_id: The suite to sample. Required on multi-suite projects.
+        sample_size: How many cases to sample (default 50, max 250).
+
+    Returns JSON {"template", "case_type", "priority", "requirement_field", "candidates", "placement",
+    "sampled", "summary"}; `requirement_field` is null when no candidate holds requirement IDs.
+    """
+    _use(site)
+    templates = await _get(f"get_templates/{project_id}")
+    templates = templates if isinstance(templates, list) else []
+    steps = next((t for t in templates if "steps" in str(t.get("name", "")).lower()), None)
+    template = steps or next((t for t in templates if t.get("is_default")), None) or (templates[0] if templates else None)
+    case_types = await _get("get_case_types")
+    case_types = case_types if isinstance(case_types, list) else []
+    case_type = (next((t for t in case_types if str(t.get("name", "")).lower() == "functional"), None)
+                 or next((t for t in case_types if t.get("is_default")), None))
+    priorities = await _get("get_priorities")
+    priorities = sorted(priorities if isinstance(priorities, list) else [], key=lambda p: p.get("priority") or 0)
+    priority = priorities[(len(priorities) - 1) // 2] if priorities else None
+    fields = await _get("get_case_fields")
+    fields = fields if isinstance(fields, list) else []
+    candidates = [f for f in fields if f.get("is_active", True) and any(
+        hint in str(f.get("system_name", "")).lower() for hint in _REQUIREMENT_HINTS)]
+    size = max(1, min(int(sample_size or 50), 250))
+    params: dict[str, Any] = {"limit": size}
+    if suite_id is not None:
+        params["suite_id"] = suite_id
+    page = await _get(f"get_cases/{project_id}", params=params)
+    cases = page.get("cases", []) if isinstance(page, dict) else (page if isinstance(page, list) else [])
+    counted = []
+    for field in candidates:
+        name = str(field.get("system_name"))
+        filled = sum(1 for case in cases if any(_REQUIREMENT_SHAPED.match(t) for t in _tokens(case.get(name))))
+        counted.append({"system_name": name, "label": field.get("label"), "cases_with_ids": filled})
+    counted.sort(key=lambda c: (-c["cases_with_ids"], c["system_name"] != "custom_jama_req_id"))
+    best = counted[0] if counted and counted[0]["cases_with_ids"] else None
+    linked = bool(best and cases and best["cases_with_ids"] * 2 >= len(cases))
+    placement = ({"section_strategy": "linked", "section_root": None} if linked
+                 else {"section_strategy": "feature", "section_root": "V&V"})
+    summary = (f"requirement link: {best['system_name']} (on {best['cases_with_ids']} of {len(cases)} sampled cases)"
+               if best else f"requirement link: none of {len(candidates)} candidate fields holds requirement IDs "
+                            f"on the {len(cases)} sampled cases")
+    return json.dumps(
+        {
+            "template": _named(template, "id", "name") and {**_named(template, "id", "name"), "steps": steps is not None},
+            "case_type": _named(case_type, "id", "name"),
+            "priority": _named(priority, "id", "name"),
+            "requirement_field": best["system_name"] if best else None,
+            "candidates": counted,
+            "placement": placement,
+            "sampled": len(cases),
+            "summary": summary,
+        },
+        indent=2,
+    )
+
+
 @mcp.tool(structured_output=False)
 async def testrail_get_requirement_ids(
     project_id: int,
@@ -1124,6 +1205,7 @@ async def testrail_get_requirement_ids(
     suite_id: int | None = None,
     sample_size: int = _DEFAULT_ID_SAMPLE,
     refresh: bool = False,
+    save_to: str | None = None,
     site: Site = None,
 ) -> str:
     """Summarize which requirement IDs a suite's cases link to through the requirement field.
@@ -1140,6 +1222,10 @@ async def testrail_get_requirement_ids(
         sample_size: How many distinct IDs to return, spread across the sorted list
             (default 500, max 2000).
         refresh: Ignore the cache and re-read the suite.
+        save_to: Absolute path of a .json file inside an existing run folder
+            (<project>/.buddy-council/runs/<run>/<name>.json). Every distinct ID goes into
+            the file, which jama_get_scope_proposal reads as document_keys_file, and the
+            answer keeps only a short sample.
 
     Returns JSON {"requirement_field", "field_found", "cases_scanned",
     "cases_with_ids", "distinct_ids", "prefixes": {prefix: count}, "sample": [...],
@@ -1161,19 +1247,23 @@ async def testrail_get_requirement_ids(
     warnings: list[str] = []
     if index.cases and not field_found:
         warnings.append(f"No case carries a field named {field} — check test_cases.authoring.requirement_field.")
-    return json.dumps(
-        {
-            "requirement_field": field,
-            "field_found": field_found,
-            "cases_scanned": len(index.cases),
-            "cases_with_ids": with_ids,
-            "distinct_ids": len(ordered),
-            "prefixes": dict(Counter(_id_prefix(token) for token in ordered).most_common()),
-            "sample": _spread(ordered, size),
-            "warnings": warnings,
-        },
-        indent=2,
-    )
+    answer: dict[str, Any] = {
+        "requirement_field": field,
+        "field_found": field_found,
+        "cases_scanned": len(index.cases),
+        "cases_with_ids": with_ids,
+        "distinct_ids": len(ordered),
+        "prefixes": dict(Counter(_id_prefix(token) for token in ordered).most_common()),
+        "sample": _spread(ordered, size),
+        "warnings": warnings,
+    }
+    if save_to:
+        saved_to, _ = _write_run_file(save_to, {
+            "kind": "requirement_ids", "source": "testrail", "site": _site().id, "written_at": _utc_now(),
+            "project_id": project_id, "suite_id": suite_id, "requirement_field": field, "ids": ordered,
+        })
+        answer.update(saved_to=saved_to, saved_ids=len(ordered), sample=_spread(ordered, 20))
+    return json.dumps(answer, indent=2)
 
 
 @mcp.tool(structured_output=False)
