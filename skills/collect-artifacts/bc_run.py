@@ -4,7 +4,7 @@
 A run folder, ``<project>/.buddy-council/runs/<run-id>/``, carries one analysis run's data from the collect
 step to the analysis as files, so the data itself never passes through a model:
 
-  requirements.json  written by the Jama server (``save_to``) or the Excel parser
+  requirements.json  written by the Jama server (``save_to``)
   background.json    lookups on Jama only: the rest of the project, context for answers (``save_to``)
   test_cases.json    written by the TestRail server (``save_to``)
   docs/, docs.json   GitHub docs the requirements link to (``enrich``, gh CLI strategy)
@@ -911,8 +911,8 @@ def verify_run(
     is_jama_file = isinstance(requirements_data, dict) and requirements_data.get("source") == "jama"
     if provider == "jama" and not is_jama_file:
         problems.append("requirements.json was not written by the Jama server.")
-    elif provider == "excel" and is_jama_file:
-        problems.append("requirements came from Jama, but the configured source is the Excel export.")
+    elif provider and provider != "jama":
+        problems.append(f"the project reads requirements from {provider!r}, but only Jama is read now — run /bc:setup with a link to the Jama project.")
     elif is_jama_file:
         got = requirements_data.get("args") or {}
         inference = req.get("feature_inference") or {}
@@ -970,7 +970,7 @@ def report_lines(
         summary = requirements_data.get("summary") or ""
         lines.append(f"Fetch: requirements → {len(requirements)} from Jama project {requirements_data.get('project_id')} ({summary})")
     else:
-        lines.append(f"Fetch: requirements → {len(requirements)} from the Excel export")
+        lines.append(f"Fetch: requirements → {len(requirements)}")
     if isinstance(background_data, dict):
         summary = background_data.get("summary") or ""
         lines.append(

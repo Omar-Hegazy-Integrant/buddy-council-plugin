@@ -24,7 +24,7 @@ Analyze requirements and test cases to find contradictions, inconsistencies, and
 2. Invoke the contradiction agent by following the instructions in `agents/contradiction-agent.agent.md`, passing any arguments as the analysis scope.
 
 3. The agent will:
-   - Fetch requirements from the configured source (Excel or Jama)
+   - Fetch requirements from Jama
    - Fetch test cases from TestRail
    - Fetch the in-flight issues on the configured Jira dev board, and check those against the requirements too — so a sprint ticket that contradicts a requirement is caught before it ships. Skipped with a visible line if the board isn't configured or isn't verified yet
    - Normalize and cross-link all artifacts

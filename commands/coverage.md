@@ -24,7 +24,7 @@ Find untested requirements, orphan test cases, and weak coverage between require
 2. Invoke the coverage agent by following the instructions in `agents/coverage-agent.agent.md`, passing any arguments as the analysis scope.
 
 3. The agent will:
-   - Fetch requirements from the configured source (Excel or Jama)
+   - Fetch requirements from Jama
    - Fetch test cases from TestRail
    - Fetch the in-flight issues on the configured Jira dev board, and add a **Delivery risk** section: work shipping now whose requirement has no test case, plus board issues that match no requirement at all. Skipped with a visible line if the board isn't configured or isn't verified yet
    - Normalize and cross-link all artifacts

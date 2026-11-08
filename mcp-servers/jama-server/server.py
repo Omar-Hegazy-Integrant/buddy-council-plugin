@@ -1182,7 +1182,7 @@ def _match_containers(tree: Tree, scope: str, preferred: set[int]) -> list[int]:
 
 
 def _apply_scope(tree: Tree, selected: list[int], scope: str) -> ScopeResult:
-    """Excel-provider semantics, extended to a real tree.
+    """Narrow ``selected`` to a scope, using the project's real folder tree.
 
     - empty / "all" → everything selected
     - a document key (or Jama id) → that requirement plus every requirement in the same feature
@@ -1370,7 +1370,7 @@ def _render_requirement(
     project_id: int | None,
     background: bool = False,
 ) -> dict[str, Any]:
-    """One Jama item in the plugin's canonical requirement schema (same shape as the Excel parser).
+    """One Jama item in the plugin's canonical requirement schema.
 
     A background item — the rest of the project, never a requirement in scope — has type "background", its
     nearest folder as `feature`, and always carries `raw_fields.folder_path`.

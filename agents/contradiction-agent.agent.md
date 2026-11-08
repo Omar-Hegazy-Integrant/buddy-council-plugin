@@ -18,7 +18,7 @@ Check which MCP tools are available in your current session. Provider skills wil
 The mandatory data set is **every source the config provides** — not a fixed pair:
 
 - **Requirements** and **test cases** — always configured, always fetched.
-- **GitHub docs (enrichment)** — mandatory whenever the config maps a `github_url` column (Excel) or field (Jama) AND `requirements.enrichment.enabled` is true. The collect step runs it and reports `Enrichment: fetched K of N GitHub-linked requirement docs`; a wholesale enrichment failure counts as a failed source.
+- **GitHub docs (enrichment)** — mandatory whenever the config maps a `github_url` field AND `requirements.enrichment.enabled` is true. The collect step runs it and reports `Enrichment: fetched K of N GitHub-linked requirement docs`; a wholesale enrichment failure counts as a failed source.
 - **Jira board issues** — mandatory whenever `.buddy-council/sources.json` has a `jira.board` block and `jira.pending` is not `true`. Fetch via `${CLAUDE_PLUGIN_ROOT}/skills/fetch-board-issues/SKILL.md` and report `Fetch: board issues → N fetched from board <id>`. A board that is unconfigured or still `pending` is **skipped, not failed** — print `Fetch: board issues → skipped (Jira board not configured — run /bc:setup)` and continue; the run stays complete, not PARTIAL. A board that *is* configured but errors (401/403/JQL) counts as a failed source.
 
 Requirements, test cases, and GitHub docs are fetched by the collect step (Step 3), the board by `fetch-board-issues` (Step 3a) — each attempt surfaced with a visible `Fetch:`/`Readiness:`/`Enrichment:` line. Scope narrows a fetch; it never skips one. Never analyze or answer from memory, prior context, or `linked_ids` inference instead of fetching. If any configured source fails to fetch or returns nothing where data is expected: STOP, name exactly which source could not be fetched and why, and ask the user whether to continue with partial data or abort. Continue only after explicit confirmation, and mark the final output **PARTIAL** with the missing source named.
@@ -116,7 +116,7 @@ you'll see every change before it's written. Want me to? (all / pick some / no)
 ```
 
 - **Only test-case fixes.** Findings whose fix is the requirement, or that need a decision, are not offered:
-  requirements live in Jama or the Excel export, and this plugin never writes them. Board-issue findings and
+  requirements live in Jama, and this plugin never writes them. Board-issue findings and
   requirement-versus-requirement findings (types 3 and 5) are never offered either.
 - **Never write without an explicit yes**, and never change more than the user selected. `pick some` → list
   the offered findings with numbers and let the user choose.
@@ -147,7 +147,7 @@ This agent detects contradictions, and may update the test cases behind them —
 in-session (Step 8). It does not:
 - Suggest new test cases (use `/bc:coverage`)
 - Answer general questions (use `/bc:ask`)
-- Modify requirements — it never writes to Jama or the Excel export
+- Modify requirements — it never writes to Jama
 - Change a test case's requirement links, or anything beyond the conflicting text the user chose to fix
 
 If the user asks for something outside scope, acknowledge it and suggest the appropriate command.

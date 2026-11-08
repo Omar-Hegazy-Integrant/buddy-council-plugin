@@ -10,7 +10,7 @@ server's `--check` mode once, deliberately, before the server is registered.)
 
 ## Prerequisites
 
-`/bc:setup` registers the `jama` server in both runtime configs when Jama is the requirements source:
+`/bc:setup` registers the `jama` server in both runtime configs:
 `.mcp.json` for Claude Code and `~/.copilot/mcp-config.json` for Copilot CLI. Check availability by looking
 for `mcp__jama__jama_get_requirements` (Claude Code) or `jama_get_requirements` (Copilot CLI).
 
@@ -103,7 +103,7 @@ Scoping happens **inside the server**, so only the relevant requirements enter c
   When a bare name matches several folders the server returns all of them with a warning naming each path —
   relay it and offer the paths.
 - **Requirement ID** (`"CWA-REQ-85"`, case-insensitive) → that requirement plus every requirement in the same
-  feature (the Excel provider's semantics).
+  feature.
 - **`"all"` or empty** → every requirement.
 - **No match** → an empty array plus a warning listing the available features. Relay that warning instead of
   treating it as "no requirements exist".
@@ -136,16 +136,15 @@ truncated}`.
   location, when roots are configured — and the remaining custom fields by label, with pick lists resolved to
   names. People and release fields are left out.
 - **`_enrichment_urls`** appears only when `field_mapping.github_url` names a field holding
-  `https://github.com/` links — the same transient field the Excel parser emits, consumed by
-  `enrich-requirements`.
-- **`summary`** — print it as the provider's one-line summary (the Excel parser's `Summary:` equivalent).
+  `https://github.com/` links — a transient field consumed by `enrich-requirements`.
+- **`summary`** — print it as the provider's one-line summary.
 - **`warnings`** — relay every entry to the user.
 - **`truncated: true`** — the project exceeded the server's item cap and the result is incomplete. Treat the
   source as partially fetched under the Data Contract: say so, and ask whether to continue (output marked
   **PARTIAL**) or narrow the scope to a feature.
 
-`linked_ids` is empty on these bulk fetches, exactly like the Excel provider — `normalize-artifacts`
-cross-links requirements from the test-case side.
+`linked_ids` is empty on these bulk fetches — `normalize-artifacts` cross-links requirements from the test-case
+side.
 
 ## Specific requirements by key, with their traceability
 

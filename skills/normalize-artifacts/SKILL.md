@@ -59,7 +59,7 @@ For test cases, parse the requirement field — `test_cases.authoring.requiremen
 - Normalize to the standard requirement ID format
 - Store in `linked_ids`
 
-For requirements from Excel, `linked_ids` will initially be empty.
+Requirements from Jama's bulk fetches arrive with `linked_ids` empty.
 
 ### 4. Cross-Link (Bidirectional)
 

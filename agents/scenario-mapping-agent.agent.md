@@ -37,7 +37,7 @@ The mandatory data set is the sources this workflow reads from:
   requirement, there is no scope to check against and nothing that can be written, so the fetch is skipped
   with a visible line — exactly as `/bc:validate` does when nothing is related — and it runs as soon as the
   user supplies an ID.
-- **GitHub docs (enrichment)** — mandatory whenever the config maps a `github_url` column (Excel) or field (Jama) AND `requirements.enrichment.enabled` is true. The fetch-requirements router runs it and reports `Enrichment: fetched K of N GitHub-linked requirement docs`; a wholesale enrichment failure counts as a failed source.
+- **GitHub docs (enrichment)** — mandatory whenever the config maps a `github_url` field AND `requirements.enrichment.enabled` is true. The fetch-requirements router runs it and reports `Enrichment: fetched K of N GitHub-linked requirement docs`; a wholesale enrichment failure counts as a failed source.
 
 The Jira dev board is deliberately **not** read. Its only possible use here would be attaching a dev story
 key to the cases, and that is exactly what this path must never do (see `draft-test-cases` step 3).

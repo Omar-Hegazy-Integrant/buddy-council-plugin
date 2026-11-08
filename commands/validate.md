@@ -36,7 +36,7 @@ The command expects:
 3. Invoke the ticket validation agent by following the instructions in `agents/ticket-validation-agent.agent.md`, passing the ticket description and any flags.
 
 4. The agent will:
-   - Fetch requirements from the configured source (Excel or Jama)
+   - Fetch requirements from Jama
    - Find requirements related to the ticket description (feature matching + keyword matching)
    - Detect contradictions between ticket and requirements
    - **If contradictions found**: Ask user how to resolve (update ticket, keep as-is, or cancel)

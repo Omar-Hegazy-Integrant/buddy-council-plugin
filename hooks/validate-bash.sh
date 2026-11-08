@@ -66,42 +66,37 @@ has_gh_write() {
   echo "$COMMAND" | grep -iqE '(-X|--request|--method)[[:space:]]*(POST|PUT|PATCH|DELETE)|(^|[[:space:]])(-f|--field|--input)([[:space:]]|=)'
 }
 
-# (a) The Excel requirements parser — a fixed, read-only script path.
-if echo "$COMMAND" | grep -q 'providers/excel/parse\.py'; then
-  allow "bc: Excel parser (read-only)"
-fi
-
-# (b) jq — read-only JSON processing.
+# (a) jq — read-only JSON processing.
 if echo "$FIRST_LINE" | grep -qE '^[[:space:]]*jq[[:space:]]'; then
   allow "bc: jq (read-only)"
 fi
 
-# (c) gh read-only: --version / auth status / api GET (no write verbs or fields).
+# (b) gh read-only: --version / auth status / api GET (no write verbs or fields).
 if echo "$FIRST_LINE" | grep -qE '^[[:space:]]*gh[[:space:]]+(--version|auth[[:space:]]+status|api[[:space:]])'; then
   if ! has_gh_write; then
     allow "bc: gh read-only"
   fi
 fi
 
-# (d) chmod 600 — locking down the secrets file.
+# (c) chmod 600 — locking down the secrets file.
 if echo "$FIRST_LINE" | grep -qE '^[[:space:]]*chmod[[:space:]]+600[[:space:]]'; then
   allow "bc: chmod secrets file"
 fi
 
-# (e) TestRail connection smoke-test via curl (GET only).
+# (d) TestRail connection smoke-test via curl (GET only).
 if echo "$FIRST_LINE" | grep -qE '^[[:space:]]*curl[[:space:]]' && echo "$COMMAND" | grep -qi 'testrail'; then
   if ! echo "$COMMAND" | grep -iqE '(-X|--request)[[:space:]]*(POST|PUT|PATCH|DELETE)|(^|[[:space:]])(-d|--data)([[:space:]]|=)'; then
     allow "bc: TestRail connection test (read-only)"
   fi
 fi
 
-# (f) Dependency setup (pip / uv pip install, uv venv).
+# (e) Dependency setup (pip / uv pip install, uv venv).
 if echo "$FIRST_LINE" | grep -qE '^[[:space:]]*(pip3?|python3?[[:space:]]+-m[[:space:]]+pip|uv[[:space:]]+pip)[[:space:]]+install[[:space:]]' \
    || echo "$FIRST_LINE" | grep -qE '^[[:space:]]*uv[[:space:]]+venv([[:space:]]|$)'; then
   allow "bc: dependency setup"
 fi
 
-# (g) The plugin's own scripts, each approved only as one plain command — python3, THIS plugin's own copy of the
+# (f) The plugin's own scripts, each approved only as one plain command — python3, THIS plugin's own copy of the
 #     script by absolute path, a known subcommand and options, every argument bare or single-quoted — so nothing
 #     can be chained onto it:
 #     - skills/collect-artifacts/bc_run.py (new, enrich, link, search, show, recent). It reads and writes only
