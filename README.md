@@ -34,7 +34,7 @@ These descriptions are the `description:` frontmatter in `skills/<command>/SKILL
 ## Prerequisites
 
 - One of the AI coding assistants in the [install table](#installation)
-- [uv](https://docs.astral.sh/uv/) — runs the MCP servers; it provisions a compatible Python and all dependencies automatically, so no host Python installation or `pip install` is needed
+- [uv](https://docs.astral.sh/uv/) — runs the plugin's connectors (TestRail, Jama, Jira, appium); it provisions a compatible Python and all dependencies automatically, so no host Python installation or `pip install` is needed. The plugin finds it on your `PATH` or where its installers put it (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin`), even when your assistant was opened from the Dock
 - A TestRail account with API access (for test cases)
 - Requirements from Jama Connect — a Jama API client ID and secret (Jama → profile menu → **Set API Credentials**), on an account allowed to use the REST API (Admin → REST API → Managed Access Control, when your site restricts it). A read-only Jama account is recommended; the plugin never writes to Jama
 - Optional: the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — for requirement-doc enrichment when your requirements link GitHub docs
@@ -72,21 +72,27 @@ release:
 }
 ```
 
-**Then run `/bc:setup`** (where your assistant lists skills by name, pick **setup**), and restart the assistant
-afterwards so it picks up the MCP servers setup registered. Copilot CLI must be fully exited and relaunched;
-Claude Code can also toggle the servers with `/mcp`.
+**Then run `/bc:setup`** (where your assistant lists skills by name, pick **setup**). No restart is needed:
+the connectors are already running, and each uses a key the moment setup saves it.
 
-> **Jira — nothing to authorize.** `/bc:setup` wires up **[`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian)** for you, launched via `uvx` with the token you gave it. There is no browser consent step and no site-admin switch to flip; the first launch downloads the package, which takes a few seconds. To confirm it's live on Claude Code, run `/mcp`: **atlassian** should be listed and connected. If it isn't, the usual causes are a runtime that hasn't been restarted since setup, or a first-run `uvx` download still in progress. Your token lives in `~/.buddy-council/atlassian.env` — re-run `/bc:setup` to change it.
+> **The connectors come with the plugin.** TestRail, Jama, Jira, and appium are MCP servers the plugin declares
+> itself (`mcp.json`, and `.claude-plugin/plugin.json` for Claude Code), so your assistant starts them and setup
+> registers nothing — run `/mcp` in either assistant to see them. **Keys belong to sites:**
+> one file per site in `~/.buddy-council/keys/`, and every call a command makes names its project's site, so two
+> projects on two TestRail, Jama, or Jira sites both work, side by side — and a key only ever reaches the site it
+> was saved for. A call that names no site uses your only key for that tool, so everyday Jira use is unchanged.
 
-> **Jira on both runtimes.** `/bc:setup` writes the `atlassian` server into `.mcp.json` (Claude Code) and `~/.copilot/mcp-config.json` (Copilot CLI), exactly as it does for TestRail. No plugin manifest declares it: a `uvx` server needs an absolute interpreter path and an absolute env-file path, and a committed manifest can hold neither. Copilot couldn't use a manifest entry regardless — it doesn't merge plugin-declared MCP servers into its runtime config ([#2709](https://github.com/github/copilot-cli/issues/2709)).
+> **Jira — nothing to authorize.** The Jira connector runs **[`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian)** for each Jira site, with the token setup saved for that site. There is no browser consent step and no site-admin switch to flip; a site's first call downloads mcp-atlassian, which can take half a minute. Re-run `/bc:setup` to change a token.
+
+> **Updating from an older version.** Older setups kept your keys in `~/.buddy-council/secrets.json` and `~/.buddy-council/atlassian.env`, and registered `testrail`, `jama`, and `atlassian` in your assistant's own settings. The plugin's connectors carry the same names and take their place, and on their first call they copy each key to the site it was set up for — so everything keeps working before you run `/bc:setup` again. A key whose site can't be told for sure (say, two old settings files name different sites) stays where it is, and `/bc:setup` asks for it.
 
 > **Where Copilot puts the plugin.** A marketplace install lands in `~/.copilot/installed-plugins/<marketplace>/<plugin>/`. Installing straight from the repo URL instead lands in `~/.copilot/installed-plugins/_direct/<owner>--<repo>/` — e.g. `_direct/Omar-Hegazy-Integrant--buddy-council-plugin/`. **The owner segment is expected**: it is the GitHub account the plugin was published from, the same for everyone, not a leftover from another user's machine. `/bc:setup` handles both layouts.
 
 ### Copilot CLI — fewer permission prompts
 
-The plugin's bundled hooks run in Claude Code, which loads `hooks/hooks.json`, and in Copilot CLI and VS Code, which load `com.github.copilot/hooks/hooks.json` — same scripts, same behavior. In each they auto-approve the plugin's curated read-only operations (`jq`, `gh api` reads, the TestRail connection test, read-only MCP fetches, appium-mcp's screen reads, and the automation script's install and checks) and writes to the plugin's own generated files (`.buddy-council/` config and progress log, secrets, the plugin's `.mcp.json`). Write operations like Jira ticket creation always prompt.
+The plugin's bundled hooks run in Claude Code, which loads `hooks/hooks.json`, and in Copilot CLI and VS Code, which load `com.github.copilot/hooks/hooks.json` — same scripts, same behavior. In each they auto-approve the plugin's curated read-only operations (`jq`, `gh api` reads, the connectors' reads under every name an assistant gives them, appium-mcp's screen reads, the key store's checks, and the automation script's install and checks) and writes to the plugin's own generated files (`.buddy-council/` config and progress log). Saving a key and write operations like Jira ticket creation always prompt.
 
-If your Copilot version still prompts for MCP reads (MCP tool naming in hooks varies by version), pre-approve them at launch with `--allow-tool`:
+If your Copilot version still prompts for MCP reads (one without plugin hooks), pre-approve them at launch with `--allow-tool`:
 
 ```bash
 copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suites),testrail(testrail_get_sections),testrail(testrail_get_cases),testrail(testrail_get_cases_by_refs),testrail(testrail_get_case),testrail(testrail_get_case_fields),testrail(testrail_get_case_types),testrail(testrail_get_priorities),testrail(testrail_get_templates),testrail(testrail_get_requirement_ids),testrail(testrail_get_linked_cases),testrail(testrail_get_canonical_cases)'
@@ -95,13 +101,13 @@ copilot --allow-tool='testrail(testrail_get_projects),testrail(testrail_get_suit
 Append the read-only tools for any other sources you configured:
 
 - **Jira** (board reads, ticket validation, V&V sprint prep): `atlassian(jira_get_user_profile),atlassian(jira_get_issue),atlassian(jira_search),atlassian(jira_get_agile_boards),atlassian(jira_get_board_issues),atlassian(jira_get_sprints_from_board),atlassian(jira_get_sprint_issues),atlassian(jira_get_all_projects),atlassian(jira_get_project_issue_types),atlassian(jira_get_project_fields),atlassian(jira_search_fields),atlassian(jira_get_create_fields),atlassian(jira_get_transitions),atlassian(jira_get_link_types),atlassian(jira_search_assignable_users)`
-- **GitHub MCP** (doc enrichment): `github(get_file_contents)`
+- **GitHub MCP** (doc enrichment): `github-mcp-server(get_file_contents)` — Copilot's built-in GitHub server
 - **Jama** (requirements): `jama(jama_get_current_user),jama(jama_get_projects),jama(jama_get_item_types),jama(jama_get_features),jama(jama_get_requirements),jama(jama_get_item),jama(jama_get_items),jama(jama_get_scope_proposal)` — the server's whole tool list, since it has no write tools
 - **appium-mcp** (automation — reading the phone's screen only): `appium(appium_mobile_device_info),appium(appium_find_element),appium(appium_find_elements),appium(appium_get_text),appium(appium_get_element_attribute),appium(appium_get_active_element),appium(appium_get_window_size),appium(generate_locators),appium(appium_get_page_source),appium(appium_screenshot)`
 
 **Never add the Jira write tools** — `jira_create_issue`, `jira_update_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_create_issue_link`, `jira_add_issues_to_sprint`. They are left out on purpose so ticket creation, label changes, links, and comments on the dev team's stories always prompt. The same goes for the TestRail write tools — `testrail_add_case`, `testrail_add_cases`, `testrail_add_section`, `testrail_update_case`, `testrail_update_cases` — which create and change cases in the team's suite, and for every other appium-mcp tool (`appium_session_management`, `appium_gesture`, `appium_set_value`, `appium_app_lifecycle`, …), which taps, types, opens sessions, or launches apps on the phone.
 
-On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/secrets.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when the TestRail connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
+On Copilot versions that predate plugin hooks, also append the shell and file entries the hooks would otherwise cover: `shell(jq:*),shell(gh api:*),write(.buddy-council/sources.json),write(.buddy-council/onboarding-progress.json)` — and choose **"always allow"** when a connection test first prompts. `/bc:setup` prints this recipe tailored to your configuration.
 
 ### Development & release flow (maintainers)
 
@@ -151,18 +157,18 @@ Jama Cloud takes about a second per request, and a 5,000-item project tree about
 - The first whole-project or feature-scoped read in a session may show a progress line such as `Fetch: Jama project 42 — reading, 85 of 99 pages` before the requirements arrive. The server answers early with progress and the agent asks again; that is expected, not a failure.
 - Questions about specific requirement IDs — a bug's or a ticket's — never read the whole project. The IDs are read by key in one batched call: about 45 s for 50 requirements with their traceability when nothing is cached, and instant when repeated within 10 minutes.
 
-#### TestRail, Jama, or Jira tools missing under Copilot CLI
+#### Troubleshooting: the connectors' tools are missing
 
-The two CLIs read **different MCP config files**, and Copilot ignores the project `.mcp.json` completely:
+The connectors start from the plugin's own manifests through `scripts/bc-mcp`, which needs [uv](https://docs.astral.sh/uv/getting-started/installation/). When `/mcp` shows `testrail`, `jama`, `atlassian`, or `appium` as failed, its log has one line from the launcher — almost always that uv isn't installed, or not in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, or `~/.cargo/bin`. Install it, then restart the assistant. To try a connector by hand:
 
-| Runtime | Config file | Notes |
-|---|---|---|
-| Claude Code | `.mcp.json` in the project/plugin root | `mcpServers.<name>.{command,args,env}` |
-| Copilot CLI | `~/.copilot/mcp-config.json` | also needs `type: "local"` and `tools: ["*"]` per server |
+```bash
+sh <plugin>/scripts/bc-mcp jama < /dev/null    # starts, then exits at end of input; anything wrong is one line on stderr
+```
 
-The `atlassian` server follows the same table as the others — `/bc:setup` writes it into both files. No plugin manifest declares it, because a `uvx` server needs absolute paths a committed manifest cannot hold. If Jira tools are missing, restart the runtime; the first launch also downloads `mcp-atlassian` through `uvx`, which takes a few seconds.
-
-`/bc:setup` writes both. If you set up with an older version and Copilot reports the MCP tools as unavailable, re-run `/bc:setup` — its path health check creates the missing Copilot config and repairs stale paths, then fully restart Copilot. Two details that cause silent failures if hand-editing: `command` must be the **absolute** path to `uv` (`command -v uv`) because the spawned server doesn't inherit your shell `PATH`, and `BC_SECRETS_FILE` must be a fully expanded path (`/Users/you/...`, not `~/...`).
+- **"No key is saved for <site>"** — run `/bc:setup` with a link to that site; `python3 <plugin>/scripts/bc_keys.py sites` lists the sites this computer has keys for (never the keys themselves).
+- **"This computer has keys for N sites; pass `site`"** — a call outside the plugin's commands named no site while you have several for that tool. Say which site in your request; commands always pass it.
+- **Jira: "mcp-atlassian is still starting"** — a site's first call downloads it; call again in a moment.
+- **`appium` shows no tools** — expected until `/bc:setup` installs the automation tools in a test project; restart the assistant once after that.
 
 **Release to the team:**
 
@@ -174,7 +180,7 @@ The `atlassian` server follows the same table as the others — `/bc:setup` writ
    - Copilot CLI: `copilot plugin update bc`, or nothing at all with [auto-update](#installation) on
    - Codex: updates its plugins at startup
 
-Claude Code's install path contains the version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so every update moves the plugin. Nobody needs to re-run `/bc:setup` for that: commands find the plugin root from their own skill folder, and `/bc:setup` repairs a drifted `plugin_root` and `.mcp.json` automatically if it is ever run again. Restarting the session (or toggling `/mcp`) is still needed for the MCP servers to reconnect.
+Claude Code's install path contains the version (`~/.claude/plugins/cache/<marketplace>/bc/<version>/`), so every update moves the plugin. Nobody needs to re-run `/bc:setup` for that: commands find the plugin root from their own skill folder, the connectors are started from the plugin's own manifests, and `/bc:setup` repairs a drifted `plugin_root` automatically if it is ever run again. A new session picks up the updated connectors.
 
 ## Setup
 
@@ -186,13 +192,13 @@ After installation, run the setup command to configure your data sources:
 
 The wizard runs in four steps with a single review-and-save confirmation at the end:
 
-1. **Requirements (Jama)** — the base URL and an API client ID/secret. The connection is tested before moving on (by the Jama server's own `--check` mode, since the server isn't registered yet), then you pick the project. Setup reads the project tree once to report its folders — **features are Jama folders** — excludes `Text` and test-case item types automatically, and confirms the Status / Rationale / GitHub-link field mapping in one question. GitHub doc enrichment is auto-configured when a GitHub-link field is mapped (`gh` CLI preferred, MCP fallback).
-2. **Test cases (TestRail)** — base URL, credentials, project; the connection is verified before moving on. Setup then **anchors Jama on your test suite, without asking**: it reads which requirement IDs your cases link to, finds the **document** they live in (a Jama set, such as `Mobile App SRS`), and takes that whole document as the requirements in scope — so a requirement in it with no linked case shows up as untested instead of vanishing. The features stay the folders your linked requirements sit in, however deep the document nests them, and only the item types the tests link to count. The rest of the project — system requirements, risks, labeling, standards, design, archives — is **background**: `/bc:ask` searches it to enrich answers, and no report counts it. The review in step 4 shows this in plain words; say "leave out <folder>", "only <folder>", or "the whole project" to change it, then or on any re-run. The same step picks where generated test cases go **without asking**: **beside the existing cases for the same requirement or feature** when your cases already carry requirement IDs, so no parallel folder tree appears — otherwise in a `V&V` folder, one subfolder per feature. The review in step 4 shows the choice in one line; say where you'd rather have them, then or on any re-run. Whatever the setting, every command that creates cases shows each case's folder before writing anything.
-3. **Jira (required)** — the base URL, a token, and your team's board URL. Cloud vs Server/Data Center is detected from the host, so you're only asked for the credential that deployment actually uses. **The connection is tested before moving on**, exactly like TestRail: by MCP tool if the server is already loaded, otherwise by a direct REST call. The board URL is parsed for the board id and project key — and when a classic RapidBoard URL carries no key, it's derived from the board's own issues rather than asked for. If the test fails (usually a self-hosted Jira needing the VPN), the answers are saved as *pending*, setup finishes, and it re-tests on the next run — `/bc:contradiction` and `/bc:coverage` keep working meanwhile, only `/bc:validate` waits.
+1. **Requirements (Jama)** — the base URL and an API client ID/secret, unless this computer already has a key for that site. The key is saved for that site alone, the connection is tested through the plugin's Jama connector before moving on, then you pick the project. Setup reads the project tree once to report its folders — **features are Jama folders** — excludes `Text` and test-case item types automatically, and confirms the Status / Rationale / GitHub-link field mapping in one question. GitHub doc enrichment is auto-configured when a GitHub-link field is mapped (`gh` CLI preferred, MCP fallback).
+2. **Test cases (TestRail)** — base URL, credentials (unless this computer already has a key for that site), project; the connection is verified before moving on. Setup then **anchors Jama on your test suite, without asking**: it reads which requirement IDs your cases link to, finds the **document** they live in (a Jama set, such as `Mobile App SRS`), and takes that whole document as the requirements in scope — so a requirement in it with no linked case shows up as untested instead of vanishing. The features stay the folders your linked requirements sit in, however deep the document nests them, and only the item types the tests link to count. The rest of the project — system requirements, risks, labeling, standards, design, archives — is **background**: `/bc:ask` searches it to enrich answers, and no report counts it. The review in step 4 shows this in plain words; say "leave out <folder>", "only <folder>", or "the whole project" to change it, then or on any re-run. The same step picks where generated test cases go **without asking**: **beside the existing cases for the same requirement or feature** when your cases already carry requirement IDs, so no parallel folder tree appears — otherwise in a `V&V` folder, one subfolder per feature. The review in step 4 shows the choice in one line; say where you'd rather have them, then or on any re-run. Whatever the setting, every command that creates cases shows each case's folder before writing anything.
+3. **Jira (required)** — the base URL, a token, and your team's board URL. Cloud vs Server/Data Center is detected from the host, so you're only asked for the credential that deployment actually uses. **The connection is tested before moving on**, exactly like TestRail, through the plugin's Jira connector. The board URL is parsed for the board id and project key — and when a classic RapidBoard URL carries no key, it's derived from the board's own issues rather than asked for. If the test fails (usually a self-hosted Jira needing the VPN), the answers are saved as *pending*, setup finishes, and it re-tests on the next run — `/bc:contradiction` and `/bc:coverage` keep working meanwhile, only `/bc:validate` waits.
    The same step then offers the **V&V board** plus its platform field and scenario reviewer, for `/bc:vnv-sprint-prep`. That part *is* skippable — the command can collect it itself on first run. **The V&V board may live in the same project as the dev board**; only a duplicate board *id* is refused. When they share a project, setup samples both boards to work out what the V&V board's filter keys off — a label, component, or issue type — confirms it in one question, and stamps it on every clone.
-4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then all files are written: `.buddy-council/sources.json` (per-project config), `~/.buddy-council/secrets.json` (credentials, `chmod 600`, never committed), and `.mcp.json` (no secrets).
+4. **Review & save** — one recap of everything collected (including the auto-detected code-mapping settings and requirement-ID patterns), one confirmation, then `.buddy-council/sources.json` (per-project config, no secrets) is written. Keys were saved as each step collected them, one file per site in `~/.buddy-council/keys/` (`chmod 600`, never committed) — your assistant asks before saving each one. Setup writes no connector settings for any assistant.
 
-Re-running `/bc:setup` shows the current configuration and changes only what you ask. After setup, restart your CLI tool or toggle the MCP server for it to take effect.
+Re-running `/bc:setup` shows the current configuration and changes only what you ask. Setup finishes in one run: there is nothing to restart.
 
 ### Automation tools (only inside a test project)
 
@@ -201,7 +207,7 @@ When you run `/bc:setup` in an Appium or WebdriverIO test project — such as Ap
 - **Your project's own setup comes first.** Setup runs the project's check-only mode, such as `./setup --check` — the one command it asks permission for, since it runs your project's code — and shows the result. If it finds problems, the project's own fix runs after you save. What still needs you — a password, tapping Trust on the phone, choosing a signing profile — comes back as "run ./setup in a terminal".
 - **bc keeps its own copies, the way `uv` provides Python.** It installs Node 26 LTS and appium-mcp into `~/.buddy-council/tools` (about 620 MB), pinned by version and checksum. They are never on your PATH and never shared, and setup never edits your shell profile, `JAVA_HOME`, or `ANDROID_HOME`. A tool your Mac already has is never replaced; for Android on appium-mcp's built-in drivers, a missing JDK or Android SDK is installed beside yours, only when the recap said so.
 - **The phone is driven through your project's own Appium** when the Mac has it — so screens are read on the same Appium and WebDriverAgent your tests run on — and through appium-mcp's built-in drivers otherwise.
-- **It proves it works.** Setup registers the `appium` MCP server in both CLIs, then checks that it answers and reads one page source from the phone, without launching any app. No phone connected? Automation is saved as *pending* and checked again on the next `/bc:setup`, like a pending Jira board. Once a phone passes, unplugging it later doesn't undo that. The phone is the one your project's setting names (such as `APOLLO_UDID`), else the first one connected over USB.
+- **It proves it works.** Setup checks that appium-mcp answers and reads one page source from the phone, without launching any app, then records it for the plugin's `appium` connector — which serves no tools until then, so restart your assistant once after the first install. No phone connected? Automation is saved as *pending* and checked again on the next `/bc:setup`, like a pending Jira board. Once a phone passes, unplugging it later doesn't undo that. The phone is the one your project's setting names (such as `APOLLO_UDID`), else the first one connected over USB.
 - **It keeps itself current.** When a plugin release changes a pinned version, the next `/bc:setup` installs it by itself, keeps the old one until the new server answers, then removes it. Downloads use your Mac's own proxy, npm registry, and certificates — plus `NODEJS_ORG_MIRROR` for Node — and the checksums keep any mirror safe. A download that still fails is retried on the next run.
 
 ### Manual Configuration
@@ -232,39 +238,22 @@ If you prefer to configure manually instead of using `/bc:setup`:
 
 This is the minimal shape — the full schema (feature inference, enrichment, code-mapping settings) is documented in [AGENTS.md](AGENTS.md) under "Configuration Schema Additions".
 
-**2. Create `~/.buddy-council/secrets.json`**:
-
-```json
-{
-  "testrail": {
-    "username": "user@company.com",
-    "api_key": "your-testrail-api-key"
-  }
-}
-```
+**2. Save a key for each site.** Keys belong to sites, not projects: one file per site in
+`~/.buddy-council/keys/`, mode 600 in a 700 folder. Ask the key store where a site's file goes — it creates the
+folder privately and never prints a key:
 
 ```bash
-chmod 600 ~/.buddy-council/secrets.json
+python3 <plugin>/scripts/bc_keys.py path --url https://your-instance.testrail.io --provider testrail
 ```
 
-**3. Create `.mcp.json`** in the plugin root (copy from `.mcp.example.json`). It holds **no secrets** — only the non-secret base URL and `BC_SECRETS_FILE`, a pointer to the secrets file; the server reads credentials from `~/.buddy-council/secrets.json`:
+Write that file with the provider, the site's base URL, and the credential:
 
 ```json
-{
-  "mcpServers": {
-    "testrail": {
-      "command": "uv",
-      "args": ["run", "--directory", "mcp-servers/testrail-server", "mcp", "run", "server.py"],
-      "env": {
-        "TESTRAIL_BASE_URL": "https://your-instance.testrail.io",
-        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
-      }
-    }
-  }
-}
+{ "provider": "testrail", "url": "https://your-instance.testrail.io", "username": "user@company.com", "api_key": "your-testrail-api-key" }
 ```
 
-The `atlassian` entry belongs here too — see the `mcp-atlassian` block further down; its token stays in `~/.buddy-council/atlassian.env`, never in this file.
+Then `python3 <plugin>/scripts/bc_keys.py check --url https://your-instance.testrail.io --provider testrail` confirms
+it is complete and makes it private. The connectors read it on the next call — nothing to register or restart.
 
 **Scoping Jama.** A large project is usually narrowed to the document your test cases link to:
 
@@ -290,37 +279,14 @@ every folder is a feature, and add `"exclude": [{ "id": …, "path": … }]` to 
 outside the requirements (except excluded types and subtrees) is background that `/bc:ask` lookups search,
 never counted. `field_mapping` values are Jama field **labels**; `folder_item_type` is the item
 type that marks a feature when there are no roots. The
-credential goes in `~/.buddy-council/secrets.json` — `client_id` + `client_secret` from Jama → profile menu →
+credential is the Jama site's key — `client_id` + `client_secret` from Jama → profile menu →
 **Set API Credentials** (`username` + `password` only on instances without API credentials):
 
 ```json
-{
-  "jama": {
-    "client_id": "your-jama-api-client-id",
-    "client_secret": "your-jama-api-client-secret"
-  }
-}
+{ "provider": "jama", "url": "https://company.jamacloud.com", "client_id": "your-jama-api-client-id", "client_secret": "your-jama-api-client-secret" }
 ```
 
-and `.mcp.json` gets a `jama` entry beside `testrail` — base URL and secrets-file pointer only. On Copilot CLI,
-add the same entry to `~/.copilot/mcp-config.json` with `"type": "local"`, `"tools": ["*"]`, and absolute paths:
-
-```json
-{
-  "mcpServers": {
-    "jama": {
-      "command": "uv",
-      "args": ["run", "--directory", "mcp-servers/jama-server", "mcp", "run", "server.py"],
-      "env": {
-        "JAMA_BASE_URL": "https://company.jamacloud.com",
-        "BC_SECRETS_FILE": "~/.buddy-council/secrets.json"
-      }
-    }
-  }
-}
-```
-
-**4. Jira dev board (required).** Add a `jira` block to `.buddy-council/sources.json` — no credentials there either, just which board to read and file into:
+**3. Jira dev board (required).** Add a `jira` block to `.buddy-council/sources.json` — no credentials there either, just which board to read and file into:
 
 ```json
 {
@@ -338,20 +304,20 @@ add the same entry to `~/.copilot/mcp-config.json` with `"type": "local"`, `"too
 }
 ```
 
-`deployment` is `"cloud"` or `"server"`, detected from the host. There is no `cloud_id` — `mcp-atlassian` is bound to one site by `JIRA_URL` in its env file, so no tool takes a site id. `board.id` is the integer from the board URL. Set `pending: true` if the connection hasn't been verified yet; analysis commands will skip the board with a visible line and `/bc:validate` will refuse real ticket creation until `/bc:setup` clears it.
+`deployment` is `"cloud"` or `"server"`, detected from the host. There is no `cloud_id` — every Jira call names its site with `base_url`. `board.id` is the integer from the board URL. Set `pending: true` if the connection hasn't been verified yet; analysis commands will skip the board with a visible line and `/bc:validate` will refuse real ticket creation until `/bc:setup` clears it.
 
-The Jira credential does **not** go here. It lives in `~/.buddy-council/atlassian.env` (`chmod 600`), which `mcp-atlassian` reads directly:
+The Jira credential does **not** go here. It is the Jira site's key — a Personal Access Token on Server/Data
+Center, or your email and an API token on Cloud (add `"ssl_verify": false` only for a self-signed certificate):
 
-```dotenv
-JIRA_URL=https://jira.company.com
-JIRA_PERSONAL_TOKEN=<your Server/Data Center PAT>
-# On Cloud, use these two instead:
-# JIRA_USERNAME=you@company.com
-# JIRA_API_TOKEN=<your Cloud API token>
-TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
+```json
+{ "provider": "jira", "url": "https://jira.company.com", "personal_token": "<your Server/Data Center PAT>" }
 ```
 
-**5. V&V workflow (only for `/bc:vnv-sprint-prep`).** Three more keys inside the same `jira` block:
+```json
+{ "provider": "jira", "url": "https://yourorg.atlassian.net", "username": "you@company.com", "api_token": "<your Cloud API token>" }
+```
+
+**4. V&V workflow (only for `/bc:vnv-sprint-prep`).** Three more keys inside the same `jira` block:
 
 ```json
 {
@@ -384,47 +350,25 @@ TOOLSETS=default,jira_agile,jira_links,jira_projects,jira_users
 
 - **`vnv_board.project_key` must differ from `jira.project_key`** — clones go into this project, so pointing it at the dev project would put them on the dev board.
 - **`platform`** drives the cross-platform parity check. `field_id` is a cache: leave it out and it's discovered from `field_name` on first run. `title_prefix_fallback` is used only when a story's `OS` field is empty, and any result derived from it is reported as lower-confidence.
-- **`vnv_workflow.labels`** are the four pipeline states. Rename them freely — the workflow reads this config, never hardcoded strings. `reviewer.account_id` can be omitted and resolved from `display_name` via `jira_search_assignable_users`. On Copilot CLI, the server entry in `~/.copilot/mcp-config.json` looks like this (`/bc:setup` writes it for you):
+- **`vnv_workflow.labels`** are the four pipeline states. Rename them freely — the workflow reads this config, never hardcoded strings. `reviewer.account_id` can be omitted and resolved from `display_name` via `jira_search_assignable_users`.
+
+**5. Automation tools — not by hand.** Run `/bc:setup` inside the test project, or the script it uses:
+`python3 <plugin>/scripts/bc_tools.py ensure --project '<test project>'`. It installs the pinned Node and
+appium-mcp, proves the server answers, then records how the plugin's `appium` connector starts it — absolute paths,
+so it works whatever your PATH is — and records an `automation` block in that project's
+`.buddy-council/sources.json`. No assistant's settings are written. The record,
+`~/.buddy-council/tools/appium-mcp.json`, looks like this:
 
 ```json
 {
-  "mcpServers": {
-    "atlassian": {
-      "type": "local",
-      "command": "/absolute/path/to/uvx",
-      "args": [
-        "mcp-atlassian@0.23.1",
-        "--env-file", "/Users/<you>/.buddy-council/atlassian.env",
-        "--transport", "stdio"
-      ],
-      "tools": ["*"]
-    }
-  }
-}
-```
-
-**6. Automation tools — not by hand.** Run `/bc:setup` inside the test project, or the script it uses:
-`python3 <plugin>/scripts/bc_tools.py ensure --project '<test project>'`. It installs the pinned
-Node and appium-mcp, then writes the `appium` entry into both MCP configs — absolute paths, so it works whatever
-your PATH is — and records an `automation` block in that project's `.buddy-council/sources.json`. The Copilot
-entry looks like this:
-
-```json
-{
-  "mcpServers": {
-    "appium": {
-      "type": "local",
-      "command": "/Users/<you>/.buddy-council/tools/node/v26.13.0-darwin-arm64/bin/node",
-      "args": ["--use-system-ca", "/Users/<you>/.buddy-council/tools/appium-mcp/1.99.2-<lock>/node_modules/appium-mcp/dist/index.js"],
-      "tools": ["*"],
-      "env": {
-        "NO_UI": "true",
-        "ALLOW_REMOTE_APP_URLS": "false",
-        "REMOTE_SERVER_URL_ALLOW_REGEX": "^https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:[0-9]{1,5})?(/[^?#]*)?$",
-        "PAGE_SOURCES_DIR": "/Users/<you>/.buddy-council/automation/page-sources",
-        "SCREENSHOTS_DIR": "/Users/<you>/.buddy-council/automation/screenshots"
-      }
-    }
+  "command": "/Users/<you>/.buddy-council/tools/node/v26.13.0-darwin-arm64/bin/node",
+  "args": ["--use-system-ca", "/Users/<you>/.buddy-council/tools/appium-mcp/1.99.2-<lock>/node_modules/appium-mcp/dist/index.js"],
+  "env": {
+    "NO_UI": "true",
+    "ALLOW_REMOTE_APP_URLS": "false",
+    "REMOTE_SERVER_URL_ALLOW_REGEX": "^https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:[0-9]{1,5})?(/[^?#]*)?$",
+    "PAGE_SOURCES_DIR": "/Users/<you>/.buddy-council/automation/page-sources",
+    "SCREENSHOTS_DIR": "/Users/<you>/.buddy-council/automation/screenshots"
   }
 }
 ```
@@ -633,9 +577,9 @@ Command → Agent → How-tos (fetch → normalize → analyze) → Report
 - **Agents** — orchestrate the analysis workflow end-to-end, in `com.github.copilot/agents/`
 - **How-tos** — reusable capabilities (fetching, normalization, analysis), plain files in `howtos/` that the commands and agents read by path. They cost nothing until a command needs them
 - **Providers** — platform-specific data fetching (TestRail, Jama, Jira, GitHub)
-- **MCP Servers** — wrap external APIs with structured tool interfaces. The **vendored** ones under `mcp-servers/` (TestRail, Jama) are `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set; after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock. Jira/Confluence and GitHub are **not** vendored — Jira/Confluence run on the community [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) server (launched with `uvx`, serving Cloud and Server/Data Center alike), and GitHub on the official `github-mcp-server` or the `gh` CLI. Neither is appium-mcp, the server `/bc:automate` drives the phone with: `/bc:setup` installs it on each Mac from the lockfile in `scripts/automation/appium-mcp/`, on bc's own pinned Node. To move a pin, change `scripts/automation/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed
+- **Connectors** — the MCP servers the plugin ships, declared in both manifests (`mcp.json`, `.claude-plugin/plugin.json`) and started by `scripts/bc-mcp`, which finds `uv` and runs each one: `testrail` and `jama` (under `mcp-servers/`, `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set — after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock), `atlassian` (`mcp-servers/jira-router/`, which hands each Jira call to a copy of the community [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) for that call's site, serving Cloud and Server/Data Center alike — it never talks to Jira itself), and `appium`. Every tool takes `site`, and each site's key lives in its own file (`scripts/bc_keys.py`, ADR 0008). GitHub is read with the `gh` CLI or the assistant's own GitHub connection. appium-mcp, the server `/bc:automate` drives the phone with, isn't vendored either: `/bc:setup` installs it on each Mac from the lockfile in `scripts/automation/appium-mcp/`, on bc's own pinned Node, and the `appium` connector starts it — or answers with no tools until then. To move a pin, change `scripts/automation/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed. To move mcp-atlassian's pin, change `PACKAGE` in `mcp-servers/jira-router/server.py` and run its `--snapshot`
 - **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and `com.github.copilot/hooks/hooks.json` (Copilot CLI, VS Code) register the same four runtime-agnostic scripts
-- **Scripts** — `scripts/`: the run-folder and automation-tools scripts, `sync_version.py`, and every script, hook, and manifest test (`python3 -m unittest discover -s scripts/tests`)
+- **Scripts** — `scripts/`: the run-folder, key-store, and automation-tools scripts, the connector launcher `bc-mcp`, `sync_version.py`, and every script, hook, and manifest test (`python3 -m unittest discover -s scripts/tests`)
 
 Agents never call providers directly — they go through router how-tos, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
 
@@ -659,22 +603,22 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 
 - Credentials are **never** committed to git
 - `.buddy-council/sources.json` contains only provider names and non-secret settings
-- Secrets live in a single file, `~/.buddy-council/secrets.json` (user home, `chmod 600`) — the MCP servers read it directly
-- `.mcp.json` is gitignored and holds **no secrets** — only non-secret env (base URLs) and `BC_SECRETS_FILE`, the path to the secrets file. (Exception: the external GitHub MCP server requires its token in env.)
+- **Keys belong to sites.** Each lives in its own file, `~/.buddy-council/keys/<site>.json` (user home, `chmod 600` in a `700` folder), and names the address it was saved for. A connector talks only to that address with that key and follows no redirect, so a key never reaches another site — the connectors' tests prove it for two TestRail, two Jama, and two Jira sites side by side. One key per site
+- No assistant's settings hold a key or a connector: the connectors ship in the plugin, and setup writes no `.mcp.json` or `~/.copilot/mcp-config.json`. Saving a key always asks first, and the key store's commands never print one
 - Every write path in the plugin **always prompts** — each is deliberately excluded from the auto-approve hook, from `settings.json`, and from every `--allow-tool` recipe. Do not add them. Jira writes go through `mcp-atlassian`: `jira_create_issue` (from `/bc:validate` and `/bc:vnv-sprint-prep`), plus `jira_add_comment`, `jira_update_issue`, `jira_create_issue_link`, and `jira_add_issues_to_sprint` (from `/bc:vnv-sprint-prep`). TestRail writes go through the vendored server: `testrail_add_case`, `testrail_add_cases`, and `testrail_add_section` — reached only through the one `draft-test-cases` how-to, from `/bc:vnv-sprint-prep` phase 7, the `/bc:coverage` gap-fill offer, and `/bc:ask` scenario mapping — and `testrail_update_case` and `testrail_update_cases`, reached only through the one `update-test-cases` how-to, from `/bc:ask` edits, the `/bc:coverage` orphan repair, the `/bc:contradiction` fix offer, and phase 7's refresh
 - **Jama is read-only by construction.** The vendored Jama server has no write tools at all: every tool is `jama_get_*`, its HTTP client can only issue GET requests, and its test suite fails if that ever changes. That is why the hook can auto-approve the `jama_get_*` glob. Jama's own hosted MCP server is deliberately not used — it exposes create/edit/move tools and has no bulk reads
-- The Jama credential lives in the `jama` section of `~/.buddy-council/secrets.json` and nowhere else — the server reads it only from that file, never from environment variables, so it cannot leak into an MCP config. Prefer an API client ID/secret on a read-only Jama account; it is revocable without touching the account password
+- The Jama credential is the Jama site's key and nowhere else — the server reads it only from the key store, never from environment variables. Prefer an API client ID/secret on a read-only Jama account; it is revocable without touching the account password
 - The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*` or `testrail_update_*`. Never name a write tool `testrail_get_*` — the server's test suite fails if one is
 - **Run folders hold requirement and test case text on disk.** `/bc:coverage`, `/bc:contradiction`, and `/bc:ask` lookups write what they fetch to `.buddy-council/runs/` in your project — inside `.buddy-council/`, which `/bc:setup` keeps out of git — with files readable only by you (`chmod 600`). Only the newest 5 runs are kept, none longer than a week; delete the folder any time. The read tools' `save_to` option is the servers' only local write, and it accepts nothing but a `.json` file directly inside an existing run folder — never a symbolic link, never anywhere else
 - **Updates guard what was there.** The update tools read every case first and send only what differs, refuse to remove a requirement link unless the user asked for that explicitly, refuse to overwrite a case edited since it was read, verify every field against what TestRail stored (it silently discards unknown custom fields), and never move a case or change its template. No path deletes a test case
 - **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes or updates no test cases; `--apply` executes after one batch confirmation per phase
-- The Jira token lives in `~/.buddy-council/atlassian.env` (`chmod 600`) and nowhere else — not in `sources.json`, not in `secrets.json`, not in either MCP config, which reference it only by absolute path. That file is the single place to rotate or revoke it
+- The Jira token is the Jira site's key and nowhere else. The Jira connector gives it to that site's mcp-atlassian copy in an env file that exists only while the copy starts (`chmod 600`, in a private folder), never on a command line or in a process's environment, and strips every other Jira or Confluence setting from the copy's environment. The site's key file is the single place to rotate or revoke it
 - **The automation tools are pinned and kept apart.** Node is checked against its SHA-256 and every npm package against the lockfile's integrity hash, so a mirror or proxy can never change what gets installed; `npm ci --ignore-scripts` runs no package's install scripts. They live in `~/.buddy-council/tools` — never on PATH, never shared — and setup never edits a shell profile, `JAVA_HOME`, or `ANDROID_HOME`. The `appium` server may only talk to Appium servers on this Mac (`REMOTE_SERVER_URL_ALLOW_REGEX`) and never downloads an app from a URL (`ALLOW_REMOTE_APP_URLS=false`)
 - **On the phone, only reading is auto-approved**: appium-mcp's eight read-only tools, plus page sources and screenshots, which it saves in `~/.buddy-council/automation`. Everything that taps, types, opens a session, or launches an app always prompts. Setup's own check of the phone opens one session without launching any app, reads one screen, and closes it
 - Bundled hooks run in Claude Code, Copilot CLI, and VS Code (Claude Code loads `hooks/hooks.json`; Copilot CLI and VS Code load `com.github.copilot/hooks/hooks.json` — same scripts). Codex and Cursor don't run them yet, so there every one of these operations prompts. If a Copilot version still prompts for MCP reads, the `--allow-tool` recipe under [Installation](#copilot-cli--fewer-permission-prompts) covers the gap:
   - a PreToolUse hook hard-blocks destructive Bash commands (`rm -rf`, `kill`, `git push --force`, etc.)
-  - the same hook **auto-approves** the plugin's curated read-only operations (`gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches), the run-folder script `bc_run.py`, and the automation script `bc_tools.py` — but only as one plain command: `python3`, the plugin's own copy by absolute path, a known subcommand, and arguments that are bare or single-quoted, so nothing can be chained onto it. `bc_tools.py project` (which runs your project's own setup script) and `bc_tools.py remove` always prompt
-  - a second PreToolUse hook auto-approves writes **only** to the plugin's own generated files (`.buddy-council/` config and progress log, `~/.buddy-council/secrets.json`, the plugin's own `.mcp.json`) — all other writes still prompt
+  - the same hook **auto-approves** the plugin's curated read-only operations (`gh api` reads, `jq`, the TestRail connection test, and read-only MCP fetches), the run-folder script `bc_run.py`, the key store `bc_keys.py` (`path`, `sites`, `check`, `migrate` — never `forget`), and the automation script `bc_tools.py` — but only as one plain command: `python3`, the plugin's own copy by absolute path, a known subcommand, and arguments that are bare or single-quoted, so nothing can be chained onto it. `bc_tools.py project` (which runs your project's own setup script) and `bc_tools.py remove` always prompt
+  - a second PreToolUse hook auto-approves writes **only** to the plugin's own generated files (`.buddy-council/` config and progress log) — never a key in `~/.buddy-council/keys/`, and never an assistant's MCP settings; all other writes still prompt
   - a PostToolUse hook writes the redacted tool log described under [Debugging a bc run](#debugging-a-bc-run) — metadata only, credentials masked, never file contents or responses
 
 ## Adding a New Provider
@@ -682,7 +626,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 1. Create `providers/<name>/fetch.md` with fetch instructions
 2. Update the router how-to (`howtos/fetch-requirements.md`, `howtos/fetch-test-cases.md`, or `howtos/fetch-board-issues.md`)
 3. Update `/bc:setup` to offer the new provider as an option
-4. Optionally add an MCP server in `mcp-servers/<name>/`
+4. Optionally add a connector in `mcp-servers/<name>/` whose every tool takes `site`: declare it in `mcp.json` and `.claude-plugin/plugin.json`, add it to `scripts/bc-mcp`, and its sign-in fields to `scripts/bc_keys.py`
 
 No changes to agents or analysis how-tos required.
 

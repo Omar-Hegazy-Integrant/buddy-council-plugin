@@ -398,6 +398,20 @@ class Checks(RunFolderTest):
                          "suite 10", "linked through custom_refs", "were filtered"):
             self.assertIn(expected, text)
 
+    def test_files_read_from_another_site_are_named(self):
+        config = {**JAMA_CONFIG, "requirements": {**JAMA_CONFIG["requirements"], "base_url": "https://acme.jamacloud.com/"},
+                  "test_cases": {**JAMA_CONFIG["test_cases"], "base_url": "https://acme.testrail.io/index.php?/dashboard"}}
+        (self.project / ".buddy-council" / "sources.json").write_text(json.dumps(config))
+        same = self.link({**jama_file(REQUIREMENTS), "site": "acme.jamacloud.com"}, testrail_file(CASES, site="acme.testrail.io"))
+        self.assertEqual(same["mismatches"], [])
+        other = self.link({**jama_file(REQUIREMENTS), "site": "other.jamacloud.com"}, testrail_file(CASES, site="other.testrail.io"),
+                          command="lookup", background={**background_file(BACKGROUND), "site": "other.jamacloud.com"})
+        self.assertEqual(other["mismatches"], [
+            "requirements were read from other.jamacloud.com, but the config names acme.jamacloud.com.",
+            "background items were read from other.jamacloud.com, but the config names acme.jamacloud.com.",
+            "test cases were read from other.testrail.io, but the config names acme.testrail.io.",
+        ])
+
     def test_a_requirements_file_the_server_did_not_write_is_refused(self):
         result = self.link({"requirements": REQUIREMENTS}, [c for c in CASES])
         self.assertIn("requirements.json was not written by the Jama server.", result["mismatches"])

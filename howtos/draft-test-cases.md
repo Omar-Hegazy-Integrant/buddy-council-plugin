@@ -9,6 +9,8 @@ drafted in phase 5 and approved by the configured reviewer in phase 1a — this 
 should be tested, it writes down what was already agreed. The other callers hand it scenarios they have
 already traced to requirements and checked against existing cases; it does not redo that work either.
 
+Every TestRail call below passes `site`: `test_cases.base_url` from `.buddy-council/sources.json` (ADR 0008).
+
 ## These are skeletons, not finished cases
 
 Every path produces **high-level scenarios**, so this produces **skeleton cases**: a title, preconditions, and

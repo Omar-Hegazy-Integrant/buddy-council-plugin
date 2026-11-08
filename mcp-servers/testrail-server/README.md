@@ -5,36 +5,25 @@ guarded creation and updating of test cases and the folders they live in.
 
 ## Configuration
 
-The server resolves each value with this precedence: **environment variable → secrets file → empty**.
+The plugin starts this server itself: every assistant runs `scripts/bc-mcp testrail` from the plugin's manifests
+(`mcp.json`, `.claude-plugin/plugin.json`), which finds `uv` and runs `uv run --frozen python server.py` here. It
+takes no configuration of its own — no environment variable, no assistant setting.
 
-| Setting | Source | Description |
-|---------|--------|-------------|
-| `TESTRAIL_BASE_URL` | `.mcp.json` env (non-secret) | TestRail instance URL (e.g., `https://company.testrail.io`) |
-| `username` | `~/.buddy-council/secrets.json` → `testrail.username` | TestRail username (email) |
-| `api_key` | `~/.buddy-council/secrets.json` → `testrail.api_key` | TestRail API key (from My Settings > API Keys) |
-
-Credentials are read from the secrets file at `BC_SECRETS_FILE` (default `~/.buddy-council/secrets.json`), so no secret needs to live in `.mcp.json`. The equivalent env vars (`TESTRAIL_USERNAME`, `TESTRAIL_API_KEY`) still take precedence if set, for the legacy inline style.
-
-## Setup
-
-```bash
-cd mcp-servers/testrail-server
-uv pip install -e .
-```
-
-Or with pip:
-```bash
-pip install -e .
-```
+**Every tool takes `site`**: the TestRail site to use, as its base URL or host — commands pass the project's
+`test_cases.base_url`. The key comes from the plugin's key store (`scripts/bc_keys.py`, ADR 0008): one file per
+site in `~/.buddy-council/keys/`, holding `{"provider": "testrail", "url", "username", "api_key"}` (API key from My
+Settings > API Keys). The key is looked up on every call, so a key saved while the assistant runs works on the
+next call, and is read again after a 401 so a replaced one takes over at once. Each site gets its own HTTP client,
+built from its key and pointed at the address saved with it — redirects are not followed — so a key only ever
+reaches the site it was saved for, and its own link index and metadata cache. A call without `site` uses this
+computer's only TestRail key, and fails, naming them, when there are several. The first call on a computer whose
+older setup kept the key in `~/.buddy-council/secrets.json` copies it to its site (`bc_keys.migrate_legacy`).
 
 ## Running Standalone
 
 ```bash
-# With uv
-uv run mcp run server.py
-
-# With python directly
-python server.py
+cd mcp-servers/testrail-server
+uv run python server.py
 ```
 
 ## Testing with MCP Inspector

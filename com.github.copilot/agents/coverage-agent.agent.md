@@ -170,7 +170,7 @@ After delivering the report, if the user asks a follow-up question:
 ## Error Handling
 
 - If config is missing → direct user to `/bc:setup`
-- If MCP tools are not available → tell the user to check `.mcp.json` configuration and restart Claude Code
+- If MCP tools are not available → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it
 - If provider fetch fails (network, auth) → report the error clearly with the API response
 - If no artifacts are found for the given scope → report "no matching requirements/test cases found"
 - If coverage is 100% with no orphans → report a clean bill of health with metrics

@@ -17,21 +17,27 @@ nearest Folder ancestor in the project tree (``feature_item_type`` changes which
 item type counts as a feature), falling back to the nearest Set or Component.
 ``jama_get_requirements`` scopes to a whole feature subtree by name or path.
 
-Credentials come from ``~/.buddy-council/secrets.json`` (or ``BC_SECRETS_FILE``),
-section ``jama``: ``client_id`` + ``client_secret`` for OAuth client credentials
-(preferred — Jama → your profile → Set API Credentials), or ``username`` +
-``password`` for instances that offer no API credentials. The non-secret base
-URL comes from ``JAMA_BASE_URL``.
+Every tool takes ``site``: the Jama site to use, as its address or host. Keys come
+from the plugin's key store, one file per site in ``~/.buddy-council/keys/``
+(ADR 0008, ``scripts/bc_keys.py``) — ``client_id`` + ``client_secret`` for OAuth
+client credentials (preferred — Jama → your profile → Set API Credentials), or
+``username`` + ``password`` for instances that offer no API credentials. The key is
+looked up on every call, so a key works the moment it is saved, and each site gets
+its own client and caches, talking only to the address saved with its key. A call
+without ``site`` uses this computer's only Jama key. Credentials never come from
+environment variables, so they cannot leak into an assistant's MCP settings.
 
 Run as an MCP server with ``uv run mcp run server.py``.
-``uv run python server.py --check [--project ID]`` is a one-shot connection
-test that /bc:setup runs before the server is registered.
+``uv run python server.py --check --site URL [--project ID]`` is a one-shot
+connection test, run outside any assistant.
 """
 
 import argparse
 import asyncio
 import contextlib
+import contextvars
 import datetime
+import importlib.util
 import json
 import logging
 import math
@@ -46,11 +52,12 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 # Every tool returns one JSON string, sent once as text. structured_output=False stops FastMCP from adding a
 # structured copy of it ({"result": "<the same JSON, escaped>"}): Copilot CLI hands the model both, which
@@ -141,38 +148,28 @@ class JamaError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Configuration — base URL from env, credentials from the buddy-council secrets file
+# Configuration — each call names a site; its key comes from the plugin's key store
 # ---------------------------------------------------------------------------
 
 
-def _secrets_candidates() -> list[str]:
-    """Secrets-file paths to try, in priority order."""
-    candidates = []
-    env_path = os.environ.get("BC_SECRETS_FILE")
-    if env_path:
-        candidates.append(os.path.expanduser(env_path))
-    candidates.append(os.path.expanduser("~/.buddy-council/secrets.json"))
-    return candidates
+def _key_store():
+    """scripts/bc_keys.py, imported by path from the plugin root this server ships in."""
+    path = Path(__file__).resolve().parents[2] / "scripts" / "bc_keys.py"
+    spec = importlib.util.spec_from_file_location("bc_keys", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def _load_secrets(section: str) -> tuple[dict[str, Any], str | None]:
-    """Return one section of the first readable secrets file, plus that file's path."""
-    for path in _secrets_candidates():
-        if not os.path.exists(path):
-            continue
-        try:
-            if (os.stat(path).st_mode & 0o077) != 0:
-                print(
-                    f"WARNING: {path} is group/world-accessible; run `chmod 600` on it.",
-                    file=sys.stderr,
-                )
-            with open(path) as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            continue
-        section_data = data.get(section) if isinstance(data, dict) else None
-        return (section_data if isinstance(section_data, dict) else {}), path
-    return {}, None
+bc_keys = _key_store()
+
+Site = Annotated[
+    str | None,
+    Field(
+        description="The Jama site to use: its address or host, e.g. https://acme.jamacloud.com — the project's "
+        "requirements.base_url. Leave it out only when this computer has one Jama site."
+    ),
+]
 
 
 @dataclass(frozen=True, repr=False)
@@ -200,13 +197,13 @@ def normalize_base_url(raw: str) -> str:
     """
     text = (raw or "").strip()
     if not text:
-        raise JamaError("JAMA_BASE_URL is empty. Run /bc:setup and choose Jama as the requirements source.")
+        raise JamaError("No Jama address was given. Run /bc:setup with a link to the Jama project.")
     parts = urllib.parse.urlsplit(text)
     scheme = parts.scheme.lower()
     if scheme not in ("https", "http") or not parts.hostname:
         raise JamaError(f"'{text}' is not a Jama URL — expected something like https://yourcompany.jamacloud.com.")
     if parts.username or parts.password:
-        raise JamaError("Put Jama credentials in ~/.buddy-council/secrets.json, never in the URL.")
+        raise JamaError("Jama credentials belong in the key /bc:setup saves, never in the URL.")
     if scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1", "::1"):
         raise JamaError(f"Refusing to send Jama credentials over plain HTTP ({text}). Use the https:// address.")
     path = parts.path.rstrip("/")
@@ -220,29 +217,23 @@ def normalize_base_url(raw: str) -> str:
     return f"{scheme}://{parts.netloc}{path}"
 
 
-def load_config() -> JamaConfig:
-    """Build the config, or explain exactly what is missing."""
-    secrets, secrets_path = _load_secrets("jama")
-    raw_url = os.environ.get("JAMA_BASE_URL") or str(secrets.get("base_url") or "")
-    if not raw_url.strip():
-        raise JamaError(
-            "Jama is not configured: JAMA_BASE_URL is not set. "
-            "Run /bc:setup and choose Jama as the requirements source."
-        )
-    config = JamaConfig(
-        base_url=normalize_base_url(raw_url),
-        client_id=str(secrets.get("client_id") or "").strip(),
-        client_secret=str(secrets.get("client_secret") or ""),
-        username=str(secrets.get("username") or "").strip(),
-        password=str(secrets.get("password") or ""),
+def config_for(key: dict[str, Any]) -> JamaConfig:
+    return JamaConfig(
+        base_url=normalize_base_url(key["url"]),
+        client_id=str(key.get("client_id") or ""),
+        client_secret=str(key.get("client_secret") or ""),
+        username=str(key.get("username") or ""),
+        password=str(key.get("password") or ""),
     )
-    if not (config.client_id and config.client_secret) and not (config.username and config.password):
-        where = secrets_path or " or ".join(_secrets_candidates())
-        raise JamaError(
-            f'No Jama credentials in {where} (section "jama"). Expected client_id + client_secret '
-            "(Jama → your profile → Set API Credentials), or username + password. Run /bc:setup."
-        )
-    return config
+
+
+def load_config(site: str | None = None) -> JamaConfig:
+    """The config for the key saved for a site — or this computer's only Jama key — or what is missing."""
+    try:
+        key = bc_keys.read_key(site, "jama")
+    except bc_keys.KeyStoreError as exc:
+        raise JamaError(f"{exc} (Jama API credentials: your profile → Set API Credentials.)") from None
+    return config_for(key)
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +290,7 @@ def _describe_failure(path: str, response: httpx.Response) -> str:
     prefix = f"GET {path} → HTTP {status}"
     if 300 <= status < 400:
         return (
-            f"{prefix}: Jama redirected to {response.headers.get('location', '?')}. JAMA_BASE_URL may be wrong, "
+            f"{prefix}: Jama redirected to {response.headers.get('location', '?')}. the Jama address saved with the key may be wrong, "
             "or the REST API sits behind single sign-on."
         )
     if status == 401:
@@ -373,13 +364,13 @@ class JamaClient:
         if response.status_code >= 300:
             raise JamaError(
                 f"OAuth token request failed with HTTP {response.status_code}: {_error_message(response)}. "
-                "Check that JAMA_BASE_URL is the root of your Jama instance.",
+                "Check that the Jama address saved with the key is the root of your Jama instance.",
                 status=response.status_code,
             )
         try:
             body = response.json()
         except ValueError:
-            raise JamaError("Jama's OAuth endpoint returned non-JSON — check JAMA_BASE_URL.") from None
+            raise JamaError("Jama's OAuth endpoint returned non-JSON — check the Jama address saved with the key.") from None
         token = body.get("access_token") if isinstance(body, dict) else None
         if not token:
             raise JamaError("Jama's OAuth response carried no access_token.")
@@ -430,7 +421,7 @@ class JamaClient:
                 body = response.json()
             except ValueError:
                 raise JamaError(
-                    f"GET {path} returned non-JSON — check that JAMA_BASE_URL ({self.config.base_url}) "
+                    f"GET {path} returned non-JSON — check that the Jama address saved with the key ({self.config.base_url}) "
                     "is the root of your Jama instance."
                 ) from None
             if not isinstance(body, dict):
@@ -769,6 +760,7 @@ _NOT_FOUND = -1  # cached for a document key that matched no item
 class _State:
     def __init__(self, client: JamaClient | None = None):
         self.client = client
+        self.site = bc_keys.site_id(client.config.base_url) if client is not None else None
         self.item_types: dict[int, dict[str, Any]] | None = None
         self.item_types_loaded_at = 0.0
         self.item_types_lock = asyncio.Lock()
@@ -788,23 +780,49 @@ class _State:
         self.search_has_location: bool | None = None  # whether /abstractitems results say where an item sits
 
 
-_STATE = _State()
+# One state per site: its client, built from the site's key, and everything read there. A tool call selects its
+# site's state in a context variable, which the background project reads it starts inherit.
+_STATES: dict[str, _State] = {}
+_CURRENT: contextvars.ContextVar[_State] = contextvars.ContextVar("jama_site")
+_CLIENT_OPTIONS: dict[str, Any] = {}  # tests put a fake transport and clock here
+
+
+def _use(site: str | None) -> _State:
+    """Select the call's site. The key is looked up on every call, so a key saved or replaced a moment ago is
+    used; a changed key starts the site afresh."""
+    config = load_config(site)
+    site_id = bc_keys.site_id(config.base_url)
+    state = _STATES.get(site_id)
+    if state is None or state.client is None or state.client.config != config:
+        state = _STATES[site_id] = _State(JamaClient(config, **_CLIENT_OPTIONS))
+    _CURRENT.set(state)
+    return state
+
+
+def _state() -> _State:
+    try:
+        return _CURRENT.get()
+    except LookupError:
+        raise JamaError("No Jama site was selected for this call.") from None
 
 
 def reset_state(client: JamaClient | None = None) -> None:
-    """Drop every cache (and optionally install a client). Used by the CLI check and tests."""
-    global _STATE
-    _STATE = _State(client)
+    """Drop every site's caches, and optionally install a client for its site. Used by the CLI check and tests."""
+    _STATES.clear()
+    if client is not None:
+        state = _STATES[bc_keys.site_id(client.config.base_url)] = _State(client)
+        _CURRENT.set(state)
 
 
 def _client() -> JamaClient:
-    if _STATE.client is None:
-        _STATE.client = JamaClient(load_config())
-    return _STATE.client
+    client = _state().client
+    if client is None:
+        raise JamaError("No Jama site was selected for this call.")
+    return client
 
 
 async def _item_types(refresh: bool = False) -> dict[int, dict[str, Any]]:
-    state = _STATE
+    state = _state()
     requested_at = time.monotonic()
     async with state.item_types_lock:  # concurrent first calls share one read
         stale = time.monotonic() - state.item_types_loaded_at > _SCHEMA_TTL_SECONDS
@@ -826,7 +844,7 @@ async def _project_snapshot(
     answer in time, and a later call joins the same read. With background=False (the CLI check) it waits for
     as long as the read takes.
     """
-    state = _STATE
+    state = _state()
     load = state.loads.get(project_id)
     if load is not None and load.task is not None and load.task.done():
         del state.loads[project_id]
@@ -900,14 +918,14 @@ async def _read_project(state: _State, load: _ProjectLoad) -> ProjectSnapshot:
 
 def _fresh_snapshot(project_id: Any) -> ProjectSnapshot | None:
     """The cached tree of a project if one is still fresh — never starts a read."""
-    snapshot = _STATE.projects.get(project_id) if isinstance(project_id, int) else None
+    snapshot = _state().projects.get(project_id) if isinstance(project_id, int) else None
     if snapshot is not None and time.monotonic() - snapshot.loaded_at < _CACHE_TTL_SECONDS:
         return snapshot
     return None
 
 
 async def _relationship_types() -> dict[int, str]:
-    state = _STATE
+    state = _state()
     if state.relationship_types is None:
         listing = await _client().get_all("relationshiptypes")
         state.relationship_types = {int(t["id"]): str(t.get("name") or t["id"]) for t in listing.data if t.get("id") is not None}
@@ -1302,7 +1320,7 @@ def _lookup_ids(items: list[dict[str, Any]], types: dict[int, dict[str, Any]]) -
 
 async def _load_options(wanted: dict[int | None, set[int]]) -> None:
     """Resolve pick-list option ids to names: one call per pick list, all lists at once; per-option only as a fallback."""
-    state = _STATE
+    state = _state()
     client = _client()
 
     async def load_list(pick_list: int) -> None:
@@ -1343,9 +1361,9 @@ def _render_value(value: Any, field_def: dict[str, Any] | None) -> Any:
         return None
     field_type = str((field_def or {}).get("fieldType") or "").upper()
     if field_type == "LOOKUP" and isinstance(value, int) and not isinstance(value, bool):
-        return _STATE.options.get(value, str(value))
+        return _state().options.get(value, str(value))
     if field_type == "MULTI_LOOKUP" and isinstance(value, list):
-        return [_STATE.options.get(v, str(v)) for v in value if isinstance(v, int)] or None
+        return [_state().options.get(v, str(v)) for v in value if isinstance(v, int)] or None
     if isinstance(value, str):
         return html_to_text(value) or None
     if isinstance(value, (bool, int, float)):
@@ -1558,7 +1576,7 @@ async def _resolve_keys(
     retried upper-cased. Returns (ids by key, errors by key, full items the searches already returned). A key
     in neither dict was not found.
     """
-    state = _STATE
+    state = _state()
     client = _client()
     resolved: dict[str, int] = {}
     errors: dict[str, JamaError] = {}
@@ -1619,7 +1637,7 @@ async def _resolve_keys(
 
 async def _fetch_items(ids: Iterable[int], refresh: bool) -> tuple[dict[int, dict[str, Any]], dict[int, JamaError]]:
     """Full items by id: from the cache, else one GET each, all at once."""
-    state = _STATE
+    state = _state()
     client = _client()
     found: dict[int, dict[str, Any]] = {}
     errors: dict[int, JamaError] = {}
@@ -1654,7 +1672,7 @@ async def _containers(project_id: int) -> dict[int, dict[str, Any]]:
     each item a parent at a time (a request per tree level). Empty when it cannot help: on an instance whose
     search results don't say where an item sits, or when the search fails — the walk then does the work.
     """
-    state = _STATE
+    state = _state()
     async with state.container_locks.setdefault(project_id, asyncio.Lock()):
         cached = state.containers.get(project_id)
         if cached is not None:
@@ -1695,7 +1713,7 @@ async def _add_ancestors(items: dict[int, dict[str, Any]], start: Iterable[int])
 
 async def _relationship_listing(item_id: int, direction: str, refresh: bool) -> Collection:
     """One item's upstream or downstream relationships, cached."""
-    state = _STATE
+    state = _state()
     cached = None if refresh else state.relationships.get((item_id, direction))
     if cached is not None:
         return cached
@@ -1720,7 +1738,7 @@ async def _traceability(
     ids: list[int], known: dict[int, dict[str, Any]], refresh: bool
 ) -> tuple[dict[int, dict[str, list[dict[str, Any]]]], dict[int, list[str]]]:
     """Upstream and downstream relationships of many items at once, each unnamed related item looked up once."""
-    state = _STATE
+    state = _state()
     client = _client()
     sides = {"upstream": "fromItem", "downstream": "toItem"}
     listings: dict[tuple[int, str], Collection] = {}
@@ -1916,21 +1934,23 @@ def _render_batch(
 
 
 @mcp.tool(annotations=_READ_ONLY, structured_output=False)
-async def jama_get_current_user() -> str:
+async def jama_get_current_user(site: Site = None) -> str:
     """Check the Jama connection: the account this server authenticates as, and the auth method in use."""
+    _use(site)
     client = _client()
     user = (await client.get("users/current")).get("data") or {}
     return _dump({"base_url": client.config.base_url, "auth": client.config.auth_mode, "user": _user_summary(user)})
 
 
 @mcp.tool(annotations=_READ_ONLY, structured_output=False)
-async def jama_get_projects() -> str:
+async def jama_get_projects(site: Site = None) -> str:
     """List the Jama projects this account can read: id, key, and name (project folders omitted)."""
+    _use(site)
     return _dump({"projects": await _list_projects()})
 
 
 @mcp.tool(annotations=_READ_ONLY, structured_output=False)
-async def jama_get_item_types(project_id: int | None = None, refresh: bool = False) -> str:
+async def jama_get_item_types(project_id: int | None = None, refresh: bool = False, site: Site = None) -> str:
     """List Jama item types with their fields.
 
     With project_id, only the types present in that project, each with an item
@@ -1941,6 +1961,7 @@ async def jama_get_item_types(project_id: int | None = None, refresh: bool = Fal
         project_id: Optional Jama project id to count items in.
         refresh: Ignore the 10-minute cache and re-read Jama.
     """
+    _use(site)
     types = await _item_types(refresh)
     counts: Counter | None = None
     if project_id is not None:
@@ -1981,6 +2002,7 @@ async def jama_get_features(
     feature_depth: int = 1,
     exclude_ids: list[int] | None = None,
     refresh: bool = False,
+    site: Site = None,
 ) -> str:
     """List a Jama project's features with their paths and requirement counts.
 
@@ -2004,6 +2026,7 @@ async def jama_get_features(
         exclude_ids: Containers inside a root to leave out entirely (an archive folder, say).
         refresh: Ignore the 10-minute project cache and re-read Jama.
     """
+    _use(site)
     try:
         snapshot, cache_hit = await _project_snapshot(project_id, refresh)
     except SnapshotLoading as loading:
@@ -2118,6 +2141,7 @@ async def jama_get_requirements(
     offset: int = 0,
     save_to: str = "",
     background: bool = False,
+    site: Site = None,
 ) -> str:
     """Fetch a Jama project's requirements in the plugin's canonical schema, optionally scoped to one feature.
 
@@ -2174,6 +2198,7 @@ async def jama_get_requirements(
     next_offset, requirements, summary, warnings, fetched_at, truncated} — with
     save_to, `saved_to` and `bytes` in place of the requirements and paging.
     """
+    _use(site)
     if save_to:
         _run_file_path(save_to)  # a bad path fails before Jama is read
         offset = 0
@@ -2254,6 +2279,7 @@ async def jama_get_requirements(
             {
                 "kind": "background" if background else "requirements",
                 "source": "jama",
+                "site": _state().site,
                 "written_at": _utc_now(),
                 "fetched_at": snapshot.fetched_at,
                 "project_id": project_id,
@@ -2313,6 +2339,7 @@ async def jama_get_item(
     field_mapping: dict[str, str] | None = None,
     root_ids: list[int] | None = None,
     feature_depth: int = 1,
+    site: Site = None,
 ) -> str:
     """Fetch one Jama item by document key (e.g. "CWA-REQ-85") or numeric id, with its traceability.
 
@@ -2331,6 +2358,7 @@ async def jama_get_item(
         field_mapping: Same as jama_get_requirements.
         root_ids, feature_depth: Same as jama_get_requirements, so the item's `feature` matches.
     """
+    _use(site)
     text = str(item or "").strip()
     if not text:
         raise JamaError("Pass a document key such as CWA-REQ-85, or a numeric Jama item id.")
@@ -2364,6 +2392,7 @@ async def jama_get_items(
     feature_depth: int = 1,
     refresh: bool = False,
     offset: int = 0,
+    site: Site = None,
 ) -> str:
     """Fetch many Jama items in one call by document key (e.g. "CWA-REQ-85") or numeric id, with their traceability.
 
@@ -2396,6 +2425,7 @@ async def jama_get_items(
     Returns JSON {requested, offset, next_offset, items: [{requirement,
     relationships, warnings?}], not_found, failed: [{item, error}], summary, warnings}.
     """
+    _use(site)
     keys = _unique_keys(items)
     if not keys:
         raise JamaError("Pass at least one document key such as CWA-REQ-85, or a numeric Jama item id.")
@@ -2758,6 +2788,7 @@ async def jama_get_scope_proposal(
     root_ids: list[int] | None = None,
     exclude_ids: list[int] | None = None,
     refresh: bool = False,
+    site: Site = None,
 ) -> str:
     """Propose the requirements root for a project from the requirement IDs its test cases link to.
 
@@ -2783,6 +2814,7 @@ async def jama_get_scope_proposal(
         exclude_ids: Containers inside the root to leave out.
         refresh: Ignore the 10-minute project cache and re-read Jama.
     """
+    _use(site)
     try:
         snapshot, _ = await _project_snapshot(project_id, refresh)
     except SnapshotLoading as loading:
@@ -2851,8 +2883,9 @@ async def _check(
     root_ids: list[int] | None = None,
     exclude_ids: list[int] | None = None,
     item_type_exclude: list[str] | None = None,
+    site: str | None = None,
 ) -> dict[str, Any]:
-    config = load_config()
+    config = load_config(site)
     reset_state(JamaClient(config, transport=transport))
     client = _client()
     try:
@@ -2924,6 +2957,9 @@ async def _check(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only Jama MCP server. Without --check it serves MCP over stdio.")
     parser.add_argument("--check", action="store_true", help="test the connection, print a JSON report, and exit")
+    parser.add_argument(
+        "--site", help="with --check: the Jama site (its address or host); defaults to this computer's only Jama key"
+    )
     parser.add_argument("--project", type=int, help="with --check: also inspect this project's item types and folders")
     parser.add_argument(
         "--anchors-file",
@@ -2938,8 +2974,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--item-type-exclude", action="append", help="item type never counted as a requirement")
     args = parser.parse_args(argv)
     if not args.check:
-        if args.project is not None or args.anchors_file:
-            parser.error("--project and --anchors-file only apply together with --check")
+        if args.project is not None or args.anchors_file or args.site:
+            parser.error("--site, --project, and --anchors-file only apply together with --check")
         mcp.run()
         return 0
     if args.anchors_file and args.project is None:
@@ -2960,6 +2996,7 @@ def main(argv: list[str] | None = None) -> int:
                 root_ids=args.root,
                 exclude_ids=args.exclude,
                 item_type_exclude=args.item_type_exclude,
+                site=args.site or os.environ.get("JAMA_BASE_URL"),
             )
         )
     except JamaError as exc:

@@ -6,11 +6,10 @@
 # Scope is deliberately narrow — only these exact files are approved:
 #   */.buddy-council/sources.json              (per-project source config)
 #   */.buddy-council/onboarding-progress.json  (onboarding progress log)
-#   $HOME/.buddy-council/secrets.json          (credentials; chmod 600 follows)
-#   <this plugin's install dir>/.mcp.json      (MCP server config, Claude Code)
-#   $HOME/.copilot/mcp-config.json             (MCP server config, Copilot CLI)
-# Any other path — including .mcp.json files of OTHER projects — falls through
-# to the normal permission prompt.
+# Any other path falls through to the normal permission prompt — every key in
+# ~/.buddy-council/keys/ above all, so saving a key always asks first, and every
+# assistant's MCP settings: the connectors ship inside the plugin, so nothing of
+# the plugin's ever writes one, and a silent write there could add a server.
 #
 # Runs under BOTH runtimes: Claude Code (Write/Edit tools, tool_input.file_path)
 # and Copilot CLI (create/edit tools, toolArgs JSON string with a `path` field).
@@ -45,19 +44,6 @@ case "$FILE" in
     allow "bc: plugin source config" ;;
   */.buddy-council/onboarding-progress.json)
     allow "bc: onboarding progress log" ;;
-  "$HOME/.buddy-council/secrets.json")
-    allow "bc: plugin secrets file" ;;
 esac
-
-# MCP config is security-relevant (it defines which servers run), so only the
-# two exact files the plugin owns are approved: the .mcp.json inside THIS
-# plugin's install directory (Claude Code) and the user-level Copilot config.
-PLUGIN_ROOT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
-if [ -n "$PLUGIN_ROOT" ] && [ "$FILE" = "$PLUGIN_ROOT/.mcp.json" ]; then
-  allow "bc: plugin MCP config"
-fi
-if [ "$FILE" = "$HOME/.copilot/mcp-config.json" ]; then
-  allow "bc: Copilot MCP config"
-fi
 
 exit 0

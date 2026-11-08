@@ -15,10 +15,11 @@ Verification pipeline and keep their state visible in Jira labels.
 **CRITICAL**:
 
 - Always use MCP tools for Jira. Never use curl, wget, or Bash to call the Jira API.
-- Jira reads/writes go through `mcp-atlassian`: `mcp__atlassian__jira_*` under Claude Code, bare `jira_*`
-  names under Copilot CLI.
-- TestRail reads/writes go through the bundled server: `mcp__testrail__testrail_*` under Claude Code, bare
-  `testrail_*` under Copilot CLI. Phase 7 is the only phase that writes there.
+- Jira reads/writes go through the plugin's `atlassian` connector, which hands them to `mcp-atlassian`:
+  `mcp__plugin_bc_atlassian__jira_*` under Claude Code, `atlassian-jira_*` under Copilot CLI.
+- TestRail reads/writes go through the plugin's `testrail` connector: `mcp__plugin_bc_testrail__testrail_*`
+  under Claude Code, `testrail-testrail_*` under Copilot CLI. Phase 7 is the only phase that writes there.
+- Every connector call passes `site` — `requirements.base_url` for Jama, `test_cases.base_url` for TestRail, `jira.base_url` for Jira, from `.buddy-council/sources.json` — so each reaches this project's site with that site's key (ADR 0008). Both boards live on the `jira.base_url` site.
 - When asking the user questions, use `vscode_askQuestions`. Never ask in plain text chat.
 
 ## Write Discipline (READ THIS BEFORE ANY WRITE)
@@ -415,7 +416,7 @@ where the current scenarios came from — `phase5` for a draft, `ticket_edit` wh
   failures explicitly in the final report. Never fabricate a key.
 - **`jira_update_issue` label write fails** → the ticket keeps its old label. Say so; do not update the log to a
   state Jira does not reflect.
-- **401** → the token in `~/.buddy-council/atlassian.env` is wrong or expired. Tell the user to re-run
+- **401** → the token saved for the Jira site is wrong or expired. Tell the user to re-run
   `/bc:setup`. There is no browser re-authorization step.
 - **403** → the account lacks create/comment permission on that project, or an IP allowlist is blocking the
   request. Name both; you cannot tell them apart from the response.

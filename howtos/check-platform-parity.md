@@ -12,7 +12,8 @@ decision. Report the gap and let a human close it.
 ## Input
 
 - `stories`: the sprint's issues in canonical schema (`type: "board_issue"`), from `fetch-board-issues`.
-- Config at `.buddy-council/sources.json` → `jira.platform`:
+- Config at `.buddy-council/sources.json` → `jira.platform`, and `jira.base_url`. Every Jira call below passes `site`: `jira.base_url` from `.buddy-council/sources.json` (ADR 0008).
+- `jira.platform`:
 
 ```json
 {

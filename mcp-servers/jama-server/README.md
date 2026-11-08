@@ -19,15 +19,24 @@ For defense in depth, create the API credentials on a Jama account with read-onl
 
 ## Configuration
 
-| Setting | Source | Description |
-|---------|--------|-------------|
-| `JAMA_BASE_URL` | MCP config env (non-secret) | Jama root URL, e.g. `https://company.jamacloud.com`. Must be `https://` (plain HTTP only on localhost). A pasted `/rest/v1` or `/perspective.req…` suffix is stripped. |
-| `client_id`, `client_secret` | `~/.buddy-council/secrets.json` → `jama` | OAuth client credentials — Jama → profile menu → **Set API Credentials**. Preferred. |
-| `username`, `password` | `~/.buddy-council/secrets.json` → `jama` | Basic auth, only for instances without API credentials. |
+The plugin starts this server itself: every assistant runs `scripts/bc-mcp jama` from the plugin's manifests,
+which finds `uv` and runs `uv run --frozen python server.py` here. It takes no configuration of its own.
 
-Credentials are read from the secrets file at `BC_SECRETS_FILE` (default `~/.buddy-council/secrets.json`) and
-**only** from there — unlike the TestRail server, no environment variable can carry them, so they never end up
-in `.mcp.json`. The server starts without configuration and explains what is missing on the first tool call.
+**Every tool takes `site`**: the Jama site to use, as its base URL or host — commands pass the project's
+`requirements.base_url`. The key comes from the plugin's key store (`scripts/bc_keys.py`, ADR 0008): one file per
+site in `~/.buddy-council/keys/`.
+
+| Key field | Description |
+|---------|-------------|
+| `url` | Jama root URL, e.g. `https://company.jamacloud.com`. Must be `https://` (plain HTTP only on localhost). A pasted `/rest/v1` or `/perspective.req…` suffix is stripped. |
+| `client_id`, `client_secret` | OAuth client credentials — Jama → profile menu → **Set API Credentials**. Preferred. |
+| `username`, `password` | Basic auth, only for instances without API credentials. |
+
+Credentials come from the key store **only** — no environment variable can carry them, so they never end up in an
+assistant's settings. The key is looked up on every call: a key saved while the assistant runs works on the next
+call, and a replaced one starts the site afresh. Each site keeps its own client, token, and caches, talking only to
+the address saved with its key. A call without `site` uses this computer's only Jama key, and fails, naming them,
+when there are several. The server starts without a key and explains what is missing on the first tool call.
 
 Behind a TLS-inspecting corporate proxy, set `SSL_CERT_FILE` in the server's env to the company CA bundle.
 
@@ -128,18 +137,18 @@ timing out and roughly 15–20 s per item one at a time. Repeat calls are served
 
 ```bash
 cd mcp-servers/jama-server
-uv run mcp run server.py          # serve MCP over stdio
+uv run python server.py           # serve MCP over stdio
 uv run mcp dev server.py          # MCP Inspector
 ```
 
-`/bc:setup` checks a connection before the server is registered, with a one-shot report that prints JSON and
-exits:
+A one-shot connection report, outside any assistant, prints JSON and exits — `/bc:setup` uses it when the Jama
+tools aren't available:
 
 ```bash
-JAMA_BASE_URL=https://company.jamacloud.com uv run python server.py --check               # account + projects
-JAMA_BASE_URL=https://company.jamacloud.com uv run python server.py --check --project 42  # + item types, folders, field candidates
-JAMA_BASE_URL=https://company.jamacloud.com uv run python server.py --check --project 42 \
-  --anchors-file linked-ids.txt                                                           # + scope_proposal from test-linked IDs
+uv run python server.py --check --site https://company.jamacloud.com               # account + projects
+uv run python server.py --check --site https://company.jamacloud.com --project 42  # + item types, folders, field candidates
+uv run python server.py --check --site https://company.jamacloud.com --project 42 \
+  --anchors-file linked-ids.txt                                                    # + scope_proposal from test-linked IDs
 ```
 
 `--root`, `--exclude`, and `--feature-depth` preview an adjusted root with the same proposal output.

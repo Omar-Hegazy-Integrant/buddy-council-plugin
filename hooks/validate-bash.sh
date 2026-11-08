@@ -102,10 +102,13 @@ fi
 #     - scripts/bc_run.py (new, enrich, link, search, show, recent). It reads and writes only inside
 #       <project>/.buddy-council/runs/, and its one network use is read-only `gh api` GETs.
 #     - scripts/bc_tools.py (detect, status, ensure, smoke, start, stop, prune). It installs bc's own pinned,
-#       checksummed Node and appium-mcp into ~/.buddy-council/tools; writes only there, in
-#       ~/.buddy-council/automation, the project's .buddy-council/sources.json, and the "appium" entry of the two
-#       MCP configs; and runs nothing from the project. Its `project` subcommand runs the project's own setup
-#       script, and `remove` deletes bc's tools, so those two are never approved here: they always prompt.
+#       checksummed Node and appium-mcp into ~/.buddy-council/tools; writes only there (including the record the
+#       plugin's appium connector starts appium-mcp from), in ~/.buddy-council/automation, and the project's
+#       .buddy-council/sources.json; and runs nothing from the project. Its `project` subcommand runs the project's
+#       own setup script, and `remove` deletes bc's tools, so those two are never approved here: they always prompt.
+#     - scripts/bc_keys.py (path, sites, check, migrate). It never prints a key: it names sites and files, tightens
+#       a key file's permissions, and copies the keys older setups saved into ~/.buddy-council/keys without ever
+#       replacing one. `forget` deletes a key, so it is never approved here: it always prompts.
 PLUGIN_DIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd -P)"
 if [ -n "$PLUGIN_DIR" ]; then
   BC_REASON=$(BC_CMD="$COMMAND" BC_PLUGIN_DIR="$PLUGIN_DIR" python3 -c '
@@ -125,6 +128,8 @@ scripts = {
     "bc_tools.py": ("bc: automation tools", {
         "detect": {"--project"}, "status": {"--project"}, "ensure": {"--project", "--shared"},
         "smoke": {"--project"}, "start": {"--project"}, "stop": set(), "prune": set()}),
+    "bc_keys.py": ("bc: key store (never prints a key)", {
+        "path": {"--url", "--provider"}, "sites": {"--provider"}, "check": {"--url", "--provider"}, "migrate": set()}),
 }
 for name, (reason, table) in scripts.items():
     if os.path.realpath(args[1]) != os.path.realpath(os.path.join(root, "scripts", name)):

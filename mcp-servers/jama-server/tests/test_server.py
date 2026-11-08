@@ -25,7 +25,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import server  # noqa: E402
 
 BASE_URL = "https://jama.test"
+SITE = "jama.test"
 PROJECT = 42
+
+
+def setUpModule():
+    # Keys are read on every call, from a throwaway home: a developer's real ~/.buddy-council is never read.
+    global _HOME, _ENV
+    _HOME = tempfile.TemporaryDirectory()
+    _ENV = mock.patch.dict(os.environ, {"HOME": _HOME.name, "BC_HOME": str(Path(_HOME.name, ".buddy-council"))})
+    _ENV.start()
+    os.environ.pop("JAMA_BASE_URL", None)
+
+
+def tearDownModule():
+    _ENV.stop()
+    _HOME.cleanup()
+
+
+def _forget_keys():
+    for path in server.bc_keys.keys_dir().glob("*"):
+        path.unlink()
+
+
+def _save_key(fake, url=BASE_URL):
+    fields = ({"client_id": fake.client_id, "client_secret": fake.client_secret} if fake.client_id
+              else {"username": fake.username, "password": fake.password})
+    return server.bc_keys.write_key("jama", url, fields)
 
 
 def _item(iid, type_id, name, parent, seq, key, fields=None):
@@ -156,7 +182,8 @@ def _abstract(item, keep_location=False):
 class FakeJama:
     """Just enough of Jama's REST API, recording every request it sees."""
 
-    def __init__(self, client_id="cid", client_secret="s3cret", username="", password=""):
+    def __init__(self, client_id="cid", client_secret="s3cret", username="", password="", token_prefix="tok"):
+        self.token_prefix = token_prefix
         self.client_id = client_id
         self.client_secret = client_secret
         self.username = username
@@ -224,7 +251,7 @@ class FakeJama:
             expected = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
             return header == f"Basic {expected}"
         token = header.removeprefix("Bearer ")
-        return header.startswith("Bearer tok-") and token not in self.rejected_tokens
+        return header.startswith(f"Bearer {self.token_prefix}-") and token not in self.rejected_tokens
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -236,7 +263,7 @@ class FakeJama:
             if request.method != "POST" or request.headers.get("Authorization") != f"Basic {expected}":
                 return httpx.Response(401, json={"error": "invalid_client", "error_description": "Bad credentials"})
             self.tokens_issued += 1
-            return httpx.Response(200, json={"access_token": f"tok-{self.tokens_issued}", "token_type": "bearer", "expires_in": 3600})
+            return httpx.Response(200, json={"access_token": f"{self.token_prefix}-{self.tokens_issued}", "token_type": "bearer", "expires_in": 3600})
 
         if not path.startswith("/rest/v1/"):
             return self._error(404, "no such path")
@@ -329,6 +356,11 @@ class ServerTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.fake = self.make_fake()
+        _forget_keys()
+        _save_key(self.fake)
+        options = mock.patch.object(server, "_CLIENT_OPTIONS", {"transport": self.fake.transport(), "sleep": self.fake.sleep})
+        options.start()
+        self.addCleanup(options.stop)
         config = server.JamaConfig(
             BASE_URL, self.fake.client_id, self.fake.client_secret, self.fake.username, self.fake.password
         )
@@ -1190,7 +1222,7 @@ class BackgroundRead(ServerTestCase):
         await super().asyncTearDown()
 
     async def finish_reads(self):
-        loads = [load.task for load in server._STATE.loads.values()]
+        loads = [load.task for load in server._STATES[SITE].loads.values()]
         self.fake.hold.set()
         if loads:
             await asyncio.wait(loads)
@@ -1282,6 +1314,7 @@ class SaveToRunFolder(ServerTestCase):
         self.assertIn("8 written to", payload["summary"])
         written = json.loads(Path(self.target).read_text())
         self.assertEqual((written["kind"], written["source"], written["count"]), ("requirements", "jama", 8))
+        self.assertEqual(written["site"], SITE, "bc_run.py link checks the run came from the project's site")
         self.assertEqual([r["id"] for r in written["requirements"]], [f"CWA-REQ-{n}" for n in range(1, 9)])
         self.assertEqual(written["scope"]["kind"], "all")
         self.assertEqual(payload["bytes"], Path(self.target).stat().st_size)
@@ -1351,35 +1384,111 @@ class SaveToRunFolder(ServerTestCase):
             self.assertTrue(payload["loading"])
             self.assertFalse(Path(self.target).exists())
             self.fake.hold.set()
-            await asyncio.wait([load.task for load in server._STATE.loads.values()])
+            await asyncio.wait([load.task for load in server._STATES[SITE].loads.values()])
             payload = await self.requirements(save_to=self.target)
         self.assertEqual(payload["total"], 8)
         self.assertTrue(Path(self.target).exists())
 
 
-class SetupCheck(unittest.IsolatedAsyncioTestCase):
+class TwoSites(unittest.IsolatedAsyncioTestCase):
+    """Two Jama sites side by side: a call reaches only the site it names, with only that site's credentials."""
+
+    A, B = "a.jama.test", "b.jama.test"
+
     async def asyncSetUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        secrets = Path(self.tmp.name, "secrets.json")
-        secrets.write_text(json.dumps({"jama": {"client_id": "cid", "client_secret": "s3cret"}}))
-        os.chmod(secrets, 0o600)
-        self.patches = [
-            mock.patch.dict(os.environ, {"JAMA_BASE_URL": BASE_URL}),
-            mock.patch.object(server, "_secrets_candidates", return_value=[str(secrets)]),
-        ]
-        for patch in self.patches:
-            patch.start()
-        self.fake = FakeJama()
+        _forget_keys()
+        self.fakes = {
+            self.A: FakeJama(client_id="cid-a", client_secret="secret-a", token_prefix="tokA"),
+            self.B: FakeJama(client_id="", client_secret="", username="jdoe-b", password="pw-b"),
+        }
+        _save_key(self.fakes[self.A], "https://a.jama.test")
+        _save_key(self.fakes[self.B], "https://b.jama.test/jama")  # self-hosted under a context path
+        self.seen: list[tuple[str, str, str]] = []
+
+        async def handle(request: httpx.Request) -> httpx.Response:
+            host, path = request.url.host, request.url.path
+            self.seen.append((host, path, request.headers.get("authorization", "")))
+            if host == self.B:
+                self.assertTrue(path.startswith("/jama/rest/"), path)
+                request = httpx.Request(request.method, str(request.url).replace("/jama/rest/", "/rest/", 1),
+                                        headers=request.headers, content=request.content)
+            return await self.fakes[host].handle_async(request)
+
+        options = mock.patch.object(server, "_CLIENT_OPTIONS", {"transport": httpx.MockTransport(handle)})
+        options.start()
+        self.addCleanup(options.stop)
+        server.reset_state()
 
     async def asyncTearDown(self):
-        for patch in reversed(self.patches):
-            patch.stop()
-        self.tmp.cleanup()
+        for state in server._STATES.values():
+            await state.client.aclose()
+        server.reset_state()
+
+    async def call(self, tool, **kwargs):
+        return json.loads(await getattr(server, tool)(**kwargs))
+
+    def credentials(self, host):
+        basic = lambda user, secret: "Basic " + base64.b64encode(f"{user}:{secret}".encode()).decode()  # noqa: E731
+        if host == self.A:
+            return {basic("cid-a", "secret-a")} | {f"Bearer tokA-{n}" for n in range(1, 5)}
+        return {basic("jdoe-b", "pw-b")}
+
+    async def test_each_site_is_read_with_only_its_own_credentials(self):
+        for site, expected in (("https://a.jama.test", "https://a.jama.test"), ("b.jama.test/jama", "https://b.jama.test/jama"),
+                               ("a.jama.test", "https://a.jama.test"), ("https://b.jama.test/jama/perspective.req#/items/1",
+                                                                         "https://b.jama.test/jama")):
+            self.assertEqual((await self.call("jama_get_current_user", site=site))["base_url"], expected, site)
+        self.assertEqual({host for host, _, _ in self.seen}, {self.A, self.B})
+        for host, path, authorization in self.seen:
+            self.assertIn(authorization, self.credentials(host), f"{path} on {host}")
+        self.assertEqual(self.fakes[self.A].tokens_issued, 1, "a's token is reused, never sent to b")
+
+    async def test_both_sites_at_once_keep_their_credentials_apart(self):
+        calls = [self.call("jama_get_projects", site=site) for site in [self.A, "b.jama.test/jama"] * 4]
+        self.assertEqual(len(await asyncio.gather(*calls)), 8)
+        for host, path, authorization in self.seen:
+            self.assertIn(authorization, self.credentials(host), f"{path} on {host}")
+
+    async def test_each_site_keeps_its_own_project_tree(self):
+        args = {"project_id": PROJECT, "item_type_exclude": NON_REQUIREMENT_TYPES}
+        a = await self.call("jama_get_requirements", site=self.A, **args)
+        b = await self.call("jama_get_requirements", site="b.jama.test/jama", **args)
+        self.assertEqual((a["total"], b["total"]), (8, 8))
+        self.assertTrue(all(r["raw_fields"]["url"].startswith("https://a.jama.test/") for r in a["requirements"]))
+        self.assertTrue(all(r["raw_fields"]["url"].startswith("https://b.jama.test/jama/") for r in b["requirements"]))
+        for host in (self.A, self.B):
+            self.assertEqual(self.fakes[host].count("GET", "/rest/v1/items"), 1, f"{host} read its own tree once")
+
+    async def test_no_site_with_two_keys_reads_nothing(self):
+        with self.assertRaises(server.JamaError) as ctx:
+            await self.call("jama_get_projects")
+        self.assertIn("a.jama.test", str(ctx.exception))
+        self.assertIn("b.jama.test/jama", str(ctx.exception))
+        with self.assertRaises(server.JamaError):
+            await self.call("jama_get_projects", site="https://c.jama.test")
+        self.assertEqual(self.seen, [])
+
+    async def test_a_replaced_key_is_used_on_the_next_call(self):
+        await self.call("jama_get_current_user", site=self.A)
+        self.fakes[self.A].client_secret = "rotated-a"
+        server.bc_keys.write_key("jama", "https://a.jama.test", {"client_id": "cid-a", "client_secret": "rotated-a"})
+        await self.call("jama_get_current_user", site=self.A)
+        self.assertEqual(self.fakes[self.A].tokens_issued, 2, "the new key fetched its own token, with no restart")
+
+
+class SetupCheck(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.fake = FakeJama()
+        _forget_keys()
+        _save_key(self.fake)
+
+    async def asyncTearDown(self):
         server.reset_state()
 
     async def test_without_a_project_it_lists_projects(self):
-        report = await server._check(None, transport=self.fake.transport())
+        report = await server._check(None, transport=self.fake.transport(), site="https://jama.test/perspective.req")
         self.assertTrue(report["ok"])
+        self.assertEqual(report["base_url"], BASE_URL)
         self.assertEqual(report["user"]["name"], "Jane Doe")
         self.assertEqual(report["projects"], [{"id": PROJECT, "key": "CWA", "name": "Clinical Window App"}])
 
@@ -1435,36 +1544,45 @@ class Configuration(unittest.TestCase):
             with self.assertRaises(server.JamaError, msg=raw):
                 server.normalize_base_url(raw)
 
-    def _secrets(self, tmp, payload):
-        path = Path(tmp, "secrets.json")
-        path.write_text(json.dumps(payload))
-        os.chmod(path, 0o600)
-        return mock.patch.object(server, "_secrets_candidates", return_value=[str(path)])
+    def setUp(self):
+        _forget_keys()
+        server.bc_keys.keys_dir().mkdir(parents=True, exist_ok=True)
 
-    def test_credentials_come_from_the_secrets_file(self):
-        with tempfile.TemporaryDirectory() as tmp, self._secrets(tmp, {"jama": {"client_id": "cid", "client_secret": "s3cret"}}):
-            with mock.patch.dict(os.environ, {"JAMA_BASE_URL": "https://jama.example.com/"}):
-                config = server.load_config()
+    def test_credentials_come_from_the_sites_key(self):
+        server.bc_keys.write_key("jama", "https://jama.example.com/", {"client_id": "cid", "client_secret": "s3cret"})
+        server.bc_keys.write_key("jama", "https://other.example.com", {"username": "jdoe", "password": "pw"})
+        config = server.load_config("jama.example.com")
         self.assertEqual(config.base_url, "https://jama.example.com")
         self.assertEqual(config.auth_mode, "oauth")
         self.assertNotIn("s3cret", repr(config))
+        self.assertEqual(server.load_config("https://other.example.com/perspective.req").auth_mode, "basic")
+
+    def test_credentials_never_come_from_the_environment(self):
+        env = {"JAMA_BASE_URL": "https://jama.example.com", "JAMA_CLIENT_ID": "cid", "JAMA_CLIENT_SECRET": "s3cret",
+               "BC_SECRETS_FILE": str(Path(_HOME.name, "secrets.json"))}
+        Path(env["BC_SECRETS_FILE"]).write_text(json.dumps({"jama": {"client_id": "cid", "client_secret": "s3cret"}}))
+        (server.bc_keys.keys_dir() / server.bc_keys.MARKER).write_text("{}")  # migration already ran
+        with mock.patch.dict(os.environ, env), self.assertRaises(server.JamaError) as ctx:
+            server.load_config("jama.example.com")
+        self.assertIn("No Jama key is saved for jama.example.com", str(ctx.exception))
 
     def test_missing_credentials_say_what_to_do(self):
-        with tempfile.TemporaryDirectory() as tmp, self._secrets(tmp, {"testrail": {"username": "u", "api_key": "k"}}):
-            with mock.patch.dict(os.environ, {"JAMA_BASE_URL": "https://jama.example.com"}):
-                with self.assertRaises(server.JamaError) as ctx:
-                    server.load_config()
+        target = server.bc_keys.key_path("jama.example.com")
+        target.write_text(json.dumps({"provider": "jama", "url": "https://jama.example.com", "client_id": "cid"}))
+        with self.assertRaises(server.JamaError) as ctx:
+            server.load_config()
         self.assertIn("Set API Credentials", str(ctx.exception))
         self.assertIn("/bc:setup", str(ctx.exception))
+        self.assertNotIn("cid", str(ctx.exception))
 
     def test_anchors_file_needs_a_project(self):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr", new_callable=io.StringIO):
             server.main(["--check", "--anchors-file", "keys.txt"])
 
     def test_cli_check_failure_prints_json_and_exits_non_zero(self):
-        with tempfile.TemporaryDirectory() as tmp, self._secrets(tmp, {}):
-            with mock.patch.dict(os.environ, {"JAMA_BASE_URL": ""}), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
-                code = server.main(["--check"])
+        (server.bc_keys.keys_dir() / server.bc_keys.MARKER).write_text("{}")  # migration already ran
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = server.main(["--check", "--site", "https://jama.example.com"])
         self.assertEqual(code, 1)
         report = json.loads(out.getvalue())
         self.assertFalse(report["ok"])

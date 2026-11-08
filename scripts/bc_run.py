@@ -48,6 +48,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bc_keys  # noqa: E402
+
 KEEP_RUNS = 5
 MAX_RUN_AGE_SECONDS = 7 * 24 * 3600
 PART_BYTES = 18_000  # a bundle part fits one file read in both runtimes (Copilot truncates at 20 KB)
@@ -901,6 +904,19 @@ def jama_arg_problems(req: dict[str, Any], got: dict[str, Any], what: str) -> li
     return problems
 
 
+def site_problems(provider: str, configured: Any, data: dict[str, Any], what: str) -> list[str]:
+    """A file read from another site than the config names: two sites can both have a project 42. The servers
+    record the site they read; a file without one is not judged."""
+    got = data.get("site")
+    if not got or not configured:
+        return []
+    try:
+        wanted = bc_keys.site_id(bc_keys.base_url(provider, configured))
+    except bc_keys.KeyStoreError:
+        return []
+    return [] if got == wanted else [f"{what} were read from {got}, but the config names {wanted}."]
+
+
 def verify_run(
     config: dict[str, Any], manifest: dict[str, Any], requirements_data: Any, cases_data: Any, background_data: Any = None,
 ) -> list[str]:
@@ -916,6 +932,7 @@ def verify_run(
     elif is_jama_file:
         got = requirements_data.get("args") or {}
         inference = req.get("feature_inference") or {}
+        problems += site_problems("jama", req.get("base_url"), requirements_data, "requirements")
         if requirements_data.get("project_id") != req.get("project_id"):
             problems.append(f"requirements were read from Jama project {requirements_data.get('project_id')}, not {req.get('project_id')}.")
         problems += jama_arg_problems(req, got, "requirements")
@@ -935,6 +952,7 @@ def verify_run(
                 and background_data.get("kind") == "background"):
             problems.append("background.json was not written by the Jama server with background=true.")
         else:
+            problems += site_problems("jama", req.get("base_url"), background_data, "background items")
             if background_data.get("project_id") != req.get("project_id"):
                 problems.append(f"background was read from Jama project {background_data.get('project_id')}, not {req.get('project_id')}.")
             problems += jama_arg_problems(req, background_data.get("args") or {}, "background items")
@@ -943,6 +961,7 @@ def verify_run(
         return problems
     if isinstance(cases_data, dict):
         field = custom_key((tests.get("authoring") or {}).get("requirement_field") or DEFAULT_REQUIREMENT_FIELD)
+        problems += site_problems("testrail", tests.get("base_url"), cases_data, "test cases")
         if cases_data.get("project_id") != tests.get("project_id") or (cases_data.get("suite_id") or None) != (tests.get("suite_id") or None):
             problems.append(
                 f"test cases were read from TestRail project {cases_data.get('project_id')} suite {cases_data.get('suite_id')}, "

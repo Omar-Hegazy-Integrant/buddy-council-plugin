@@ -1,5 +1,6 @@
-"""The hooks approve the automation tools narrowly: bc_tools.py as one plain command without its two riskier
-subcommands, and appium-mcp's read-only tools — never a tap, a session, or an app launch.
+"""The hooks approve the plugin's tools narrowly: bc_tools.py as one plain command without its two riskier
+subcommands, appium-mcp's read-only tools — never a tap, a session, or an app launch — and the connectors' reads,
+never a write, in every spelling Claude Code and Copilot CLI give a connector's tools.
 
     python3 -m unittest discover -s scripts/tests -v
 """
@@ -104,14 +105,14 @@ class AppiumTools(unittest.TestCase):
 
     def test_reads_are_approved_in_every_spelling(self):
         for tool in self.READ:
-            for name in (f"mcp__appium__{tool}", f"appium-{tool}"):
+            for name in (f"mcp__appium__{tool}", f"mcp__plugin_bc_appium__{tool}", f"appium-{tool}"):
                 code, out = mcp(name, "claude" if name.startswith("mcp__") else "copilot")
                 self.assertEqual(code, 0, name)
                 self.assertIn('"permissionDecision":"allow"', out, name)
 
     def test_taps_typing_sessions_and_app_launches_prompt(self):
         for tool in self.PROMPTS:
-            for name in (f"mcp__appium__{tool}", f"appium-{tool}", tool):
+            for name in (f"mcp__appium__{tool}", f"mcp__plugin_bc_appium__{tool}", f"appium-{tool}", tool):
                 code, out = mcp(name, "claude" if name.startswith("mcp__") else "copilot")
                 self.assertEqual(code, 0, name)
                 self.assertEqual(out, "", name)
@@ -121,6 +122,72 @@ class AppiumTools(unittest.TestCase):
         self.assertEqual(out, "")
         code, out = mcp("mcp__other__appium_find_element")
         self.assertEqual(out, "")
+
+
+class KeysScript(unittest.TestCase):
+    """bc_keys.py never prints a key, so its listing and checking subcommands run unprompted; forget never does."""
+
+    SCRIPT = PLUGIN / "scripts" / "bc_keys.py"
+
+    def test_the_subcommands_that_never_show_a_key_are_approved(self):
+        for args in ("path --url 'https://acme.atlassian.net/jira/software/projects/CWA/boards/42?x=1' --provider jira",
+                     "sites", "sites --provider testrail", "check --url https://acme.jamacloud.com --provider jama", "migrate"):
+            for shape in ("claude", "copilot"):
+                code, out = bash(f"python3 '{self.SCRIPT}' {args}", shape)
+                self.assertEqual(code, 0, args)
+                self.assertIn("bc: key store", out, args)
+
+    def test_deleting_a_key_or_anything_chained_prompts(self):
+        for command in (f"python3 '{self.SCRIPT}' forget --url https://acme.jamacloud.com",
+                        f"python3 '{self.SCRIPT}' migrate --force",
+                        f"python3 '{self.SCRIPT}' sites; cat ~/.buddy-council/keys/acme.jamacloud.com.json",
+                        f"python3 '{self.SCRIPT}' sites && cat x", "python3 /tmp/bc_keys.py sites"):
+            code, out = bash(command)
+            self.assertEqual(code, 0, command)
+            self.assertNotIn("permissionDecision", out, command)
+
+
+class ConnectorTools(unittest.TestCase):
+    """The plugin's connectors in every spelling: Claude Code's plugin and own-settings names, Copilot's
+    <server>-<tool> (what its hook payload carried in a live session), and the bare name."""
+
+    READ = {"testrail": ("testrail_get_projects", "testrail_get_canonical_cases"),
+            "jama": ("jama_get_current_user", "jama_get_requirements", "jama_get_scope_proposal"),
+            "atlassian": ("jira_get_user_profile", "jira_get_issue", "jira_search", "jira_get_board_issues",
+                          "jira_get_transitions", "jira_search_assignable_users")}
+    WRITE = {"testrail": ("testrail_add_case", "testrail_add_cases", "testrail_add_section", "testrail_update_case",
+                          "testrail_update_cases"),
+             "atlassian": ("jira_create_issue", "jira_update_issue", "jira_add_comment", "jira_transition_issue",
+                           "jira_create_issue_link", "jira_add_issues_to_sprint")}
+
+    @staticmethod
+    def spellings(server, tool):
+        return ((f"mcp__plugin_bc_{server}__{tool}", "claude"), (f"mcp__{server}__{tool}", "claude"),
+                (f"{server}-{tool}", "copilot"), (tool, "copilot"))
+
+    def test_reads_are_approved_in_every_spelling(self):
+        for server, tools in self.READ.items():
+            for tool in tools:
+                for name, shape in self.spellings(server, tool):
+                    code, out = mcp(name, shape)
+                    self.assertEqual(code, 0, name)
+                    self.assertIn('"permissionDecision":"allow"', out, name)
+
+    def test_writes_always_prompt(self):
+        for server, tools in self.WRITE.items():
+            for tool in tools:
+                for name, shape in self.spellings(server, tool):
+                    code, out = mcp(name, shape)
+                    self.assertEqual((code, out), (0, ""), name)
+
+    def test_settings_list_the_same_reads_for_the_plugins_connectors(self):
+        allowed = set(json.loads((PLUGIN / "settings.json").read_text())["allowedTools"])
+        for server, tools in self.READ.items():
+            for tool in tools:
+                self.assertIn(f"mcp__plugin_bc_{server}__{tool}", allowed)
+        for server, tools in self.WRITE.items():
+            for tool in tools:
+                self.assertFalse({f"mcp__plugin_bc_{server}__{tool}", f"mcp__{server}__{tool}"} & allowed, tool)
 
 
 if __name__ == "__main__":

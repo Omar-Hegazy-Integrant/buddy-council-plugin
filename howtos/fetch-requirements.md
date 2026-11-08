@@ -31,6 +31,6 @@ Any other provider, such as `excel` in a project set up before requirements came
 
 - If `.buddy-council/sources.json` does not exist → tell the user to run `/bc:setup` first
 - If the configured provider file does not exist → report which provider was expected and that it's not yet implemented
-- If credentials are missing from `~/.buddy-council/secrets.json` → tell the user to run `/bc:setup` to configure credentials
-- If the provider is `jama` and the `jama` MCP tools are not loaded → tell the user to restart the runtime (the server only loads at startup), or run `/bc:setup` if it was never registered
+- If no key is saved for the site (`requirements.base_url`) → tell the user to run `/bc:setup` with a link to the Jama project
+- If the provider is `jama` and the `jama` MCP tools are not loaded → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it
 - If the enrichment how-to returns an `abort` error (user chose to abort during the failure prompt) → return that error to the caller so the command can decide whether to fail outright or proceed without enrichment

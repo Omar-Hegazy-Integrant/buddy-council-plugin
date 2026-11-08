@@ -29,7 +29,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/auto-approve-plugin-writes.sh",
-            "description": "Auto-approve writes to the plugin's own generated files (.buddy-council config/progress, secrets, plugin .mcp.json); all other writes still prompt",
+            "description": "Auto-approve writes to the plugin's own generated files (.buddy-council config and progress log); keys and all other writes still prompt",
             "timeout": 10
           }
         ]
