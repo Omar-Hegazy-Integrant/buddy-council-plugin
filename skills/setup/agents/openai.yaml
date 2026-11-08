@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:setup"
+  short_description: "Connect Jama, TestRail and Jira"
+policy:
+  allow_implicit_invocation: false

@@ -6,8 +6,8 @@
 # Runs under BOTH runtimes:
 #   - Claude Code: registered in hooks/hooks.json (PostToolUse, matcher .*);
 #     payload {tool_name, tool_input, session_id}; hook cwd = project dir.
-#   - Copilot CLI: registered in the root hooks.json (postToolUse +
-#     postToolUseFailure); payload {toolName, toolArgs: "<json string>",
+#   - Copilot CLI and VS Code: registered in com.github.copilot/hooks/hooks.json
+#     (postToolUse + postToolUseFailure); payload {toolName, toolArgs: "<json string>",
 #     sessionId, cwd, toolResult}; hook cwd = PLUGIN dir, so the project is
 #     resolved from COPILOT_PROJECT_DIR / the payload's cwd.
 #

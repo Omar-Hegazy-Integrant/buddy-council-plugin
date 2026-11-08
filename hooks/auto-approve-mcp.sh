@@ -22,7 +22,7 @@
 #
 # Runs under BOTH runtimes. Claude Code names MCP tools mcp__<server>__<tool>
 # and routes only those here (hooks/hooks.json matcher mcp__.*). Copilot CLI
-# runs this for every preToolUse (root hooks.json, no matcher) and uses its
+# runs this for every preToolUse (com.github.copilot/hooks/hooks.json, no matcher) and uses its
 # own MCP tool naming, so the case below matches both the Claude-prefixed and
 # bare tool names — anything else exits silently. Never exits non-zero:
 # Copilot treats a failing preToolUse hook as deny (fail-closed).
@@ -54,7 +54,7 @@ except Exception:
 # enumerated for the same reason the Jira ones are: everything that taps, types, swipes, opens or closes a
 # session, installs or launches an app, or changes the phone (appium_gesture, appium_set_value,
 # appium_session_management, appium_app_lifecycle, appium_mobile_permissions, …) must keep prompting.
-# skills/automation-tools/bc_tools.py keeps the same list in READ_TOOLS, and its tests fail if the two differ.
+# scripts/bc_tools.py keeps the same list in READ_TOOLS, and its tests fail if the two differ.
 # Copilot names an MCP tool <server>-<tool> in its hook payload (e.g. appium-appium_find_element), so each
 # appium tool is matched in all three spellings.
 case "$TOOL" in

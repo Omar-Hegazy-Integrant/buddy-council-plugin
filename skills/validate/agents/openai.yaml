@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:validate"
+  short_description: "Check a ticket against requirements, then file it"
+policy:
+  allow_implicit_invocation: false

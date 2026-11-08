@@ -1,6 +1,7 @@
 {
   "version": "1",
   "name": "buddy-council",
+  "description": "Buddy-Council: requirements and test case analysis across Jama, TestRail, and Jira",
   "owner": {
     "name": "Omar Hegazy"
   },

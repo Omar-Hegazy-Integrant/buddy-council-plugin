@@ -99,10 +99,10 @@ fi
 # (f) The plugin's own scripts, each approved only as one plain command — python3, THIS plugin's own copy of the
 #     script by absolute path, a known subcommand and options, every argument bare or single-quoted — so nothing
 #     can be chained onto it:
-#     - skills/collect-artifacts/bc_run.py (new, enrich, link, search, show, recent). It reads and writes only
-#       inside <project>/.buddy-council/runs/, and its one network use is read-only `gh api` GETs.
-#     - skills/automation-tools/bc_tools.py (detect, status, ensure, smoke, start, stop, prune). It installs bc's
-#       own pinned, checksummed Node and appium-mcp into ~/.buddy-council/tools; writes only there, in
+#     - scripts/bc_run.py (new, enrich, link, search, show, recent). It reads and writes only inside
+#       <project>/.buddy-council/runs/, and its one network use is read-only `gh api` GETs.
+#     - scripts/bc_tools.py (detect, status, ensure, smoke, start, stop, prune). It installs bc's own pinned,
+#       checksummed Node and appium-mcp into ~/.buddy-council/tools; writes only there, in
 #       ~/.buddy-council/automation, the project's .buddy-council/sources.json, and the "appium" entry of the two
 #       MCP configs; and runs nothing from the project. Its `project` subcommand runs the project's own setup
 #       script, and `remove` deletes bc's tools, so those two are never approved here: they always prompt.
@@ -118,16 +118,16 @@ args = [t[1:-1] if t.startswith(chr(39)) else t for t in re.findall(token, cmd)]
 if len(args) < 3 or args[0] != "python3" or not os.path.isabs(args[1]):
     sys.exit(0)
 scripts = {
-    ("collect-artifacts", "bc_run.py"): ("bc: run-folder script", {
+    "bc_run.py": ("bc: run-folder script", {
         "new": {"--project", "--command", "--scope"}, "enrich": {"--run"}, "link": {"--run"},
         "search": {"--run", "--query", "--concept", "--feature", "--top"}, "show": {"--run", "--ids"},
         "recent": {"--project", "--max-age-minutes"}}),
-    ("automation-tools", "bc_tools.py"): ("bc: automation tools", {
+    "bc_tools.py": ("bc: automation tools", {
         "detect": {"--project"}, "status": {"--project"}, "ensure": {"--project", "--shared"},
         "smoke": {"--project"}, "start": {"--project"}, "stop": set(), "prune": set()}),
 }
-for (skill, name), (reason, table) in scripts.items():
-    if os.path.realpath(args[1]) != os.path.realpath(os.path.join(root, "skills", skill, name)):
+for name, (reason, table) in scripts.items():
+    if os.path.realpath(args[1]) != os.path.realpath(os.path.join(root, "scripts", name)):
         continue
     options, rest = table.get(args[2]), args[3:]
     if options is not None and not len(rest) % 2 and all(o in options for o in rest[::2]):

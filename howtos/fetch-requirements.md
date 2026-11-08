@@ -1,0 +1,36 @@
+# Fetch Requirements — Router
+
+Fetch requirements from the configured source. This how-to reads the user's configuration and delegates to the correct provider.
+
+## How It Works
+
+1. Read `.buddy-council/sources.json` from the project root (the current working directory)
+2. Check the `requirements.provider` field
+3. Delegate to the matching provider:
+
+| Provider | Delegate To |
+|----------|-------------|
+| `jama` | Follow instructions in `providers/jama/fetch.md` — live from Jama Connect through the plugin's read-only `jama` MCP server; features are Jama folders |
+
+Any other provider, such as `excel` in a project set up before requirements came only from Jama: stop, and tell the user to run `/bc:setup` with a link to their Jama project.
+
+4. **Enrichment step (MANDATORY when enabled)** — if `requirements.enrichment.enabled === true`, you **must** follow `howtos/enrich-requirements.md` to fetch any GitHub-hosted docs referenced via the provider's transient `_enrichment_urls` field. Do not skip this when it is enabled. After it runs, print a one-line status — `Enrichment: fetched K of N GitHub-linked requirement docs` (or the failure/abort summary the how-to returns). The enrichment how-to attaches `extended_context` per requirement and removes the transient field.
+5. **Enrichment visibility** — always make the enrichment outcome observable so the user is never left guessing:
+   - `enabled === true` and docs were fetched → the Step 4 status line already reported the counts.
+   - `enabled === true` but the provider produced no `_enrichment_urls` (e.g. no `github_url` field mapped, or no GitHub links in the requirements) → print: "Note: enrichment is on, but no GitHub doc links were found in the requirements source."
+   - `enabled === false` but the provider produced any `_enrichment_urls` → print: "Note: the requirements source has GitHub doc links but enrichment is disabled. Run `/bc:setup` to enable." Strip the field before returning.
+   In all cases, do NOT block the fetch.
+6. Return the results in canonical schema format.
+
+## Input
+
+- `scope`: Optional — requirement ID, feature name (for Jama, a folder name or path such as `Software/Patient Monitoring`), or "all", as the caller passes it.
+- For Jama, a known list of requirement IDs (a bug's or a ticket's, say) is read by key in one batched call — the provider's "Specific requirements by key" section — rather than one call per ID or a whole feature per ID.
+
+## Error Handling
+
+- If `.buddy-council/sources.json` does not exist → tell the user to run `/bc:setup` first
+- If the configured provider file does not exist → report which provider was expected and that it's not yet implemented
+- If credentials are missing from `~/.buddy-council/secrets.json` → tell the user to run `/bc:setup` to configure credentials
+- If the provider is `jama` and the `jama` MCP tools are not loaded → tell the user to restart the runtime (the server only loads at startup), or run `/bc:setup` if it was never registered
+- If the enrichment how-to returns an `abort` error (user chose to abort during the failure prompt) → return that error to the caller so the command can decide whether to fail outright or proceed without enrichment

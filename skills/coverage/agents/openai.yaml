@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:coverage"
+  short_description: "Find untested requirements and orphan tests"
+policy:
+  allow_implicit_invocation: false

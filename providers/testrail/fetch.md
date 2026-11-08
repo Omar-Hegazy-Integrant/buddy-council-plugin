@@ -1,4 +1,4 @@
-# TestRail Test Cases Fetch — Provider Skill
+# TestRail Test Cases Fetch — Provider Guide
 
 Fetch test cases from TestRail using the `testrail` MCP server.
 
@@ -34,7 +34,7 @@ a fraction of the raw size, so there is nothing to map. One call covers each str
 returned), `unlinked: true` (orphans), or no filter (Strategy 4). Always pass `requirement_field`. The raw
 tools (`testrail_get_cases`, `testrail_get_case`, `testrail_get_linked_cases`) remain for the raw fields a
 write path needs. `save_to` writes the result into a run folder instead of returning it — that is how
-`skills/collect-artifacts` collects; don't use it elsewhere.
+`howtos/collect-artifacts.md` collects; don't use it elsewhere.
 
 **Choose the narrowest fetch strategy based on available context:**
 
@@ -106,7 +106,7 @@ Use only when no feature or requirement context is available: call
 - `custom_steps_separated` → structured test steps (array of `{content, expected}`)
 - the requirement field → parse into `linked_ids` (see Linking section below)
 - `refs` → `raw_fields.refs`, verbatim. Coverage needs it to tell a case whose requirement link is stranded in
-  References from one with no link at all — see the orphan repair in `skills/update-test-cases/SKILL.md`
+  References from one with no link at all — see the orphan repair in `howtos/update-test-cases.md`
 - `section_id` → resolve to section name using the section lookup
 
 ## Output
@@ -223,7 +223,7 @@ entry carries the new `id`, its `section_path`, and a browse `url`.
 
 `mcp__testrail__testrail_update_cases` changes existing cases, each with its own fields;
 `testrail_update_case` is the single-case wrapper. **These write to the team's live TestRail and always
-prompt.** Call them only through `skills/update-test-cases/SKILL.md` — the plugin's one update path — never
+prompt.** Call them only through `howtos/update-test-cases.md` — the plugin's one update path — never
 directly from an agent.
 
 Each entry is `case_id` (`1234`, `"C1234"`, or `"TC-1234"`) plus the fields to change, with the same keys as

@@ -1,10 +1,10 @@
-# GitHub Fetch (MCP Strategy) — Provider Skill
+# GitHub Fetch (MCP Strategy) — Provider Guide
 
 Fetch a single GitHub-hosted file via the official `github-mcp-server` MCP server. Used when `requirements.enrichment.strategy === "mcp"`.
 
 ## When to Use
 
-Invoked by `skills/enrich-requirements/SKILL.md` for each unique URL when the user configured MCP at setup time. The user must have:
+Invoked by `howtos/enrich-requirements.md` for each unique URL when the user configured MCP at setup time. The user must have:
 
 - Installed `github-mcp-server` externally (not vendored by this plugin — `.mcp.example.json` shows where to add it)
 - Provided a GitHub PAT during `/bc:setup`, stored in `.mcp.json` env block under `GITHUB_TOKEN`
@@ -14,7 +14,7 @@ If the MCP tools are not available at runtime, return a structured error so the 
 
 ## Input
 
-A single URL string matching `^https://github\.com/...`. The orchestrator has already stripped query params before calling this skill.
+A single URL string matching `^https://github\.com/...`. The orchestrator has already stripped query params before following this guide.
 
 ## URL Parsing
 

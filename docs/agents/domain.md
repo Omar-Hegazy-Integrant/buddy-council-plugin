@@ -20,8 +20,9 @@ This repo is **single-context**: one `GLOSSARY.md` and one `docs/adr/` at the re
 ├── docs/adr/
 │   ├── 0001-<decision>.md
 │   └── 0002-<decision>.md
-├── commands/  agents/  skills/  providers/
-└── mcp-servers/  hooks/  config/
+├── plugin.json  .claude-plugin/
+├── skills/  howtos/  com.github.copilot/  providers/
+└── mcp-servers/  hooks/  scripts/  config/
 ```
 
 ## Use the glossary's vocabulary

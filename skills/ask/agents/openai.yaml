@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:ask"
+  short_description: "Ask about requirements and test cases"
+policy:
+  allow_implicit_invocation: false

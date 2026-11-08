@@ -7,5 +7,14 @@
   },
   "repository": "https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin",
   "license": "MIT",
-  "keywords": ["requirements", "test-cases", "contradictions", "testrail", "jama", "qa"]
+  "keywords": ["requirements", "test-cases", "contradictions", "testrail", "jama", "qa"],
+  "agents": [
+    "./com.github.copilot/agents/contradiction-agent.agent.md",
+    "./com.github.copilot/agents/coverage-agent.agent.md",
+    "./com.github.copilot/agents/data-collector.agent.md",
+    "./com.github.copilot/agents/onboarding-agent.agent.md",
+    "./com.github.copilot/agents/scenario-mapping-agent.agent.md",
+    "./com.github.copilot/agents/ticket-validation-agent.agent.md",
+    "./com.github.copilot/agents/vnv-sprint-prep-agent.agent.md"
+  ]
 }
