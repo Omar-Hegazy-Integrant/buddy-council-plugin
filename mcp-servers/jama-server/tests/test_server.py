@@ -580,7 +580,18 @@ class Features(ServerTestCase):
         self.assertEqual(counts["Folder"], ("folder", 4))
         self.assertEqual(counts["Set"], ("set", 1))
         requirement = next(t for t in payload["item_types"] if t["display"] == "Requirement")
+        self.assertNotIn("fields", requirement, "a project's answer stays small")
+        payload = await self.call("jama_get_item_types", project_id=PROJECT, with_fields=True)
+        requirement = next(t for t in payload["item_types"] if t["display"] == "Requirement")
         self.assertIn({"label": "Status", "name": "status$89", "type": "LOOKUP"}, requirement["fields"])
+
+    async def test_a_projects_item_types_carry_what_setup_maps_fields_and_id_patterns_from(self):
+        payload = await self.call("jama_get_item_types", project_id=PROJECT)
+        self.assertEqual(payload["document_key_samples"]["Requirement"], [f"CWA-REQ-{n}" for n in range(1, 6)])
+        candidates = payload["field_candidates"]
+        self.assertEqual((candidates["status"], candidates["rationale"]), (["Status"], ["Rationale"]))
+        self.assertEqual(candidates["github_url"],
+                         [{"field": "Linked to Github", "first_url": "https://github.com/org/repo/blob/main/docs/sds.md"}])
 
 
 class RequirementRoots(ServerTestCase):
@@ -630,7 +641,7 @@ class RequirementRoots(ServerTestCase):
     async def test_a_missing_root_is_loud(self):
         payload = await self.requirements(root_ids=[9999])
         self.assertEqual(payload["requirements"], [])
-        self.assertTrue(any("re-anchor" in w for w in payload["warnings"]))
+        self.assertTrue(any("Anchor the scope on the test suite again" in w for w in payload["warnings"]))
 
     async def test_the_feature_list_shows_only_what_holds_requirements(self):
         payload = await self.call(
@@ -744,6 +755,22 @@ class ScopeProposal(ServerTestCase):
             {"in_roots": 6, "of_type_outside_roots": 2,
              "of_type_outside_where": [{"path": "Product / Alarms", "count": 1}, {"path": "", "count": 1}]},
         )
+
+    async def test_the_linked_ids_can_come_from_a_run_file_so_none_pass_through_the_conversation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp, "proj", ".buddy-council", "runs", "20261108-120000-setup")
+            run_dir.mkdir(parents=True)
+            ids = run_dir / "requirement_ids.json"
+            ids.write_text(json.dumps({"kind": "requirement_ids", "ids": [f"CWA-REQ-{n}" for n in range(1, 7)]}))
+            payload = await self.call("jama_get_scope_proposal", project_id=PROJECT, document_keys_file=str(ids))
+            self.assertEqual([r["path"] for r in payload["roots"]], ["Product / Software Requirements"])
+            self.assertEqual(payload["anchors"]["given"], 6)
+            outside = Path(tmp, "elsewhere.json")
+            outside.write_text(json.dumps({"ids": ["CWA-REQ-1"]}))
+            with self.assertRaises(Exception):
+                await server.jama_get_scope_proposal(project_id=PROJECT, document_keys_file=str(outside))
+        with self.assertRaises(Exception):
+            await server.jama_get_scope_proposal(project_id=PROJECT)
 
     async def test_links_inside_one_folder_widen_to_their_whole_set_and_keep_its_features(self):
         payload = await self.propose(["CWA-REQ-1", "CWA-REQ-2", "CWA-REQ-3", "CWA-REQ-4"])
@@ -937,7 +964,7 @@ class Transport(ServerTestCase):
         with self.assertRaises(server.JamaError) as ctx:
             await self.call("jama_get_current_user")
         self.assertEqual(ctx.exception.status, 401)
-        self.assertIn("/bc:setup", str(ctx.exception))
+        self.assertIn("save it, and try again", str(ctx.exception), "the command asks for the key on the spot")
         self.assertEqual(self.fake.tokens_issued, 2)
 
     async def test_rejected_client_credentials_never_echo_the_secret(self):
@@ -1231,7 +1258,9 @@ class BackgroundRead(ServerTestCase):
         first = await self.requirements()
         self.assertTrue(first["loading"])
         self.assertEqual((first["project_id"], first["pages_read"], first["pages_total"]), (PROJECT, 1, 8))
-        self.assertIn("call this tool again with the same arguments", first["summary"])
+        self.assertIn("call this tool again with the same arguments, right away", first["summary"])
+        self.assertIn("don't wait or sleep", first["summary"], "a shell sleep asks the user's permission")
+        self.assertNotIn("estimated_seconds_left", first, "a countdown invites the caller to sleep it out")
         await self.finish_reads()
         second = await self.requirements()
         self.assertEqual(self.ids(second), [f"CWA-REQ-{n}" for n in range(1, 9)])
@@ -1344,6 +1373,31 @@ class SaveToRunFolder(ServerTestCase):
         self.assertEqual((written["kind"], written["count"], written["scope"]["kind"]), ("background", 2, "background"))
         self.assertTrue(written["args"]["background"])
         self.assertEqual([r["id"] for r in written["requirements"]], ["CWA-REQ-7", "CWA-REQ-8"])
+
+    async def test_one_call_writes_the_requirements_and_the_background_with_the_same_arguments(self):
+        rest = str(self.run_dir / "background.json")
+        payload = await self.requirements(root_ids=[ROOT], item_type_filter=["Requirement"], feature_depth=2,
+                                          field_mapping={"status": "Status"}, save_to=self.target, background_save_to=rest)
+        self.assertEqual((payload["total"], payload["background"]["total"]), (6, 2))
+        self.assertEqual(payload["background"]["saved_to"], str(self.run_dir.resolve() / "background.json"))
+        requirements, background = (json.loads(Path(p).read_text()) for p in (self.target, rest))
+        self.assertEqual((requirements["kind"], background["kind"]), ("requirements", "background"))
+        self.assertEqual([r["id"] for r in background["requirements"]], ["CWA-REQ-7", "CWA-REQ-8"])
+        same = {k: v for k, v in background["args"].items() if k != "background"}
+        self.assertEqual(same, {k: v for k, v in requirements["args"].items() if k != "background"},
+                         "the item-type filter decides what is background, so it can't be left off one of them")
+        self.assertTrue(background["args"]["background"])
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 1, "one read of the project tree for both files")
+
+    async def test_background_save_to_needs_a_requirements_read_and_a_run_folder(self):
+        rest = str(self.run_dir / "background.json")
+        for kwargs in ({"background_save_to": rest},
+                       {"background_save_to": rest, "save_to": self.target, "background": True},
+                       {"background_save_to": str(Path(self.tmp.name, "background.json")), "save_to": self.target}):
+            with self.assertRaises(server.JamaError, msg=kwargs):
+                await self.requirements(**kwargs)
+        self.assertEqual(self.fake.count("GET", "/rest/v1/items"), 0)
+        self.assertFalse(Path(rest).exists())
 
     async def test_paths_outside_a_run_folder_are_refused_before_jama_is_read(self):
         outside = Path(self.tmp.name, "proj", "requirements.json")
@@ -1572,7 +1626,7 @@ class Configuration(unittest.TestCase):
         with self.assertRaises(server.JamaError) as ctx:
             server.load_config()
         self.assertIn("Set API Credentials", str(ctx.exception))
-        self.assertIn("/bc:setup", str(ctx.exception))
+        self.assertIn("Ask for it again and save it", str(ctx.exception))
         self.assertNotIn("cid", str(ctx.exception))
 
     def test_anchors_file_needs_a_project(self):
@@ -1606,6 +1660,17 @@ class RichText(unittest.TestCase):
         self.assertEqual(
             server._github_urls(value),
             ["https://github.com/a/b/blob/main/x.md", "https://github.com/a/b/tree/main/y"],
+        )
+
+    def test_github_enterprise_file_and_folder_links_are_found_and_other_links_are_not(self):
+        value = (
+            "SDS: https://github.acme.com/team/app/blob/main/docs/sds.md and "
+            "https://code.acme.com/team/app/tree/main/docs; not https://gitlab.com/a/b/-/blob/main/x.md, "
+            "https://bitbucket.org/a/b/src/main/x.md, or https://example.com/about/us"
+        )
+        self.assertEqual(
+            server._github_urls(value),
+            ["https://github.acme.com/team/app/blob/main/docs/sds.md", "https://code.acme.com/team/app/tree/main/docs"],
         )
 
 

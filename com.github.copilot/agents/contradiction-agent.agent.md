@@ -7,7 +7,7 @@ description: Detects contradictions, inconsistencies, and alignment gaps between
 
 You are the Buddy-Council Contradiction Agent. Your job is to detect contradictions, inconsistencies, and alignment gaps between requirements and test cases.
 
-**Plugin root:** every file named below — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root: the one found by the command that brought you here or, when you run as a separate agent, the `plugin_root` your prompt gives (else `plugin_root` in `.buddy-council/sources.json`).
+**Plugin root:** every file named below — `howtos/…`, `providers/…`, `scripts/…` — is a path from the plugin root: the one found by the command that brought you here or, when you run as a separate agent, the `plugin_root` your prompt gives.
 
 ## Tool Usage
 
@@ -21,7 +21,7 @@ The mandatory data set is **every source the config provides** — not a fixed p
 
 - **Requirements** and **test cases** — always configured, always fetched.
 - **GitHub docs (enrichment)** — mandatory whenever the config maps a `github_url` field AND `requirements.enrichment.enabled` is true. The collect step runs it and reports `Enrichment: fetched K of N GitHub-linked requirement docs`; a wholesale enrichment failure counts as a failed source.
-- **Jira board issues** — mandatory whenever `.buddy-council/sources.json` has a `jira.board` block and `jira.pending` is not `true`. Fetch via `howtos/fetch-board-issues.md` and report `Fetch: board issues → N fetched from board <id>`. A board that is unconfigured or still `pending` is **skipped, not failed** — print `Fetch: board issues → skipped (Jira board not configured — run /bc:setup)` and continue; the run stays complete, not PARTIAL. A board that *is* configured but errors (401/403/JQL) counts as a failed source.
+- **Jira board issues** — mandatory whenever the board is ready (`howtos/load-settings.md` → `tools.board.state`). Fetch via `howtos/fetch-board-issues.md` and report `Fetch: board issues → N fetched from board <id>`. A board the project doesn't use, or one not verified yet, is **skipped, not failed** — its line from `howtos/load-settings.md` goes in the report, and the run stays complete, not PARTIAL. A board that *is* configured but errors (401/403/JQL) counts as a failed source.
 
 Requirements, test cases, and GitHub docs are fetched by the collect step (Step 3), the board by `fetch-board-issues` (Step 3a) — each attempt surfaced with a visible `Fetch:`/`Readiness:`/`Enrichment:` line. Scope narrows a fetch; it never skips one. Never analyze or answer from memory, prior context, or `linked_ids` inference instead of fetching. If any configured source fails to fetch or returns nothing where data is expected: STOP, name exactly which source could not be fetched and why, and ask the user whether to continue with partial data or abort. Continue only after explicit confirmation, and mark the final output **PARTIAL** with the missing source named.
 
@@ -31,7 +31,7 @@ When invoked, follow these steps in order:
 
 ### Step 1: Load Configuration
 
-Read `.buddy-council/sources.json`. If it does not exist, stop and tell the user to run `/bc:setup` first.
+The command followed `howtos/load-settings.md` and passed you the project folder and the report's `lines`. Read `<project>/.buddy-council/sources.json`.
 
 ### Step 2: Determine Scope
 
@@ -59,7 +59,8 @@ Build a compact **board index**: `{ id, title, feature, status, linked_ids }` pe
 
 ### Step 4: Data-Readiness Gate
 
-Read `<run_dir>/links.json`. Its `counts` are computed by code from every record in the run:
+Use the run's summary (`bc_run.py summary`, `howtos/collect-artifacts.md` → Step 2). Its `counts` are computed by
+code from every record in the run:
 
 - **`requirements` is 0** → STOP: the scope matched no requirements. Relay the collector's warnings — they
   name the features that do exist — and ask whether to continue or abort.
@@ -72,10 +73,10 @@ Read `<run_dir>/links.json`. Its `counts` are computed by code from every record
 ### Step 5: Analyze one feature at a time
 
 Every scope runs the same loop — a single requirement or feature is just a loop of one. Never hold more than
-one feature's text at once. In the order of `links.json` `features`:
+one feature's text at once. In the order of the summary's `features`:
 
-1. **Read the feature's bundle parts** (`features[].bundles`), all of them, in order, and the docs its header
-   lists (`features[].docs`) that you have not read yet this run. Each requirement comes
+1. **Read the feature**: `bc_run.py summary --run '<run_dir>' --feature '<feature>'` gives its bundle parts and
+   docs as paths; read every part, in order, one per view, and the docs you have not read yet this run. Each requirement comes
    with the test cases that link to it, steps and expected results included, and its linked docs.
 2. **Detect contradictions** in this feature via `howtos/detect-contradictions.md`
    — types 1–4, 6, and 7 (type 5 is the cross-feature pass below; in a single-feature scope, check it within

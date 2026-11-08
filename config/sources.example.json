@@ -1,27 +1,43 @@
 {
+  "version": 2,
   "requirements": {
     "provider": "jama",
     "base_url": "https://company.jamacloud.com",
     "project_id": 42,
     "project_key": "CWA",
-    "project_name": "Clinical Window App"
+    "project_name": "Clinical Window App",
+    "roots": [{ "id": 1001, "path": "Product / Software Requirements" }],
+    "exclude": [{ "id": 1950, "path": "Product / Software Requirements / Archive" }],
+    "feature_inference": { "strategy": "hierarchical_folder", "folder_item_type": "Folder", "depth": 1 },
+    "item_type_filter": ["Mobile SRS"],
+    "item_type_exclude": ["Text", "Test Case"],
+    "field_mapping": { "status": "Status", "rationale": "Rationale", "github_url": "Linked to Github" },
+    "enrichment": {
+      "enabled": true,
+      "strategy": "cli",
+      "max_doc_chars": 50000,
+      "check_url": "https://github.com/org/repo/blob/main/docs/sds.md"
+    },
+    "pending": false
   },
   "test_cases": {
     "provider": "testrail",
-    "base_url": "https://your-instance.testrail.io",
+    "base_url": "https://company.testrail.io",
     "project_id": 1,
-    "suite_id": null,
+    "suite_id": 12,
     "authoring": {
       "template_id": 2,
       "type_id": 7,
       "priority_id": 4,
       "requirement_field": "custom_jama_req_id",
       "section_strategy": "linked",
-      "section_root": null,
+      "section_root": "V&V",
       "create_missing_sections": true
-    }
+    },
+    "pending": false
   },
   "jira": {
+    "provider": "jira",
     "base_url": "https://jira.company.com",
     "deployment": "server",
     "project_key": "PROJ",
@@ -59,5 +75,52 @@
       }
     },
     "pending": false
+  },
+  "project": {
+    "enabled": true,
+    "ignore_dirs": ["node_modules", "dist", ".next", "build", "vendor", "__pycache__", ".venv", "target"],
+    "id_patterns": ["CWA-REQ-\\d+", "TC-\\d+"]
+  },
+  "feature_order": ["Login", "Patient Monitoring"],
+  "automation": {
+    "enabled": true,
+    "status": "ready",
+    "pending": ["no phone is connected over USB"],
+    "guided": ["run ./setup in a terminal — it signs WebDriverAgent for the phone"],
+    "stack": { "framework": "Appium", "language": "Java", "build": "gradle", "runner": "TestNG", "evidence": "build.gradle" },
+    "platforms": ["ios", "android"],
+    "driver": {
+      "mode": "project",
+      "appium": "/opt/homebrew/bin/appium",
+      "version": "2.19.0",
+      "drivers": { "*": "9.10.5" },
+      "expected": { "*": "9.10.5" },
+      "why": "the project's Appium has no uiautomator2 driver"
+    },
+    "phone": {
+      "platform": "ios",
+      "udid": "00008110-001A2B3C4D5E6F70",
+      "name": "QA iPhone",
+      "source": "MYAPP_UDID",
+      "none": "no phone is connected over USB",
+      "udid_setting": "MYAPP_UDID"
+    },
+    "apps": {
+      "*": { "path": "/Users/you/Desktop/myapp.ipa", "exists": true, "id": "com.acme.myapp", "from": "config/local.environment.config.json" }
+    },
+    "language": "en",
+    "setup_script": { "path": "setup", "check": "--check", "udid_setting": "MYAPP_UDID" },
+    "tools": { "node": "26.13.0", "appium_mcp": "1.99.2", "jdk": "21.0.5", "android_sdk": "36.0.0" },
+    "server": { "answered_in_s": 4.2, "tools": 48, "version": "1.99.2" },
+    "proof": {
+      "phone": "QA iPhone",
+      "udid": "00008110-001A2B3C4D5E6F70",
+      "platform": "ios",
+      "mode": "project",
+      "page_source": "/Users/you/.buddy-council/automation/page-sources/home.xml",
+      "bytes": 48210,
+      "checked_at": "2026-11-05T10:00:00Z"
+    },
+    "checked_at": "2026-11-05T10:00:00Z"
   }
 }

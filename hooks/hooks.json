@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/validate-bash.sh",
-            "description": "Hard-block destructive Bash; auto-approve the plugin's curated read-only commands",
+            "description": "Hard-block destructive Bash; auto-approve the plugin's own scripts, each as one plain command",
             "timeout": 10
           }
         ]
@@ -19,17 +19,6 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/auto-approve-mcp.sh",
             "description": "Auto-approve read-only MCP fetches (testrail/github reads, Jama reads, Atlassian Jira reads, appium-mcp screen reads); write tools like jira_create_issue, and every appium tap, session, or app launch, still prompt",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/auto-approve-plugin-writes.sh",
-            "description": "Auto-approve writes to the plugin's own generated files (.buddy-council config and progress log); keys and all other writes still prompt",
             "timeout": 10
           }
         ]

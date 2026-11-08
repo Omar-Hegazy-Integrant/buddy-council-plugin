@@ -39,7 +39,7 @@ mcp dev server.py
 | Tool | Description |
 |------|-------------|
 | `testrail_get_projects` | List all projects |
-| `testrail_get_suites` | List suites for a project |
+| `testrail_get_suites` | List suites for a project, or read one suite by `suite_id` (its `project_id` names the project) |
 | `testrail_get_sections` | List sections (folders) for a project/suite, each with a derived `path` |
 | `testrail_get_cases` | Fetch test cases with pagination |
 | `testrail_get_cases_by_refs` | Fetch cases linked to given requirement IDs |
@@ -48,6 +48,7 @@ mcp dev server.py
 | `testrail_get_case_types` | Case types, for `type_id` |
 | `testrail_get_priorities` | Priorities, for `priority_id` |
 | `testrail_get_templates` | Case templates for a project, for `template_id` |
+| `testrail_get_authoring_defaults` | What creating cases needs, in one small answer: the steps template, case type, and priority to use, the custom field that holds requirement links (confirmed on sampled cases, or null), and where new cases go |
 | `testrail_get_requirement_ids` | Which requirement IDs the suite's cases link to: counts, prefixes, and a spread sample |
 | `testrail_get_linked_cases` | The cases linked to given requirement IDs, and the sections they sit in; `unlinked=true` lists the orphans |
 | `testrail_get_canonical_cases` | Cases in the plugin's canonical schema — `TC-` id, `linked_ids` from the requirement field, steps, References, folder path — filtered by requirement IDs, folder, or `unlinked`; `save_to` writes them into a run folder |

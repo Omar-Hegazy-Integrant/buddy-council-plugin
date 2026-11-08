@@ -27,19 +27,11 @@ The text the user typed after the command holds:
 
 ## Execution
 
-1. First, verify that `.buddy-council/sources.json` exists. If not, tell the user:
-   > Configuration not found. Please run `/bc:setup` to configure your data sources first.
+1. Follow `howtos/load-settings.md` with `--need board --reads test_cases` — or with `--reads test_cases` alone under `--dry-run`, which never touches Jira. A project that uses no Jira board is asked for the board link on the spot and carries on; a board saved but not verified stops the run until `/bc:setup` checks it again (a self-hosted Jira usually needs the VPN).
 
-2. Check the Jira dev board in `.buddy-council/sources.json` (which board/project to file into, and `jira.base_url`, the `site` every Jira call passes — the credential itself is the site's key and the connector's business, not this command's):
-   - If the `jira` section or `jira.board` is missing AND `--dry-run` is NOT present, warn:
-     > No Jira dev board is configured. Run `/bc:setup` — Step 3 is required — or use `--dry-run` to test without creating a real ticket.
-   - If `jira.pending` is `true` AND `--dry-run` is NOT present, warn:
-     > Your Jira board is recorded but the connection was never verified. Re-run `/bc:setup` to re-test it — if Jira is self-hosted, check you're on the VPN first.
-   - If `--dry-run` flag is present, proceed (dry-run never touches Jira)
+2. Run the ticket validation agent's steps in this session: follow `com.github.copilot/agents/ticket-validation-agent.agent.md`, passing the ticket description and any flags.
 
-3. Run the ticket validation agent's steps in this session: follow `com.github.copilot/agents/ticket-validation-agent.agent.md`, passing the ticket description and any flags.
-
-4. The agent will:
+3. The agent will:
    - Fetch requirements from Jama
    - Find requirements related to the ticket description (feature matching + keyword matching)
    - Detect contradictions between ticket and requirements
@@ -156,9 +148,9 @@ https://yourorg.atlassian.net/browse/PROJ-1234
 
 - **No ticket description provided**: Prompt user for description
 - **No related requirements found**: Automatically skip contradiction detection and proceed to gap analysis
-- **Jira not configured**: Suggest `/bc:setup` or `--dry-run` mode
+- **No Jira board in this project**: asked for on the spot (`howtos/load-settings.md`); `--dry-run` works without one
 - **Atlassian tools unavailable**: the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*). There is no authorization step; a site's first call downloads `mcp-atlassian` through `uv`, which can take half a minute
-- **Ticket creation fails**: if 401, the token saved for the Jira site is wrong or expired — re-run `/bc:setup`; if 400, check the project key and issue type; if 403, the account lacks "Create Issues" on that project or an IP allowlist is blocking the request
+- **Ticket creation fails**: if 401, the key saved for the Jira site is wrong or expired — ask for it on the spot and retry (`howtos/load-settings.md` → *When a tool says no*); if 400, check the project key and issue type; if 403, the account lacks "Create Issues" on that project or an IP allowlist is blocking the request
 
 ## Tips
 

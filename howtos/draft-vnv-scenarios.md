@@ -89,7 +89,8 @@ indistinguishable from an oversight, and a reviewer needs to see that the check 
    the `pending-validation` from cloning and any `pending-questions` from an earlier round — then add this
    one. `src-<DEV-KEY>`, the platform label, and human-added labels are preserved.
 5. Stamp `scenarios_written_at` (ISO 8601 UTC) and `scenarios_source: "phase5"` in the progress log, **and
-   store the scenarios structurally** alongside it as `stories[].scenarios`:
+   store the scenarios structurally** alongside it as `stories[].scenarios` — one `bc_run.py progress` save, as
+   the V&V agent's *Progress Log* section shows:
 
    ```json
    "scenarios": [

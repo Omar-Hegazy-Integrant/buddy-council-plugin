@@ -7,7 +7,7 @@ step to the analysis as files, so the data itself never passes through a model:
   requirements.json  written by the Jama server (``save_to``)
   background.json    lookups on Jama only: the rest of the project, context for answers (``save_to``)
   test_cases.json    written by the TestRail server (``save_to``)
-  docs/, docs.json   GitHub docs the requirements link to (``enrich``, gh CLI strategy)
+  docs/, docs.json   GitHub docs the requirements link to (``enrich``, the cli strategy)
   links.json         requirement <-> test case links, untested, orphans, stranded links (``link``)
   bundles/*.md       one feature at a time, verbatim text, each part small enough for one read (``link``)
   manifest.json      what was collected, when, and the counts
@@ -15,16 +15,34 @@ step to the analysis as files, so the data itself never passes through a model:
 Subcommands, each printing one JSON object to stdout:
 
   new    --project DIR --command NAME [--scope TEXT]   create a run folder, prune old ones
-  enrich --run DIR                                     fetch the linked GitHub docs with the gh CLI
+  enrich --run DIR                                     fetch the linked GitHub docs with the first sign-in
+                                                       that works: gh, GH_TOKEN/GITHUB_TOKEN, the host's saved
+                                                       key, then none (public repositories)
   link   --run DIR                                     cross-link, write links.json and the bundles
   search --run DIR --query TEXT [--concept 'a|b|c']... [--feature TEXT] [--top N]
                                                        rank the run against an ask (BM25), write search/*.md
   show   --run DIR --ids 'ID, ID'                      print those requirements, background items, and test
                                                        cases (Markdown)
+  summary --run DIR [--feature NAME]                   what a model reads of links.json, small enough to read
+                                                       at once: the checks, lines, counts, and feature rows —
+                                                       or one feature's bundle parts, docs, and lists
   recent --project DIR [--max-age-minutes N]           the newest complete, verified run of the whole scope
+  doc    --url URL [--max-chars N]                     print one GitHub doc, read with the first sign-in that
+                                                       works (for commands that enrich without a run folder)
 
-Nothing here talks to Jama, TestRail, or Jira, and nothing is written outside the run folder. ``enrich``
-reads GitHub only through ``gh api`` GET requests.
+It also saves the progress logs beside the settings, so neither prompts:
+
+  progress --project DIR --log onboarding|vnv --patch JSON   merge a change into onboarding-progress.json or
+                                                       vnv-progress.json (created when absent)
+  note     --project DIR --title TEXT --text TEXT      append one entry to onboarding-notes.md
+  archive  --project DIR --log onboarding|vnv          set a log (and its notes) aside under a dated name
+
+``--patch`` is JSON on one line, with every ' written as \u0027, so the command stays one plain line the bash hook
+can approve. It merges like the settings do — objects key by key, anything else replaces — except that the log's
+own list merges item by item: onboarding ``features`` by ``name``, V&V ``stories`` by ``dev_key``.
+
+Nothing here talks to Jama, TestRail, or Jira, and nothing is written outside the project's .buddy-council folder.
+``enrich`` reads GitHub only with GET requests, never following a redirect with a token.
 """
 
 from __future__ import annotations
@@ -32,6 +50,8 @@ from __future__ import annotations
 import argparse
 import base64
 import concurrent.futures
+import contextlib
+import copy
 import datetime
 import json
 import math
@@ -43,7 +63,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -134,7 +156,10 @@ def cmd_new(project_text: str, command: str, scope: str, keep: int = KEEP_RUNS) 
     project = Path(project_text).expanduser().resolve()
     config_dir = project / ".buddy-council"
     if not config_dir.is_dir():
-        raise RunError(f"{project} has no .buddy-council folder — run /bc:setup in this project first.")
+        if command != "setup":
+            raise RunError(f"{project} has no .buddy-council folder — run /bc:setup in this project first.")
+        config_dir.mkdir()  # setup's own run comes before any settings exist
+        exclude_from_git(project)
     runs = config_dir / "runs"
     runs.mkdir(mode=0o700, exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "-", command.lower()).strip("-")[:32] or "run"
@@ -149,13 +174,47 @@ def cmd_new(project_text: str, command: str, scope: str, keep: int = KEEP_RUNS) 
         run / "manifest.json",
         {"run_id": run.name, "command": command, "scope": scope, "project": str(project), "created_at": utc_now()},
     )
-    return {
+    paths = {
         "run_dir": str(run),
         "requirements": str(run / "requirements.json"),
-        "background": str(run / "background.json"),
         "test_cases": str(run / "test_cases.json"),
-        "pruned": pruned,
     }
+    if command == "lookup":  # only a lookup searches the rest of the project
+        paths["background"] = str(run / "background.json")
+    return {**paths, "pruned": pruned}
+
+
+def exclude_from_git(project: Path) -> str | None:
+    """Keep .buddy-council/ out of git through the clone's own info/exclude, never a tracked .gitignore."""
+    try:
+        done = subprocess.run(["git", "-C", str(project), "rev-parse", "--git-path", "info/exclude"],
+                              capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0 or not done.stdout.strip():
+        return None
+    path = Path(done.stdout.strip())
+    path = path if path.is_absolute() else project / path
+    try:
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        if any(line.strip().strip("/") == ".buddy-council" for line in text.splitlines()):
+            return str(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(("" if not text or text.endswith("\n") else "\n") + ".buddy-council/\n")
+    except OSError:
+        return None
+    return str(path)
+
+
+def merge(base: dict, patch: dict) -> dict:
+    """Merge a patch in place: objects key by key, anything else — a list, a number, null — replaces."""
+    for name, value in patch.items():
+        if isinstance(value, dict) and isinstance(base.get(name), dict):
+            merge(base[name], value)
+        else:
+            base[name] = copy.deepcopy(value)
+    return base
 
 
 def prune(runs: Path, keep: int, current: str) -> int:
@@ -179,12 +238,15 @@ def prune(runs: Path, keep: int, current: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# enrich — GitHub docs through the gh CLI (the "cli" enrichment strategy)
+# enrich — GitHub docs, read with the first sign-in that works (the "cli" enrichment strategy)
 # ---------------------------------------------------------------------------
+
+URLOPEN = None  # tests put a fake here; None is urllib's own opener, which never follows a redirect
 
 
 def parse_github_url(url: str) -> dict[str, Any]:
-    """A github.com blob/tree URL, or a raw.githubusercontent.com one, as {owner, repo, path, ref, anchor, kind}."""
+    """A GitHub blob/tree URL — github.com, raw.githubusercontent.com, or a GitHub Enterprise host — as
+    {owner, repo, path, ref, anchor, kind, host}."""
     parsed = urllib.parse.urlsplit(url.strip())
     host = (parsed.hostname or "").lower()
     parts = [urllib.parse.unquote(p) for p in parsed.path.split("/") if p]
@@ -192,29 +254,46 @@ def parse_github_url(url: str) -> dict[str, Any]:
         raise RunError("unsupported_url: not an https URL")
     if host == "raw.githubusercontent.com" and len(parts) >= 4:
         owner, repo, ref, rest, kind = parts[0], parts[1], parts[2], parts[3:], "blob"
-    elif host == "github.com" and len(parts) >= 4 and parts[2] in ("blob", "tree"):
+        host = "github.com"
+    elif bc_keys.github_host(host) and len(parts) >= 4 and parts[2] in ("blob", "tree"):
         owner, repo, kind, ref, rest = parts[0], parts[1], parts[2], parts[3], parts[4:]
+        host = "github.com" if host == "www.github.com" else host
     else:
-        raise RunError("unsupported_url: not a github.com blob or tree URL")
+        raise RunError("unsupported_url: not a GitHub blob or tree URL")
     if kind == "blob" and not rest:
         raise RunError("unsupported_url: no file path in the URL")
     for piece in [owner, repo, ref, *rest]:
         if piece in (".", "..") or any(c in piece for c in "\n\r?#"):
             raise RunError("unsupported_url: malformed path in the URL")
-    return {"owner": owner, "repo": repo, "path": "/".join(rest), "ref": ref, "anchor": parsed.fragment or None, "kind": kind}
+    return {"owner": owner, "repo": repo, "path": "/".join(rest), "ref": ref, "anchor": parsed.fragment or None, "kind": kind,
+            "host": host}
 
 
-def gh_api(endpoint: str, runner: Any = subprocess.run) -> Any:
+GITHUB_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN")
+ENTERPRISE_TOKENS = ("GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+
+
+def gh_env(host: str) -> dict[str, str]:
+    """The environment gh runs in for one host, without the tokens that belong elsewhere: gh sends GH_TOKEN to
+    github.com and *.ghe.com hosts, and GH_ENTERPRISE_TOKEN to whatever Enterprise host it targets."""
+    if host == bc_keys.gh_host():
+        return dict(os.environ)
+    drop = set(ENTERPRISE_TOKENS) | (set() if host == "github.com" else set(GITHUB_TOKENS))
+    return {name: value for name, value in os.environ.items() if name not in drop}
+
+
+def gh_api(endpoint: str, runner: Any = subprocess.run, host: str = "github.com") -> Any:
     """GET one GitHub API endpoint through gh. Raises RunError("<kind>: <detail>") on failure."""
     try:
         done = runner(
-            ["gh", "api", "-H", "Accept: application/vnd.github+json", endpoint],
+            ["gh", "api", "--hostname", host, "-H", "Accept: application/vnd.github+json", endpoint],
             capture_output=True,
             text=True,
             timeout=GH_TIMEOUT_SECONDS,
+            env=gh_env(host),
         )
     except FileNotFoundError:
-        raise RunError("gh_missing: the gh CLI is not installed — install it, or switch enrichment to mcp in /bc:setup") from None
+        raise RunError("gh_missing: the gh CLI is not installed") from None
     except subprocess.TimeoutExpired:
         raise RunError(f"network: gh api timed out after {GH_TIMEOUT_SECONDS} s") from None
     if done.returncode != 0:
@@ -233,6 +312,104 @@ def gh_api(endpoint: str, runner: Any = subprocess.run) -> Any:
         raise RunError("unknown: gh returned something other than JSON") from None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A token is sent only to the host it belongs to, so a redirect is an error, never followed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401 - urllib's signature
+        raise urllib.error.HTTPError(req.full_url, code, f"redirected to {newurl}, which is not followed", headers, fp)
+
+
+def http_api(host: str, token: str | None, endpoint: str) -> Any:
+    """GET one GitHub API endpoint over HTTPS, signed in with `token` or not at all."""
+    base = "https://api.github.com" if host == "github.com" else f"https://{host}/api/v3"
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "buddy-council"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(f"{base}/{endpoint}", headers=headers)
+    try:
+        opener = URLOPEN or urllib.request.build_opener(_NoRedirect).open
+        with opener(request, timeout=GH_TIMEOUT_SECONDS) as response:
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        with contextlib.suppress(Exception):
+            detail = exc.read(300).decode("utf-8", "replace")
+        remaining = exc.headers.get("X-RateLimit-Remaining") if exc.headers else None
+        if exc.code == 404:
+            raise RunError(f"not_found: HTTP 404 from {host}") from None
+        if exc.code in (403, 429) and (remaining == "0" or "rate limit" in detail.lower()):
+            raise RunError(f"rate_limit: {host} rate-limited the request") from None
+        if exc.code in (401, 403):
+            raise RunError(f"auth_failed: HTTP {exc.code} from {host}") from None
+        raise RunError(f"unknown: HTTP {exc.code} from {host} ({exc.msg})") from None
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise RunError(f"network: {getattr(exc, 'reason', exc)}") from None
+    try:
+        return json.loads(body)
+    except ValueError:
+        raise RunError(f"unknown: {host} returned something other than JSON") from None
+
+
+def env_tokens(host: str) -> tuple[str, ...]:
+    """The environment variables whose token may go to `host`: GH_TOKEN or GITHUB_TOKEN for github.com, and for
+    the Enterprise host the user named in GH_HOST, its token — never one for a host the user didn't name."""
+    if host == "github.com":
+        return GITHUB_TOKENS
+    if host != bc_keys.gh_host():
+        return ()
+    return GITHUB_TOKENS if host.endswith(".ghe.com") else ENTERPRISE_TOKENS
+
+
+def readers(host: str, runner: Any = subprocess.run) -> list[tuple[str, Any]]:
+    """The ways to read GitHub at a host, in the order they are tried: gh, a token in the environment set for the
+    host (env_tokens), the key saved for the host, then no sign-in, which reads public repositories."""
+    found: list[tuple[str, Any]] = [("gh", lambda endpoint: gh_api(endpoint, runner, host))]
+    for name in env_tokens(host):
+        token = os.environ.get(name, "").strip()
+        if token:
+            found.append((name, lambda endpoint, token=token: http_api(host, token, endpoint)))
+            break
+    if any(entry["site"] == host for entry in bc_keys.sites("github")):
+        try:
+            token = bc_keys.read_key(host, "github", migrate=False)["token"]
+            found.append(("saved key", lambda endpoint, token=token: http_api(host, token, endpoint)))
+        except bc_keys.KeyStoreError:
+            pass
+    found.append(("no sign-in", lambda endpoint: http_api(host, None, endpoint)))
+    return found
+
+
+# The errors the chain reports when no sign-in could read a doc, most telling first. A missing file seen by a reader
+# that could read the repository is final: another sign-in won't find it either.
+ERROR_ORDER = ("file_not_found", "directory_no_markdown", "repo_inaccessible", "rate_limit", "auth_failed", "network",
+               "unknown", "not_found", "gh_missing")
+FINAL = {"file_not_found", "directory_no_markdown"}
+
+
+def read_doc(url: str, runner: Any = subprocess.run) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
+    """One doc, read with the first sign-in that works. Returns the doc, the sign-in that read it, and what was tried;
+    raises the most telling error when none could, with `.tried` attached."""
+    locator = parse_github_url(url)
+    tried: list[dict[str, Any]] = []
+    errors: list[RunError] = []
+    for name, get in readers(locator["host"], runner):
+        try:
+            doc = fetch_doc(url, get)
+        except RunError as exc:
+            kind = str(exc).partition(":")[0]
+            tried.append({"reader": name, "error": kind})
+            errors.append(exc)
+            if kind in FINAL:
+                break
+            continue
+        tried.append({"reader": name, "ok": True})
+        return doc, name, tried
+    order = {kind: n for n, kind in enumerate(ERROR_ORDER)}
+    best = min(errors, key=lambda exc: order.get(str(exc).partition(":")[0], len(order)))
+    best.tried = tried  # type: ignore[attr-defined]
+    raise best
+
+
 def contents_endpoint(locator: dict[str, Any], path: str) -> str:
     quoted = urllib.parse.quote(path, safe="/")
     ref = urllib.parse.quote(locator["ref"], safe="")
@@ -241,56 +418,57 @@ def contents_endpoint(locator: dict[str, Any], path: str) -> str:
     return f"repos/{owner}/{repo}/contents/{quoted}?ref={ref}"
 
 
-def fetch_file(locator: dict[str, Any], path: str, runner: Any) -> str:
-    body = gh_api(contents_endpoint(locator, path), runner)
+def fetch_file(locator: dict[str, Any], path: str, get: Any) -> str:
+    body = get(contents_endpoint(locator, path))
     if isinstance(body, list):
         raise RunError("is_directory: the URL points at a folder")
     content = body.get("content") or ""
     if not content and body.get("sha") and (body.get("size") or 0) > 0:  # files over ~1 MB come back empty
         owner, repo = (urllib.parse.quote(locator[k], safe="") for k in ("owner", "repo"))
         sha = urllib.parse.quote(str(body["sha"]), safe="")
-        content = gh_api(f"repos/{owner}/{repo}/git/blobs/{sha}", runner).get("content") or ""
+        content = get(f"repos/{owner}/{repo}/git/blobs/{sha}").get("content") or ""
     return base64.b64decode(content).decode("utf-8", errors="replace")
 
 
-def fetch_directory(locator: dict[str, Any], runner: Any) -> tuple[str, str | None]:
-    entries = gh_api(contents_endpoint(locator, locator["path"]), runner)
+def fetch_directory(locator: dict[str, Any], get: Any) -> tuple[str, str | None]:
+    entries = get(contents_endpoint(locator, locator["path"]))
     if not isinstance(entries, list):
         raise RunError("unknown: expected a folder listing")
     readme = next((e for e in entries if str(e.get("name", "")).lower() == "readme.md"), None)
     if readme:
-        return fetch_file(locator, str(readme["path"]), runner), None
+        return fetch_file(locator, str(readme["path"]), get), None
     markdown = [e for e in entries if e.get("type") == "file" and str(e.get("name", "")).lower().endswith(".md")]
     if not markdown:
         raise RunError("directory_no_markdown: the folder has no README.md or markdown files")
     chosen = markdown[:5]
-    content = "\n\n---\n\n".join(fetch_file(locator, str(e["path"]), runner) for e in chosen)
+    content = "\n\n---\n\n".join(fetch_file(locator, str(e["path"]), get) for e in chosen)
     omitted = len(markdown) - len(chosen)
     return content, (f"{omitted} more markdown files in the folder were not fetched" if omitted else None)
 
 
-def fetch_doc(url: str, runner: Any = subprocess.run) -> dict[str, Any]:
-    """One doc's content, as the gh CLI provider fetches it: a file, or a folder's README or first *.md files."""
+def fetch_doc(url: str, get: Any) -> dict[str, Any]:
+    """One doc's content, read through `get` (one sign-in): a file, or a folder's README or first *.md files."""
     locator = parse_github_url(url)
     try:
         if locator["kind"] == "tree":
-            content, note = fetch_directory(locator, runner)
+            content, note = fetch_directory(locator, get)
         else:
-            content, note = fetch_file(locator, locator["path"], runner), None
+            content, note = fetch_file(locator, locator["path"], get), None
     except RunError as exc:
         text = str(exc)
         if text.startswith("is_directory"):
-            content, note = fetch_directory(locator, runner)
+            content, note = fetch_directory(locator, get)
         elif text.startswith("not_found"):
             owner, repo = (urllib.parse.quote(locator[k], safe="") for k in ("owner", "repo"))
             try:
-                gh_api(f"repos/{owner}/{repo}", runner)
+                get(f"repos/{owner}/{repo}")
             except RunError:
                 raise RunError(f"repo_inaccessible: {locator['owner']}/{locator['repo']} is private to you or does not exist") from None
             raise RunError(f"file_not_found: {locator['path']} at {locator['ref']}") from None
         else:
             raise
-    return {"locator": {k: locator[k] for k in ("owner", "repo", "path", "ref", "anchor")}, "content": content, "note": note}
+    keep = ("owner", "repo", "path", "ref", "anchor") + (() if locator["host"] == "github.com" else ("host",))
+    return {"locator": {k: locator[k] for k in keep}, "content": content, "note": note}
 
 
 IMAGE_MD = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)[^)]*\)")
@@ -313,7 +491,9 @@ def referenced_images(content: str, locator: dict[str, Any]) -> list[dict[str, s
             while resolved.startswith("../") or resolved == "..":
                 resolved = resolved[3:]
             resolved = resolved.lstrip("/")
-            url = f"https://raw.githubusercontent.com/{locator['owner']}/{locator['repo']}/{locator['ref']}/{resolved}"
+            url = (f"https://raw.githubusercontent.com/{locator['owner']}/{locator['repo']}/{locator['ref']}/{resolved}"
+                   if locator.get("host", "github.com") == "github.com" else
+                   f"https://{locator['host']}/{locator['owner']}/{locator['repo']}/raw/{locator['ref']}/{resolved}")
         found.append({"alt": alt, "url": url})
     return found
 
@@ -377,7 +557,8 @@ def cmd_enrich(run_text: str, runner: Any = subprocess.run) -> dict[str, Any]:
 
     def one(url: str) -> tuple[str, dict[str, Any]]:
         try:
-            return url, fetch_doc(url, runner)
+            doc, reader, _ = read_doc(url, runner)
+            return url, {**doc, "read_with": reader}
         except RunError as exc:
             kind, _, message = str(exc).partition(": ")
             return url, {"error": kind, "message": message or kind}
@@ -414,6 +595,7 @@ def cmd_enrich(run_text: str, runner: Any = subprocess.run) -> dict[str, Any]:
         }
         if outcome.get("note"):
             entry["note"] = outcome["note"]
+        entry["read_with"] = outcome["read_with"]
         docs.append(entry)
     write_json(run / "docs.json", {"strategy": "cli", "docs": docs, "failed": failed, "pending": []})
     line = f"Enrichment: fetched {len(docs)} of {len(urls)} GitHub-linked requirement docs"
@@ -482,8 +664,9 @@ def cmd_link(run_text: str) -> dict[str, Any]:
     docs_data = read_json(run / "docs.json") or {}
     if requirements_data is None:
         raise RunError("requirements.json is missing — the requirements fetch did not complete.")
+    config = read_json(run.parent.parent / "sources.json") or {}
     warnings: list[str] = []
-    if cases_data is None:
+    if cases_data is None and (config.get("test_cases") or {}).get("provider") == "testrail":
         warnings.append("test_cases.json is missing — the test case fetch did not complete, so coverage cannot be measured.")
     requirements = requirement_list(requirements_data)
     cases = case_list(cases_data)
@@ -568,9 +751,9 @@ def cmd_link(run_text: str) -> dict[str, Any]:
         for rid in doc.get("requirement_ids") or []:
             missing_by_req.setdefault(key(rid), []).append(doc)
 
-    config = read_json(run.parent.parent / "sources.json") or {}
-    background_data = read_json(run / "background.json")
-    expect_background = manifest.get("command") == "lookup" and (config.get("requirements") or {}).get("provider") == "jama"
+    lookup = manifest.get("command") == "lookup"
+    background_data = read_json(run / "background.json") if lookup else None  # only a lookup reads the rest
+    expect_background = lookup and (config.get("requirements") or {}).get("provider") == "jama"
     mismatches = verify_run(config, manifest, requirements_data, cases_data, background_data)
     lines, missing, enrichment = report_lines(
         config, requirements_data, requirements, cases_data, cases, docs_data, background_data, expect_background
@@ -999,7 +1182,9 @@ def report_lines(
     elif expect_background:
         lines.append("Fetch: background → FAILED — no background file in the run")
         missing.append("background")
-    if cases_data is None:
+    if cases_data is None and (config.get("test_cases") or {}).get("provider") != "testrail":
+        lines.append("Fetch: test cases → skipped, not used in this project")
+    elif cases_data is None:
         lines.append("Fetch: test cases → FAILED — no test case file in the run")
         missing.append("test cases")
     else:
@@ -1581,6 +1766,57 @@ def cmd_show(run_text: str, ids_text: str) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+ROW_FIELDS = ("feature", "requirements", "tested", "untested", "retired", "test_cases", "orphans", "coverage_pct")
+
+
+def cmd_summary(run_text: str, feature: str = "") -> dict[str, Any]:
+    """What a model reads of links.json, small enough to read at once: links.json itself is for code, and a whole
+    project's runs it at 100 KB. Without a feature: the checks, the lines, the counts, and one short row per
+    feature. With one: that feature's bundle parts and docs as paths, and its untested requirements, orphans,
+    and stranded links."""
+    run = run_folder(run_text)
+    links = read_json(run / "links.json")
+    if not isinstance(links, dict):
+        raise RunError("links.json is missing — the link step did not run, so the collection did not finish.")
+    rows = links.get("features") or []
+    if feature.strip():
+        wanted = feature.strip().casefold()
+        row = next((r for r in rows if str(r.get("feature") or "").casefold() == wanted), None)
+        if row is None:
+            names = ", ".join(str(r.get("feature")) for r in rows)
+            raise RunError(f"no feature {feature.strip()!r} in this run; its features are: {names}")
+
+        def mine(name: str) -> list[dict[str, Any]]:
+            return [entry for entry in links.get(name) or [] if entry.get("feature") == row.get("feature")]
+
+        return {
+            "run_dir": str(run),
+            "feature": {**{k: row.get(k) for k in ROW_FIELDS},
+                        "bundles": [str(run / part) for part in row.get("bundles") or []],
+                        "docs": [str(run / doc) for doc in row.get("docs") or []]},
+            "untested": mine("untested"),
+            "orphans": mine("orphans"),
+            "stranded": mine("stranded"),
+            "lists_truncated": links.get("lists_truncated", False),
+        }
+    manifest = read_json(run / "manifest.json") or {}
+    return {
+        "run_dir": str(run),
+        "command": manifest.get("command"),
+        "scope": links.get("scope"),
+        "lines": links.get("lines") or [],
+        "missing": links.get("missing") or [],
+        "mismatches": links.get("mismatches") or [],
+        "warnings": links.get("warnings") or [],
+        "enrichment": links.get("enrichment") or {},
+        "counts": links.get("counts") or {},
+        "features": [{**{k: r.get(k) for k in ROW_FIELDS}, "parts": len(r.get("bundles") or []),
+                      "docs": len(r.get("docs") or [])} for r in rows],
+        "unknown_linked_ids": (links.get("unknown_linked_ids") or [])[:20],
+        "lists_truncated": links.get("lists_truncated", False),
+    }
+
+
 def cmd_recent(project_text: str, max_age_minutes: int = RECENT_MINUTES) -> dict[str, Any]:
     """The newest run of the whole scope, collected within max_age_minutes, complete, and still matching the config."""
     project = Path(project_text).expanduser().resolve()
@@ -1616,14 +1852,129 @@ def cmd_recent(project_text: str, max_age_minutes: int = RECENT_MINUTES) -> dict
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# progress, note, archive — the onboarding and V&V logs beside the settings
+# ---------------------------------------------------------------------------
+
+LOGS = {
+    "onboarding": {"file": "onboarding-progress.json", "notes": "onboarding-notes.md", "stamp": "last_updated",
+                   "items": ("features", "name")},
+    "vnv": {"file": "vnv-progress.json", "notes": None, "stamp": "updated_at", "items": ("stories", "dev_key")},
+}
+
+
+def project_folder(project_text: str) -> Path:
+    folder = Path(project_text).expanduser().resolve() / ".buddy-council"
+    if not folder.is_dir():
+        raise RunError(f"{folder.parent} has no .buddy-council folder — run /bc:setup in this project first.")
+    return folder
+
+
+def parse_patch(text: str) -> dict[str, Any]:
+    try:
+        patch = json.loads(text)
+    except ValueError as exc:
+        raise RunError(f"--patch isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
+    if not isinstance(patch, dict):
+        raise RunError("--patch takes a JSON object.")
+    return patch
+
+
+def merge_log(log: dict[str, Any], patch: dict[str, Any], items: tuple[str, str]) -> dict[str, Any]:
+    """Merge a patch into a progress log. The log's own list merges item by item, matched on its key field;
+    everything else merges like the settings: objects key by key, anything else replaces."""
+    name, field = items
+    for key, value in patch.items():
+        if key == name and isinstance(value, list) and all(isinstance(v, dict) and field in v for v in value):
+            existing = [item for item in log.get(key) or [] if isinstance(item, dict)]
+            by_key = {item.get(field): item for item in existing}
+            for item in value:
+                if item[field] in by_key:
+                    merge(by_key[item[field]], item)
+                else:
+                    copy_ = json.loads(json.dumps(item))
+                    existing.append(copy_)
+                    by_key[item[field]] = copy_
+            log[key] = existing
+        elif isinstance(value, dict) and isinstance(log.get(key), dict):
+            merge(log[key], value)
+        else:
+            log[key] = json.loads(json.dumps(value))
+    return log
+
+
+def cmd_progress(project_text: str, which: str, patch_text: str) -> dict[str, Any]:
+    spec = LOGS[which]
+    folder = project_folder(project_text)
+    path = folder / spec["file"]
+    if path.exists():
+        try:
+            log = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            raise RunError(f"{path.name} isn't valid JSON, so it was left as it is: repair it, or archive it and "
+                           "start again.") from None
+        if not isinstance(log, dict):
+            raise RunError(f"{path.name} doesn't hold a progress log, so it was left as it is.")
+    else:
+        log = {"version": 1}
+    patch = parse_patch(patch_text)
+    merge_log(log, patch, spec["items"])
+    if spec["stamp"] not in patch:
+        log[spec["stamp"]] = utc_now()
+    exclude_from_git(folder.parent)
+    write_json(path, log)
+    name, _ = spec["items"]
+    return {"log": str(path), "saved": sorted(patch), name: len(log.get(name) or [])}
+
+
+def cmd_note(project_text: str, title: str, text: str) -> dict[str, Any]:
+    folder = project_folder(project_text)
+    path = folder / LOGS["onboarding"]["notes"]
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry = f"## {stamp} — {' '.join(title.split())}\n\n{text.strip()}\n\n---\n\n"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(entry)
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o600)
+    return {"notes": str(path)}
+
+
+def cmd_archive(project_text: str, which: str) -> dict[str, Any]:
+    spec = LOGS[which]
+    folder = project_folder(project_text)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    archived = []
+    for name in (spec["file"], spec["notes"]):
+        if name and (folder / name).exists():
+            stem, dot, ext = name.rpartition(".")
+            target = folder / f"{stem}.{stamp}.{ext}"
+            os.replace(folder / name, target)
+            archived.append(str(target))
+    return {"archived": archived}
+
+
+def cmd_doc(url: str, max_chars: int = MAX_DOC_CHARS, runner: Any = subprocess.run) -> str:
+    """One GitHub doc as Markdown: a comment naming it and the sign-in that read it, then the doc verbatim."""
+    doc, reader, _ = read_doc(url, runner)
+    content = doc["content"]
+    if len(content) > max_chars:
+        content = content[:max_chars] + f"\n\n[...truncated, see {url} for full document]"
+    images = referenced_images(doc["content"], {**doc["locator"], "host": doc["locator"].get("host", "github.com")})
+    head = {"url": url, "read_with": reader, "locator": doc["locator"], "raw_size": len(doc["content"]),
+            "truncated": len(doc["content"]) > max_chars, "referenced_images": images}
+    if doc.get("note"):
+        head["note"] = doc["note"]
+    return f"<!-- {json.dumps(head, ensure_ascii=False)} -->\n{content}"
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Buddy-Council run folders: new, enrich, link, search, show, recent.")
+    parser = argparse.ArgumentParser(description="Buddy-Council run folders and progress logs.")
     sub = parser.add_subparsers(dest="action", required=True)
     new = sub.add_parser("new", help="create a run folder and prune old ones")
     new.add_argument("--project", required=True, help="absolute path of the project folder that holds .buddy-council")
     new.add_argument("--command", dest="command_name", required=True, help="the analysis command, e.g. coverage")
     new.add_argument("--scope", default="", help="the scope the run analyzes, as the user gave it")
-    for name, text in (("enrich", "fetch the GitHub docs the requirements link to (gh CLI)"), ("link", "cross-link and write links.json and the bundles")):
+    for name, text in (("enrich", "fetch the GitHub docs the requirements link to"), ("link", "cross-link and write links.json and the bundles")):
         sub.add_parser(name, help=text).add_argument("--run", required=True, help="the run folder")
     search = sub.add_parser("search", help="rank the run's requirements, test cases, and docs against an ask")
     search.add_argument("--run", required=True)
@@ -1634,13 +1985,33 @@ def main(argv: list[str] | None = None) -> int:
     show = sub.add_parser("show", help="print requirements, background items, and test cases by ID, as Markdown")
     show.add_argument("--run", required=True)
     show.add_argument("--ids", required=True)
+    summary = sub.add_parser("summary", help="what to check and print from a run, small enough to read at once")
+    summary.add_argument("--run", required=True)
+    summary.add_argument("--feature", default="", help="one feature: its bundle parts, docs, and lists")
     recent = sub.add_parser("recent", help="the newest complete, verified run of the whole scope")
     recent.add_argument("--project", required=True)
     recent.add_argument("--max-age-minutes", type=int, default=RECENT_MINUTES)
+    doc = sub.add_parser("doc", help="print one GitHub doc, read with the first sign-in that works")
+    doc.add_argument("--url", required=True)
+    doc.add_argument("--max-chars", type=int, default=MAX_DOC_CHARS)
+    progress = sub.add_parser("progress", help="merge a change into the onboarding or V&V progress log")
+    progress.add_argument("--project", required=True)
+    progress.add_argument("--log", required=True, choices=sorted(LOGS))
+    progress.add_argument("--patch", required=True, help="JSON on one line; write every ' as \\u0027")
+    note = sub.add_parser("note", help="append one entry to the onboarding notes")
+    note.add_argument("--project", required=True)
+    note.add_argument("--title", required=True)
+    note.add_argument("--text", required=True)
+    archive = sub.add_parser("archive", help="set a progress log aside under a dated name")
+    archive.add_argument("--project", required=True)
+    archive.add_argument("--log", required=True, choices=sorted(LOGS))
     args = parser.parse_args(argv)
     try:
         if args.action == "show":
             print(cmd_show(args.run, args.ids), end="")
+            return 0
+        if args.action == "doc":
+            print(cmd_doc(args.url, args.max_chars))
             return 0
         if args.action == "new":
             result = cmd_new(args.project, args.command_name, args.scope)
@@ -1650,9 +2021,17 @@ def main(argv: list[str] | None = None) -> int:
             result = cmd_search(args.run, args.query, args.concept, args.feature, args.top)
         elif args.action == "recent":
             result = cmd_recent(args.project, args.max_age_minutes)
+        elif args.action == "summary":
+            result = cmd_summary(args.run, args.feature)
+        elif args.action == "progress":
+            result = cmd_progress(args.project, args.log, args.patch)
+        elif args.action == "note":
+            result = cmd_note(args.project, args.title, args.text)
+        elif args.action == "archive":
+            result = cmd_archive(args.project, args.log)
         else:
             result = cmd_link(args.run)
-    except RunError as exc:
+    except (RunError, OSError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 1
     print(json.dumps({"ok": True, **result}, ensure_ascii=False))

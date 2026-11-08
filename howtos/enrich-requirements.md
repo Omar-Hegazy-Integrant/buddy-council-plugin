@@ -12,7 +12,7 @@ Invoked by `howtos/fetch-requirements.md` after the provider returns, when `requ
 
 ## Configuration
 
-Read `.buddy-council/sources.json` `requirements.enrichment`:
+Read the project's settings (`.buddy-council/sources.json`) `requirements.enrichment`:
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
@@ -43,7 +43,7 @@ These do NOT persist across runs. If the user aborts, the how-to returns an erro
 For each `(url, source)` in the dedupe map:
 
 1. **Strip query params** from the URL (`?plain=1` etc.). Preserve the fragment (`#L42-L60`) — that's used by the locator.
-2. **Verify the URL pattern**. For `source === "github"`, require `^https://github\.com/` (or `^https://raw\.githubusercontent\.com/`). Non-matching URLs: skip silently, log a one-line warning, do NOT prompt.
+2. **Verify the URL pattern**. For `source === "github"`, require an `https://` link to a file or folder on GitHub: `https://github.com/…`, `https://raw.githubusercontent.com/…`, or a GitHub Enterprise link shaped `https://<host>/<owner>/<repo>/blob/…` or `…/tree/…`. Non-matching URLs: skip silently, log a one-line warning, do NOT prompt. Whether an Enterprise host can be read, and with which sign-in, is the strategy's call (`providers/github/setup.md`).
 3. **Delegate to the strategy provider**:
    - `enrichment.strategy === "cli"` → follow `providers/github/fetch-cli.md`
    - `enrichment.strategy === "mcp"` → follow `providers/github/fetch-mcp.md`

@@ -114,9 +114,9 @@ description back-reference. Report it once at the end, not per story.
 
 ## Step 4: Record
 
-Write into `.buddy-council/vnv-progress.json`: `dev_key`, the returned `vnv_key`, `platform`,
-`platform_source`, `counterpart`, `parity`, `state: "cloned"`, `link_created`, and `last_checked_at`
-(ISO 8601 UTC).
+Save into `.buddy-council/vnv-progress.json`, with `bc_run.py progress` as the V&V agent's *Progress Log* section
+shows: `dev_key`, the returned `vnv_key`, `platform`, `platform_source`, `counterpart`, `parity`,
+`state: "cloned"`, `link_created`, and `last_checked_at` (ISO 8601 UTC).
 
 Record only keys Jira actually returned. If a create failed, record the failure with its error — never invent
 a key to keep the loop tidy.

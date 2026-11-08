@@ -142,7 +142,7 @@ Then set:
 - `features[i].completed_at = <ISO 8601 UTC timestamp>`
 - `current_phase = "completed"` (the agent will then increment `current_feature_index` and reset `current_step_index = 0`, `current_phase = "demo"`)
 
-Append a summary to `onboarding-notes.md`.
+Append a summary to the notes with `bc_run.py note` (`howtos/manage-progress-log.md` → *Saving*).
 
 ## Final Summary (per feature)
 

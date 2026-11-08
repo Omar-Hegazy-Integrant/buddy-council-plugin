@@ -16,6 +16,8 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.error
+import urllib.request
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -91,6 +93,14 @@ class RunFolderTest(unittest.TestCase):
 
 
 class New(RunFolderTest):
+    def test_only_setup_starts_a_run_in_a_folder_never_set_up(self):
+        fresh = Path(self.tmp.name, "fresh")
+        fresh.mkdir()
+        with self.assertRaises(bc_run.RunError):
+            bc_run.cmd_new(str(fresh), "coverage", "")
+        run = Path(bc_run.cmd_new(str(fresh), "setup", "")["run_dir"])
+        self.assertEqual(run.parent.parent, (fresh / ".buddy-council").resolve())
+
     def test_a_run_folder_is_created_privately_with_a_manifest(self):
         result = bc_run.cmd_new(str(self.project), "Coverage!", "Alarms")
         run = Path(result["run_dir"])
@@ -100,6 +110,9 @@ class New(RunFolderTest):
         manifest = json.loads((run / "manifest.json").read_text())
         self.assertEqual((manifest["command"], manifest["scope"]), ("Coverage!", "Alarms"))
         self.assertEqual(result["requirements"], str(run / "requirements.json"))
+        self.assertNotIn("background", result, "only a lookup reads the rest of the project")
+        lookup = bc_run.cmd_new(str(self.project), "lookup", "all")
+        self.assertEqual(lookup["background"], str(Path(lookup["run_dir"]) / "background.json"))
         second = Path(bc_run.cmd_new(str(self.project), "coverage", "")["run_dir"])
         self.assertNotEqual(run, second, "two runs in the same second get distinct folders")
 
@@ -220,11 +233,54 @@ class Link(RunFolderTest):
         self.assertEqual(result["readiness"], 'Readiness: 2 requirements, 1 test cases for scope "Vitals"')
 
     def test_missing_test_cases_are_reported_not_hidden(self):
+        (self.project / ".buddy-council" / "sources.json").write_text(json.dumps({"test_cases": {"provider": "testrail"}}))
         run = self.new_run()
         self.write(run, "requirements.json", {"requirements": REQUIREMENTS})
         result = bc_run.cmd_link(str(run))
         self.assertEqual(result["counts"]["test_cases_in_scope"], 0)
         self.assertTrue(any("test_cases.json is missing" in w for w in result["warnings"]))
+        self.assertIn("test cases", json.loads((run / "links.json").read_text())["missing"])
+
+    def test_a_project_that_uses_no_test_cases_is_complete_without_them(self):
+        (self.project / ".buddy-council" / "sources.json").write_text(json.dumps({"test_cases": {"provider": "none"}}))
+        run = self.new_run()
+        self.write(run, "requirements.json", {"requirements": REQUIREMENTS})
+        result = bc_run.cmd_link(str(run))
+        links = json.loads((run / "links.json").read_text())
+        self.assertEqual(links["missing"], [], "not PARTIAL, and a lookup can reuse the run")
+        self.assertIn("Fetch: test cases → skipped, not used in this project", links["lines"])
+        self.assertFalse(any("test_cases.json is missing" in w for w in result["warnings"]))
+
+    def test_a_summary_holds_what_a_model_checks_and_prints_without_the_bulk(self):
+        run, result = self.run_all()
+        summary = bc_run.cmd_summary(str(run))
+        links = json.loads((run / "links.json").read_text())
+        for key_name in ("lines", "missing", "mismatches", "warnings", "enrichment", "counts", "scope"):
+            self.assertEqual(summary[key_name], links[key_name], key_name)
+        self.assertEqual(summary["command"], "coverage")
+        self.assertNotIn("by_requirement", summary)
+        alarms = next(row for row in summary["features"] if row["feature"] == "Alarms")
+        self.assertEqual((alarms["tested"], alarms["untested"], alarms["orphans"]), (2, 1, 2))
+        self.assertEqual(alarms["parts"], len(next(r for r in links["features"] if r["feature"] == "Alarms")["bundles"]))
+        self.assertNotIn("bundles", alarms, "a feature's parts come with --feature")
+
+    def test_a_feature_summary_gives_its_parts_as_paths_and_only_its_own_lists(self):
+        run, _ = self.run_all()
+        summary = bc_run.cmd_summary(str(run), "alarms")
+        self.assertEqual(summary["feature"]["feature"], "Alarms")
+        for part in summary["feature"]["bundles"]:
+            self.assertTrue(Path(part).is_absolute() and Path(part).is_file(), part)
+        self.assertEqual([u["id"] for u in summary["untested"]], ["CWA-REQ-3"])
+        self.assertEqual(sorted(o["id"] for o in summary["orphans"]), ["TC-12", "TC-13"])
+        self.assertTrue(all(entry["feature"] == "Alarms" for name in ("untested", "orphans", "stranded")
+                            for entry in summary[name]))
+        with self.assertRaises(bc_run.RunError) as caught:
+            bc_run.cmd_summary(str(run), "Nope")
+        self.assertIn("Alarms", str(caught.exception), "names the features there are")
+
+    def test_a_summary_of_a_run_that_was_never_linked_says_so(self):
+        with self.assertRaises(bc_run.RunError):
+            bc_run.cmd_summary(str(self.new_run()))
 
     def test_missing_requirements_fail(self):
         run = self.new_run()
@@ -452,6 +508,13 @@ class Checks(RunFolderTest):
         self.assertEqual(result["missing"], ["background"])
         self.assertIn("Fetch: background → FAILED — no background file in the run", result["lines"])
         self.assertEqual(self.link(jama_file(REQUIREMENTS), testrail_file(CASES))["missing"], [], "only lookups read it")
+
+    def test_a_background_file_in_a_run_that_isnt_a_lookup_is_left_out(self):
+        result = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), command="coverage",
+                           background=background_file(BACKGROUND, root_ids=[]))
+        self.assertEqual((result["mismatches"], result["missing"]), ([], []))
+        self.assertFalse([line for line in result["lines"] if line.startswith("Fetch: background")])
+        self.assertNotIn("background", result["counts"])
 
     def test_background_read_with_other_arguments_is_named(self):
         wrong = background_file(BACKGROUND, root_ids=[], item_type_exclude=["Text"])
@@ -731,9 +794,37 @@ class FakeGh:
         assert kwargs.get("timeout"), "every gh call is bounded"
 
 
+class FakeHttp:
+    """Stands in for GitHub's REST API: answers from a dict of URL -> JSON; anything else is a 404."""
+
+    def __init__(self, answers=None):
+        self.answers = answers or {}
+        self.requests = []
+
+    def __call__(self, request, timeout=None):
+        assert timeout, "every request is bounded"
+        self.requests.append((request.full_url, request.get_header("Authorization")))
+        answer = self.answers.get(request.full_url)
+        if answer is None:
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b"{}"))
+        if isinstance(answer, int):
+            raise urllib.error.HTTPError(request.full_url, answer, "No", {}, io.BytesIO(b"{}"))
+        return io.BytesIO(json.dumps(answer).encode())
+
+
 class Enrich(RunFolderTest):
     def setUp(self):
         super().setUp()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST")}
+        env["BC_HOME"] = str(Path(self.tmp.name, "bc-home"))
+        patch = mock.patch.dict(os.environ, env, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.http = FakeHttp()
+        opener = mock.patch.object(bc_run, "URLOPEN", self.http)
+        opener.start()
+        self.addCleanup(opener.stop)
         self.configure({"enabled": True, "strategy": "cli", "max_doc_chars": 60})
         self.run = self.new_run()
         reqs = [
@@ -807,13 +898,121 @@ class Enrich(RunFolderTest):
         self.assertIn({"url": "https://github.com/o/r/blob/main/gone.md", "error": "repo_inaccessible"},
                       [{k: f[k] for k in ("url", "error")} for f in index["failed"]])
 
-    def test_a_missing_gh_fails_every_doc_without_crashing(self):
+    def test_with_no_sign_in_that_can_read_them_every_doc_fails_without_crashing(self):
         def no_gh(argv, **kwargs):
             raise FileNotFoundError("gh")
 
         result = bc_run.cmd_enrich(str(self.run), runner=no_gh)
         self.assertEqual(result["fetched"], 0)
-        self.assertEqual({f["error"] for f in result["failed"]}, {"gh_missing", "unsupported_url"})
+        self.assertEqual({f["error"] for f in result["failed"]}, {"repo_inaccessible", "unsupported_url"})
+        self.assertTrue(self.http.requests, "public repositories are tried with no sign-in")
+        self.assertEqual({auth for _, auth in self.http.requests}, {None})
+
+    def test_without_gh_a_token_in_the_environment_reads_them(self):
+        def no_gh(argv, **kwargs):
+            raise FileNotFoundError("gh")
+
+        sds = "# SDS from the API"
+        self.http.answers["https://api.github.com/repos/o/r/contents/docs/sds.md?ref=main"] = {
+            "content": b64(sds), "sha": "1", "size": len(sds)}
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "env-token"}):
+            bc_run.cmd_enrich(str(self.run), runner=no_gh)
+        docs = json.loads((self.run / "docs.json").read_text())["docs"]
+        self.assertEqual([(d["url"], d["read_with"]) for d in docs],
+                         [("https://github.com/o/r/blob/main/docs/sds.md#L4", "GITHUB_TOKEN")])
+        self.assertIn(("https://api.github.com/repos/o/r/contents/docs/sds.md?ref=main", "Bearer env-token"),
+                      self.http.requests)
+
+    def test_gh_that_isnt_signed_in_falls_back_to_public_reads(self):
+        def runner(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 4, "", "To get started with GitHub CLI, please run:  gh auth login")
+
+        sds = "# Public SDS"
+        self.http.answers["https://api.github.com/repos/o/r/contents/docs/sds.md?ref=main"] = {
+            "content": b64(sds), "sha": "1", "size": len(sds)}
+        bc_run.cmd_enrich(str(self.run), runner=runner)
+        docs = json.loads((self.run / "docs.json").read_text())["docs"]
+        self.assertEqual([d["read_with"] for d in docs], ["no sign-in"])
+
+    def test_a_file_gh_can_see_is_missing_is_not_retried_with_other_sign_ins(self):
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "env-token"}):
+            index = bc_run.cmd_enrich(str(self.run), runner=self.gh)
+        self.assertIn({"url": "https://github.com/o/r/blob/main/gone.md", "error": "file_not_found"},
+                      [{k: f[k] for k in ("url", "error")} for f in index["failed"]])
+        self.assertFalse([url for url, _ in self.http.requests if "gone.md" in url])
+
+    def test_github_enterprise_uses_its_own_host_and_never_a_github_com_token(self):
+        import bc_keys
+
+        bc_keys.write_key("github", "https://github.acme.com", {"token": "ghe-key"})
+        doc = "# Enterprise SDS"
+        self.http.answers["https://github.acme.com/api/v3/repos/team/app/contents/docs/a.md?ref=main"] = {
+            "content": b64(doc), "sha": "9", "size": len(doc)}
+        calls = []
+
+        def gh(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 1, "", "gh: Not Found (HTTP 404)")
+
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "github-com-token"}):
+            got, reader, tried = bc_run.read_doc("https://github.acme.com/team/app/blob/main/docs/a.md", gh)
+        self.assertEqual((got["content"], reader), (doc, "saved key"))
+        self.assertEqual(got["locator"]["host"], "github.acme.com")
+        self.assertIn("--hostname", calls[0])
+        self.assertEqual(calls[0][calls[0].index("--hostname") + 1], "github.acme.com")
+        self.assertNotIn("Bearer github-com-token", {auth for _, auth in self.http.requests})
+        self.assertEqual([t["reader"] for t in tried], ["gh", "saved key"])
+
+    def test_gh_always_names_the_host_it_reads(self):
+        calls = []
+
+        def gh(argv, **kwargs):
+            calls.append((argv, kwargs.get("env")))
+            return self.gh(argv, **kwargs)
+
+        with mock.patch.dict(os.environ, {"GH_HOST": "github.acme.com", "GH_ENTERPRISE_TOKEN": "ghe-env-token"}):
+            bc_run.read_doc("https://github.com/o/r/blob/main/docs/sds.md", gh)
+        argv, env = calls[0]
+        self.assertEqual(argv[argv.index("--hostname") + 1], "github.com", "never GH_HOST's host for a github.com doc")
+        self.assertNotIn("GH_ENTERPRISE_TOKEN", env)
+
+    def test_an_enterprise_token_goes_only_to_the_host_named_in_gh_host(self):
+        doc = "# Enterprise SDS"
+        for host in ("github.acme.com", "github.evil.io"):
+            self.http.answers[f"https://{host}/api/v3/repos/team/app/contents/docs/a.md?ref=main"] = {
+                "content": b64(doc), "sha": "9", "size": len(doc)}
+        envs = []
+
+        def gh(argv, **kwargs):
+            envs.append(kwargs.get("env"))
+            return subprocess.CompletedProcess(argv, 1, "", "gh: Not Found (HTTP 404)")
+
+        with mock.patch.dict(os.environ, {"GH_ENTERPRISE_TOKEN": "ghe-env-token", "GH_TOKEN": "github-com-token"}):
+            _, reader, _ = bc_run.read_doc("https://github.evil.io/team/app/blob/main/docs/a.md", gh)
+            self.assertEqual(reader, "no sign-in")
+            self.assertEqual({auth for _, auth in self.http.requests}, {None}, "a look-alike host gets no token")
+            self.assertFalse({"GH_ENTERPRISE_TOKEN", "GH_TOKEN"} & set(envs[-1]), "nor does gh, when it goes there")
+            with mock.patch.dict(os.environ, {"GH_HOST": "https://github.acme.com"}):
+                _, reader, _ = bc_run.read_doc("https://github.acme.com/team/app/blob/main/docs/a.md", gh)
+        self.assertEqual(reader, "GH_ENTERPRISE_TOKEN")
+        self.assertTrue(self.http.requests[-1][1].endswith("ghe-env-token"))
+        self.assertIn("GH_ENTERPRISE_TOKEN", envs[-1])
+
+    def test_one_doc_prints_verbatim_with_what_read_it(self):
+        text = bc_run.cmd_doc("https://github.com/o/r/blob/main/docs/sds.md#L4", max_chars=10 ** 6, runner=self.gh)
+        head, _, body = text.partition("\n")
+        meta = json.loads(head[len("<!-- "):-len(" -->")])
+        self.assertEqual((meta["read_with"], meta["locator"]["anchor"], meta["truncated"]), ("gh", "L4", False))
+        self.assertTrue(body.startswith("# SDS\n![flow](images/flow.png)"))
+        self.assertEqual(meta["referenced_images"][0]["url"], "https://raw.githubusercontent.com/o/r/main/docs/images/flow.png")
+        with self.assertRaises(bc_run.RunError):
+            bc_run.cmd_doc("https://github.com/o/r/blob/main/gone.md", runner=self.gh)
+
+    def test_a_redirect_is_an_error_so_a_token_never_follows_it(self):
+        handler = bc_run._NoRedirect()
+        request = urllib.request.Request("https://api.github.com/repos/o/r", headers={"Authorization": "Bearer t"})
+        with self.assertRaises(urllib.error.HTTPError):
+            handler.redirect_request(request, None, 301, "Moved", {}, "https://evil.example/repos/o/r")
 
     def test_disabled_enrichment_fetches_nothing(self):
         self.configure({"enabled": False})

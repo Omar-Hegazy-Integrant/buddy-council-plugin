@@ -4,7 +4,7 @@ Fetch requirements from the configured source. This how-to reads the user's conf
 
 ## How It Works
 
-1. Read `.buddy-council/sources.json` from the project root (the current working directory)
+1. Read `.buddy-council/sources.json` in the project folder — the one `howtos/load-settings.md` found
 2. Check the `requirements.provider` field
 3. Delegate to the matching provider:
 
@@ -29,7 +29,7 @@ Any other provider, such as `excel` in a project set up before requirements came
 
 ## Error Handling
 
-- If `.buddy-council/sources.json` does not exist → tell the user to run `/bc:setup` first
+- If the settings aren't ready → `howtos/load-settings.md` already stopped the command with what to say
 - If the configured provider file does not exist → report which provider was expected and that it's not yet implemented
 - If no key is saved for the site (`requirements.base_url`) → tell the user to run `/bc:setup` with a link to the Jama project
 - If the provider is `jama` and the `jama` MCP tools are not loaded → the plugin's connectors didn't start — usually because `uv` isn't installed (README → *Troubleshooting*); restart the assistant after installing it

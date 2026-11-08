@@ -13,7 +13,8 @@ This how-to requires normalized requirements AND test cases. If you were handed 
 ## Input from a run folder
 
 The coverage agent reads its input from a run folder (`howtos/collect-artifacts.md`). There, code has
-already done the counting from every record: `links.json` holds the untested requirements, orphans, stranded
+already done the counting from every record: the run's summary (`bc_run.py summary`, and `--feature` for one
+feature) holds the untested requirements, orphans, stranded
 links (flagged `stranded` on the untested requirement they would cover), the per-feature metrics, and the
 totals, with Deprecated and Deferred requirements already left out of untested (counted as `retired`). Use
 those as given — never recount them from what you read. Your part is the judgment: weak coverage, from each

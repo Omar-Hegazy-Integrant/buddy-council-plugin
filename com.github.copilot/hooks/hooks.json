@@ -11,12 +11,6 @@
       },
       {
         "type": "command",
-        "bash": "\"${PLUGIN_ROOT:-.}\"/hooks/auto-approve-plugin-writes.sh",
-        "matcher": "create|edit|write",
-        "timeoutSec": 10
-      },
-      {
-        "type": "command",
         "bash": "\"${PLUGIN_ROOT:-.}\"/hooks/auto-approve-mcp.sh",
         "timeoutSec": 10
       }

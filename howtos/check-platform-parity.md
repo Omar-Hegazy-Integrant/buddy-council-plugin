@@ -12,7 +12,7 @@ decision. Report the gap and let a human close it.
 ## Input
 
 - `stories`: the sprint's issues in canonical schema (`type: "board_issue"`), from `fetch-board-issues`.
-- Config at `.buddy-council/sources.json` → `jira.platform`, and `jira.base_url`. Every Jira call below passes `site`: `jira.base_url` from `.buddy-council/sources.json` (ADR 0008).
+- The project's settings → `jira.platform`, and `jira.base_url`. Every Jira call below passes `site`: `jira.base_url` (ADR 0008).
 - `jira.platform`:
 
 ```json
@@ -42,7 +42,16 @@ The `OS` field is a custom field, so its id differs per site. Resolve once per r
    fallback when the keyword search is ambiguous — it lists only fields that project actually uses.
 3. **The issue payload's `names` map**, when `jira_get_issue` returns one.
 
-Cache the resolved id back into `jira.platform.field_id` so later runs skip discovery.
+Save a newly resolved id, so later runs skip discovery — through the settings script, the only thing that saves
+settings:
+
+```bash
+python3 '<plugin root>/scripts/bc_setup.py' save --project '<project>' --patch '{"jira": {"platform": {"field_id": "customfield_10050"}}}'
+```
+
+```json settings
+{ "jira": { "platform": { "field_id": "customfield_10050" } } }
+```
 
 If the field cannot be resolved at all, say so plainly — *"No `OS` field found on project PROJ; falling back
 to title prefixes, so parity results are lower-confidence"* — and continue with step 2's fallback. Do not

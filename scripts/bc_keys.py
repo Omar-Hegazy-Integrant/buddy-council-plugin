@@ -8,8 +8,9 @@ it was saved for:
   {"provider": "jama", "url": "https://acme.jamacloud.com", "client_id": "…", "client_secret": "…"}
   {"provider": "jira", "url": "https://acme.atlassian.net", "username": "qa@acme.com", "api_token": "…"}
   {"provider": "jira", "url": "https://jira.acme.com", "personal_token": "…"}
+  {"provider": "github", "url": "https://github.com", "token": "…"}
 
-Jama takes username + password instead on instances without API credentials, and a Jira key may add
+A GitHub key is the last resort for reading design documents, saved only when no other sign-in can read them. Jama takes username + password instead on instances without API credentials, and a Jira key may add
 "ssl_verify": false for a self-signed Server/Data Center certificate.
 
 A site is a URL's host, its port when that isn't the scheme's default, and any path prefix: self-hosted Jama and
@@ -22,7 +23,8 @@ the moment it is saved. /bc:setup uses the command line, which never prints a ke
 
   path    --url URL --provider P     where the key for URL's site belongs, and whether one is saved there
   sites   [--provider P]             the saved sites
-  check   --url URL --provider P     the saved key is complete and private (tightens its permissions)
+  check   --url URL --provider P     the saved key is complete and private (tightens its permissions), and who
+                                     it signs in as when it has a username
   migrate [--force]                  copy the keys older setups saved into per-site files, once per computer
   forget  --url URL                  delete a site's key
 """
@@ -42,13 +44,14 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Iterable
 
-PROVIDERS = ("testrail", "jama", "jira")
-NAMES = {"testrail": "TestRail", "jama": "Jama", "jira": "Jira"}
+PROVIDERS = ("testrail", "jama", "jira", "github")
+NAMES = {"testrail": "TestRail", "jama": "Jama", "jira": "Jira", "github": "GitHub"}
 # The ways each provider signs in, in the order the connectors prefer them. A key holds exactly one.
 AUTH = {
     "testrail": (("username", "api_key"),),
     "jama": (("client_id", "client_secret"), ("username", "password")),
     "jira": (("username", "api_token"), ("personal_token",)),
+    "github": (("token",),),
 }
 AUTH_WORDS = {
     ("username", "api_key"): "username + API key",
@@ -56,9 +59,10 @@ AUTH_WORDS = {
     ("username", "password"): "username + password",
     ("username", "api_token"): "email + API token",
     ("personal_token",): "personal access token",
+    ("token",): "read-only token",
 }
 OPTIONS = {"jira": {"ssl_verify": bool}}
-HTTPS_ONLY = {"jama"}  # the Jama connector has always refused to send its credentials over plain HTTP
+HTTPS_ONLY = {"jama", "github"}  # the Jama connector has always refused to send its credentials over plain HTTP
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 # Where a pasted link stops being the site's address and becomes a page in the app.
 APP_PATHS = {
@@ -66,11 +70,13 @@ APP_PATHS = {
     "jama": re.compile(r"/(?:perspective\.req|rest)(?:/|$)", re.I),
     "jira": re.compile(r"/(?:browse|secure|rest|projects|issues|plugins|servicedesk|jira/(?:software|core|servicedesk))"
                        r"(?:/|$)", re.I),
+    "github": re.compile(r"/"),  # GitHub, and GitHub Enterprise, live at the root of their host
 }
 MARKER = ".migrated"
 CLOUD_JIRA = (".atlassian.net", ".jira.com")
 # The server folder each old connector entry ran; an entry running anything else was never bc's.
-SERVER_FOLDERS = {"testrail": "testrail-server", "jama": "jama-server"}
+# The server folders older setups ran bc's connectors from, by the name their entries were registered under.
+SERVER_FOLDERS = {"testrail": "testrail-server", "jama": "jama-server", "jira": "jira-server"}
 
 
 class KeyStoreError(Exception):
@@ -173,7 +179,7 @@ def _load(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        raise KeyStoreError(f"{path.name} isn't valid JSON; save the key again with /bc:setup.") from None
+        raise KeyStoreError(f"{path.name} isn't valid JSON; ask for the key again and save it.") from None
     if not isinstance(data, dict) or data.get("provider") not in PROVIDERS:
         raise KeyStoreError(f"{path.name} names no known provider ({', '.join(PROVIDERS)}), so it is ignored.")
     try:
@@ -194,7 +200,7 @@ def _auth(provider: str, data: dict, strict: bool = False) -> tuple:
     if complete:
         raise KeyStoreError(f"The {NAMES[provider]} key for {where} holds two ways to sign in; save one: {styles}.")
     raise KeyStoreError(f"The {NAMES[provider]} key for {where} is incomplete: it needs {styles}. "
-                        "Run /bc:setup to save it again.")
+                        "Ask for it again and save it.")
 
 
 def _scan() -> tuple[list[dict], list[str]]:
@@ -245,7 +251,8 @@ def _choose(provider: str, url: Any, saved: list[dict]) -> dict:
         if len(saved) == 1:
             return saved[0]
         if not saved:
-            raise KeyStoreError(f"No {name} key is saved on this computer. Run /bc:setup to add one.")
+            raise KeyStoreError(f"No {name} key is saved on this computer. Ask for one and save it: a Buddy-Council "
+                                "command does that on the spot, and /bc:setup with a link does too.")
         raise KeyStoreError(f"This computer has {name} keys for {len(saved)} sites ({listed}); "
                             "pass `site` to say which one.")
     want = site_id(url)
@@ -256,19 +263,21 @@ def _choose(provider: str, url: Any, saved: list[dict]) -> dict:
         raise KeyStoreError(f"{want} has {name} keys for {', '.join(entry['site'] for entry in found)}; "
                             "pass the full address as `site`.")
     known = f" Saved {name} sites: {listed}." if saved else ""
-    raise KeyStoreError(f"No {name} key is saved for {want}.{known} Run /bc:setup with a link to {want} to add it.")
+    raise KeyStoreError(f"No {name} key is saved for {want}.{known} Ask for one and save it: a Buddy-Council command "
+                        f"does that on the spot, and /bc:setup with a link to {want} does too.")
 
 
-def read_key(url: Any, provider: str) -> dict:
+def read_key(url: Any, provider: str, migrate: bool = True) -> dict:
     """The key for the site a URL or host names, or the provider's only key when `url` is empty.
 
     Returns the credential fields plus `provider`, `url` (the saved address — the only one the key may be sent
     to), `site`, and `auth` (the sign-in style, in words). The first lookup for a provider with no saved key
-    copies the keys older setups saved (`migrate_legacy`), so connectors keep working on the day they update.
+    copies the keys older setups saved (`migrate_legacy`), so connectors keep working on the day they update;
+    `migrate=False` skips that, for a caller that only wants a key if one is saved.
     """
     _provider(provider)
     saved = sites(provider)
-    if not saved:
+    if not saved and migrate:
         with contextlib.suppress(Exception):
             migrate_legacy()
         saved = sites(provider)
@@ -368,7 +377,10 @@ def check(url: Any, provider: str) -> dict:
         _private_dir(path.parent)
     except KeyStoreError as exc:
         return {**result, "problem": str(exc)}
-    return {**result, "ok": True, "url": data["url"], "auth": AUTH_WORDS[style]}
+    found = {**result, "ok": True, "url": data["url"], "auth": AUTH_WORDS[style]}
+    if "username" in style:
+        found["user"] = data["username"].strip()  # who the key signs in as — an identifier, never the secret half
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +431,41 @@ def _is_bc_plugin(folder: Path) -> bool:
     return False
 
 
+def is_bc_entry(provider: str, entry: Any, in_bc_folder: bool, home: Path | None = None) -> bool:
+    """Whether an old connector entry runs bc's own server: one in a bc plugin folder's .mcp.json, or one in another
+    file whose server folder sits in a plugin folder whose manifest names `bc` — never by the folder's name alone."""
+    root = _bc_root(provider, entry)
+    if root is None:
+        return False
+    if in_bc_folder:
+        return True
+    path = _expand(root, home or Path.home()) if root else None
+    return bool(path and path.is_absolute() and _is_bc_plugin(path))
+
+
+def bc_plugin_folders(home: Path) -> list[Path]:
+    """Every bc plugin folder older setups may have written a .mcp.json into: a Claude Code version folder, a
+    marketplace copy, a Copilot install, or the folder bc's Copilot entries ran from — each one whose manifest names
+    `bc`, once."""
+    folders: list[Path] = []
+    for pattern in (".claude/plugins/cache/*/*/*", ".claude/plugins/marketplaces/*", ".copilot/installed-plugins/*/*"):
+        folders.extend(sorted(home.glob(pattern)))
+    for provider, entry in _servers(_read_json(home / ".copilot" / "mcp-config.json")).items():
+        root = _bc_root(provider, entry)
+        if root and os.path.isabs(root):
+            folders.append(Path(root))
+    found, seen = [], set()
+    for folder in folders:
+        try:
+            real = folder.resolve()
+        except (OSError, RuntimeError):
+            continue
+        if real not in seen and _is_bc_plugin(folder):
+            seen.add(real)
+            found.append(folder)
+    return found
+
+
 def _connector_settings(home: Path) -> list[tuple[str, dict]]:
     """bc's own old connector entries, from every file older setups wrote them to.
 
@@ -429,26 +476,11 @@ def _connector_settings(home: Path) -> list[tuple[str, dict]]:
     version folder, a marketplace copy, a Copilot install, or the folder bc's Copilot entries ran from.
     """
     copilot = home / ".copilot" / "mcp-config.json"
-    folders: list[Path] = []
-    for pattern in (".claude/plugins/cache/*/*/*", ".claude/plugins/marketplaces/*", ".copilot/installed-plugins/*/*"):
-        folders.extend(sorted(home.glob(pattern)))
-    for provider, entry in _servers(_read_json(copilot)).items():
-        root = _bc_root(provider, entry)
-        if root and os.path.isabs(root):
-            folders.append(Path(root))
-    files, seen = [copilot], set()
-    for folder in folders:
-        try:
-            real = folder.resolve()
-        except (OSError, RuntimeError):
-            continue
-        if real not in seen and _is_bc_plugin(folder):
-            seen.add(real)
-            files.append(folder / ".mcp.json")
+    files = [(copilot, False)] + [(folder / ".mcp.json", True) for folder in bc_plugin_folders(home)]
     found: list[tuple[str, dict]] = []
-    for path in files:
+    for path, in_bc_folder in files:
         entries = {provider: entry for provider, entry in _servers(_read_json(path)).items()
-                   if _bc_root(provider, entry) is not None}
+                   if is_bc_entry(provider, entry, in_bc_folder, home)}
         if entries:
             found.append((_tilde(path, home), entries))
     return found
@@ -573,7 +605,9 @@ def migrate_legacy(legacy_home: Any = None, force: bool = False) -> dict:
     only, from every file they were written to), or JIRA_URL. A key with no recorded site, or two different ones,
     stays where it is: a site is never guessed. A saved per-site key is never replaced, one provider's trouble never
     holds up another's, the old files are left for /bc:setup to remove, and the report names sites only.
-    `legacy_home` reads the old files from another home folder; the keys are always written to keys_dir().
+    `legacy_home` reads the old files from another home folder; the keys are always written to keys_dir(). The
+    GitHub token those setups saved is not moved here: move_legacy_github_token() moves it only when nothing else
+    reads the project's documents.
     """
     home = Path(legacy_home).expanduser() if legacy_home else Path.home()
     report: dict[str, Any] = {"migrated": [], "kept": [], "skipped": [], "already": False}
@@ -611,6 +645,92 @@ def migrate_legacy(legacy_home: Any = None, force: bool = False) -> dict:
     stamp = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     _write(marker, {"migrated_at": stamp, **{k: report[k] for k in ("migrated", "kept", "skipped")}})
     return report
+
+
+# ---------------------------------------------------------------------------
+# GitHub hosts: which host a token in the environment, or a saved key, belongs to
+# ---------------------------------------------------------------------------
+
+
+def gh_host() -> str | None:
+    """The GitHub Enterprise host the user named in GH_HOST — the only one a token in the environment goes to,
+    besides github.com."""
+    text = os.environ.get("GH_HOST", "").strip().lower()
+    host = urllib.parse.urlsplit(text if "://" in text else f"https://{text}").hostname if text else None
+    return host if host and host != "github.com" else None
+
+
+def github_host(host: str) -> bool:
+    """Whether a host serves GitHub: github.com, a *.ghe.com host, the GH_HOST host, a host this computer saved a
+    GitHub key for, or one whose name starts like a GitHub Enterprise host's."""
+    host = host.lower()
+    if host in ("github.com", "www.github.com", "raw.githubusercontent.com") or host.endswith(".ghe.com"):
+        return True
+    if host == gh_host() or any(entry["site"] == host for entry in sites("github")):
+        return True
+    return host.split(".")[0] in ("github", "ghe", "git-hub") and "gitlab" not in host and "bitbucket" not in host
+
+
+def _home_of(legacy_home: Any) -> Path:
+    return Path(legacy_home).expanduser() if legacy_home else Path.home()
+
+
+def legacy_sections(legacy_home: Any = None) -> list[dict]:
+    """The sections older setups' key files hold — ~/.buddy-council/secrets.json and, before it,
+    ~/.buddy-council-secrets.json — as {path, provider, base_url}: the site saved beside each key, never the key."""
+    home = _home_of(legacy_home)
+    found = []
+    for path in (home / ".buddy-council" / "secrets.json", home / ".buddy-council-secrets.json"):
+        data = _read_json(path)
+        if not isinstance(data, dict):
+            continue
+        for provider in ("testrail", "jama", "github"):
+            section = data.get(provider)
+            if isinstance(section, dict) and section:
+                url = section.get("base_url")
+                found.append({"path": str(path), "provider": provider, "base_url": url if isinstance(url, str) else None})
+    return found
+
+
+def legacy_jira_url(legacy_home: Any = None) -> str | None:
+    """The Jira site older setups saved beside the Jira token in ~/.buddy-council/atlassian.env — never the token."""
+    url = _read_env(_home_of(legacy_home) / ".buddy-council" / "atlassian.env").get("JIRA_URL", "").strip()
+    return url or None
+
+
+def _legacy_github_token(home: Path) -> str | None:
+    try:
+        section = _legacy_section(home, "github", _connector_settings(home))
+    except KeyStoreError:
+        return None
+    token = section.get("token") if section else None
+    return token.strip() if isinstance(token, str) and token.strip() else None
+
+
+def has_legacy_github_token(legacy_home: Any = None) -> bool:
+    """Whether an older setup left a GitHub token that isn't the github.com key yet."""
+    return bool(_legacy_github_token(_home_of(legacy_home))) and not key_path("github.com").exists()
+
+
+def move_legacy_github_token(legacy_home: Any = None) -> dict:
+    """Save the GitHub token an older setup kept for its github.com connector as the github.com key. Only for a
+    caller that found nothing else to read the project's documents with: a token is saved as a last resort. A saved
+    key is never replaced, and the report names the site only."""
+    token = _legacy_github_token(_home_of(legacy_home))
+    if not token:
+        return {"moved": False, "reason": "no GitHub token is left from an older setup"}
+    if key_path("github.com").exists():
+        return {"moved": False, "reason": "github.com already has a key"}
+    write_key("github", "https://github.com", {"token": token})
+    return {"moved": True, "site": "github.com"}
+
+
+def legacy_entry_uses_github_token(entry: Any, legacy_home: Any = None) -> bool:
+    """Whether a GitHub connector entry runs on the token an older bc setup saved: how bc's own entry is told from
+    one the user added."""
+    env = entry.get("env") if isinstance(entry, dict) else None
+    token = _legacy_github_token(_home_of(legacy_home)) if isinstance(env, dict) else None
+    return bool(token) and token in (env.get("GITHUB_TOKEN"), env.get("GITHUB_PERSONAL_ACCESS_TOKEN"))
 
 
 # ---------------------------------------------------------------------------

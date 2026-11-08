@@ -11,8 +11,9 @@
 #     sessionId, cwd, toolResult}; hook cwd = PLUGIN dir, so the project is
 #     resolved from COPILOT_PROJECT_DIR / the payload's cwd.
 #
-# - Active only in projects that use the plugin (a .buddy-council/ dir exists);
-#   sessions in other projects are never logged.
+# - Active only in projects that use the plugin: the nearest .buddy-council/ at or
+#   above the project dir (never the key store's own ~/.buddy-council); sessions
+#   in other projects are never logged.
 # - Logs metadata only: timestamp, tool name, a redacted target summary, and a
 #   result status when the runtime provides one. Never logs file contents, tool
 #   responses, or credentials (common credential shapes are masked).
@@ -28,11 +29,22 @@ except Exception:
     sys.exit(0)
 
 # Project dir: env (both runtimes export their own), then payload cwd, then pwd.
-proj = (os.environ.get('CLAUDE_PROJECT_DIR')
-        or os.environ.get('COPILOT_PROJECT_DIR')
-        or d.get('cwd')
-        or os.getcwd())
-if not os.path.isdir(os.path.join(proj, '.buddy-council')):
+start = (os.environ.get('CLAUDE_PROJECT_DIR')
+         or os.environ.get('COPILOT_PROJECT_DIR')
+         or d.get('cwd')
+         or os.getcwd())
+store = os.path.realpath(os.environ.get('BC_HOME') or os.path.expanduser('~/.buddy-council'))
+proj, here = None, os.path.realpath(start)
+while True:
+    candidate = os.path.join(here, '.buddy-council')
+    if os.path.isdir(candidate) and os.path.realpath(candidate) != store:
+        proj = here
+        break
+    parent = os.path.dirname(here)
+    if parent == here:
+        break
+    here = parent
+if proj is None:
     sys.exit(0)
 
 tool = d.get('tool_name') or d.get('toolName') or ''

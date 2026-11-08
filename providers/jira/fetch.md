@@ -161,8 +161,9 @@ convert it.
 
 ## Error Handling
 
-- **401** — the token saved for the site is wrong or expired. On Cloud, also check that the key's `username`
-  matches the account the API token belongs to. Tell the user to re-run `/bc:setup` with a link to the board.
+- **401** — the key saved for the site is wrong or expired. On Cloud, the key's `username` must also be the
+  account the API token belongs to. Ask for the key on the spot and retry (`howtos/load-settings.md` → *When a
+  tool says no*).
 - **403** — the account lacks "Browse Projects"/"View Issues" on that project, or an IP allowlist is blocking
   the request. Name both; you cannot distinguish them from the response.
 - **404** on an issue — return an empty array `[]`.

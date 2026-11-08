@@ -20,7 +20,6 @@ import argparse
 import asyncio
 import atexit
 import contextlib
-import importlib.util
 import json
 import os
 import re
@@ -67,16 +66,10 @@ class RouterError(RuntimeError):
     """A call the router could not hand on, worded for the person who has to fix it. Never carries a key."""
 
 
-def _key_store():
-    """scripts/bc_keys.py, imported by path from the plugin root this server ships in."""
-    path = Path(__file__).resolve().parents[2] / "scripts" / "bc_keys.py"
-    spec = importlib.util.spec_from_file_location("bc_keys", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-bc_keys = _key_store()
+_SCRIPTS = str(Path(__file__).resolve().parents[2] / "scripts")  # the plugin root this server ships in
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+import bc_keys  # noqa: E402 — the plugin's one key store (scripts/bc_keys.py), shared by every connector
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +129,7 @@ def _command() -> list[str]:
 
 def _quote(value: str, what: str) -> str:
     if "\n" in value or "\r" in value:
-        raise RouterError(f"The {what} saved for this Jira site holds a line break; save it again with /bc:setup.")
+        raise RouterError(f"The {what} saved for this Jira site holds a line break; ask for it again and save it.")
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
