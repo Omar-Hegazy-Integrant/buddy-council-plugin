@@ -708,8 +708,12 @@ def _removable(item: dict, verified: set) -> str | None:
         return None if (bc_keys.bc_home() / "tools" / "appium-mcp.json").is_file() else \
             "the Plugin Tools haven't been checked under this version yet"
     if provider == "github":
-        return None if bc_keys.check("https://github.com", "github")["ok"] else \
-            "it becomes a key only if nothing else can read your design documents"
+        # No token stays in connector settings, so bc's old entry goes at once. The token stays in the old key file
+        # until it becomes the github.com key, the last resort, or the user deletes it.
+        if item["kind"] == "entry" or bc_keys.check("https://github.com", "github")["ok"]:
+            return None
+        return "it becomes the github.com key only if nothing else can read your design documents — delete it there " \
+               "if you don't need it"
     if not item.get("site"):
         return "the site it was set up for is unknown"
     if item["site"] not in verified:
@@ -771,6 +775,8 @@ def cleanup(verified: list[str]) -> dict:
 def _describe(item: dict) -> str:
     if item["kind"] == "entry":
         return f"the old {item['name']} entry in {_tilde(Path(item['path']))}"
+    if item["kind"] == "section" and item["provider"] == "github":
+        return f"the GitHub token an older setup saved in {_tilde(Path(item['path']))}"
     if item["kind"] == "section":
         return f"the old {bc_keys.NAMES[item['provider']]} key in {_tilde(Path(item['path']))}"
     return _tilde(Path(item["path"]))

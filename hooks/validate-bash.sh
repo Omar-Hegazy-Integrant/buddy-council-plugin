@@ -6,7 +6,8 @@
 #      and progress they save travel as quoted arguments: a destructive-looking string
 #      in one is data the shell never runs, not a command to block.
 #   2. HARD-BLOCK destructive operations (exit 2) — on every line, and on every command
-#      chained with ;, &&, ||, |, or &, not only the first.
+#      chained with ;, &&, ||, |, or &, not only the first. A forced git push (--force,
+#      -f, or a +refspec) is one; a push with --force-with-lease isn't, so it asks.
 # Everything else falls through (exit 0, no JSON) to the normal permission prompt. That
 # includes jq and gh: jq reads any file or the environment, and gh can print its token
 # (`gh auth token`, `gh auth status -t`), so either could show a key unasked. No plugin
@@ -132,13 +133,42 @@ def blocked(cmd):
             return "Destructive rm command."
         if program in ("kill", "pkill", "killall"):
             return "Process termination commands."
-        if re.search(r"\bgit\s+(?:push\s+--force|push\s+-f|reset\s+--hard)", segment):
+        if git_undoes(segment.split()):
             return "Destructive git operation."
     if re.search(r">\s*/(?:etc|usr|var)/", cmd):
         return "Writing to system directories."
     if re.search(r"DROP\s+(?:TABLE|DATABASE)|TRUNCATE\s+TABLE", cmd, re.I):
         return "Destructive database operation."
     return None
+
+GIT_OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
+
+def git_undoes(words):
+    """A git command among the words that can't be undone: a push that overwrites the remote unchecked — --force,
+    -f, or a +refspec, wherever it sits — or a hard reset. A push with --force-with-lease isn't one: it refuses to
+    overwrite work it hasn't seen, so it asks like any other command."""
+    for start, word in enumerate(words):
+        if os.path.basename(word) != "git":
+            continue
+        rest = words[start + 1:]
+        while rest and rest[0].startswith("-"):
+            rest = rest[2:] if rest[0] in GIT_OPTIONS_WITH_VALUE else rest[1:]
+        args = []
+        for arg in rest[1:]:
+            if re.search(r"[;&|()<>`]", arg):
+                break
+            args.append(arg)
+        if rest and rest[0] == "reset" and "--hard" in args:
+            return True
+        if rest and rest[0] == "push" and any(forces(arg) for arg in args):
+            return True
+    return False
+
+def forces(arg):
+    if arg == "--force" or (arg.startswith("+") and len(arg) > 1):
+        return True
+    # A cluster of short options such as -f or -uf; -o takes the rest of its word as a value.
+    return bool(re.fullmatch(r"-[A-Za-z0-9]+", arg)) and "f" in arg[1:].split("o")[0]
 
 try:
     cmd, root = command_of(os.environ.get("BC_INPUT", "")), os.environ.get("BC_PLUGIN_DIR", "")

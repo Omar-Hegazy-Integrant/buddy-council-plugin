@@ -80,8 +80,9 @@ minutes.
 **`loading: true` means call again.** A large project takes Jama a minute or more to send, longer than one tool
 call may last, so the read carries on in the server and the call answers early with
 `{loading: true, pages_read, pages_total, summary}`. Print one progress line (`Fetch: Jama project 42 —
-reading, 85 of 99 pages`) and call `jama_get_requirements` again with the **same arguments**: it joins the
-read already running and returns the requirements once it finishes. This is not a failure. Never fall back
+reading, 85 of 99 pages`) and call `jama_get_requirements` again right away with the **same arguments**: it
+joins the read already running and returns the requirements once it finishes. That call is the wait — never
+`sleep` in the shell first, which only asks the user's permission. This is not a failure. Never fall back
 to fetching requirements one by one — that is far slower than waiting for the tree. The same applies to
 `jama_get_features`, `jama_get_item_types`, and `jama_get_scope_proposal`.
 

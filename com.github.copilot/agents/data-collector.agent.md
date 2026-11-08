@@ -36,7 +36,9 @@ The caller's prompt gives:
 - Use only the tools named below. You have no tool that writes to Jama, TestRail, or Jira — do not look for one.
 - Run each shell command exactly as shown, one per call: `python3`, the script's absolute path, the
   subcommand, then the options. Wrap any value that contains a space or a special character in single quotes.
-  No `cd`, `&&`, `;`, pipes, `$(...)`, or redirects.
+  No `cd`, `&&`, `;`, pipes, `$(...)`, or redirects. Never wait in the shell with `sleep`: a tool that answers
+  `loading` is waited on by calling it again, and a shell wait only asks the user's permission.
+- Pass each tool only the arguments its step lists — and on a repeat call, the same ones.
 - Never open `requirements.json`, `background.json`, `test_cases.json`, `docs/`, or `bundles/` — they are
   large, and they are for the caller.
 - When a call fails, retry it at most twice. Then record the failure and move on to the next step. Never
@@ -70,8 +72,8 @@ The caller's prompt gives:
      **When `new` printed a `background` path**, add `background_save_to` = that path to the same call: it also
      writes the **background** — the rest of the project that lookups search to enrich their answers — from the
      same read and the same arguments. Never read the background in a call of its own.
-     If it answers `"loading": true`, call it again with the same arguments — that joins the read already
-     running. Keep calling until it answers with `saved_to` (a large project takes a minute or two).
+     If it answers `"loading": true`, call it again right away with the same arguments — that call waits for the
+     read already running. Keep calling until it answers with `saved_to` (a large project takes a minute or two).
 
 5. **Test cases** — only when `test_cases.provider` is `testrail`; a project that uses none skips this step,
    and the link step says so. Call `testrail_get_canonical_cases` with `site` = `test_cases.base_url`,

@@ -36,7 +36,8 @@ re-check tries again.
 2. **The token an older setup saved**, when the check answered `old_token: true`: run it again with
    `--move-old-token yes`. That makes the token the github.com key — in code, so it never passes through you —
    and reads again; its `lines` go in the recap. Only now: while anything else reads the documents, the old token
-   stays where it is, and cleanup says so once.
+   stays in `~/.buddy-council/secrets.json`, and cleanup says so once. bc's old `github` connector entry goes
+   either way, so no token stays in connector settings.
 3. **A read-only token**, asked for only now: a fine-grained personal access token with **Contents: read** on the
    repositories the documents live in (GitHub → Settings → Developer settings). Save it as the host's key — fields
    `token`, provider `github`, `url` the host (`https://github.com`, or the Enterprise host) — then run the check

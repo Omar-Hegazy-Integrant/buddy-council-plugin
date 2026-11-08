@@ -93,6 +93,25 @@ class HardBlock(HookTest):
         for command in ("echo $(rm -rf ~/x)", 'echo "$(rm -rf ~/x)"', 'echo "`rm -rf ~/x`"'):
             self.assertBlocked(command)
 
+    def test_a_forced_push_or_a_hard_reset_is_blocked_wherever_its_flag_sits(self):
+        for command in ("git push --force", "git push -f origin main", "git push origin main --force",
+                        "git push -uf origin main", "git push origin +main", "git push origin '+HEAD:main'",
+                        "git -C repo push --force", "git -c push.default=current push -f",
+                        "git push --force-with-lease --force origin main", "git push --force-with-lease origin +main",
+                        "cd repo && git push -f", "echo hi\ngit push origin +main", "bash -c 'git push --force'",
+                        "GIT_TRACE=1 git push -f", "/usr/bin/git push --force", "git reset --hard",
+                        "git reset HEAD~1 --hard"):
+            self.assertBlocked(command)
+
+    def test_a_push_with_a_lease_asks_instead(self):
+        for command in ("git push --force-with-lease origin main",
+                        "git push --force-with-lease --force-if-includes origin issue-6-setup",
+                        "git push --force-with-lease=main:abc123 origin main",
+                        "git push origin main", "git push -u origin main", "git push -o ci.skip origin main",
+                        "git push origin main && echo +done", "git reset --soft HEAD~1"):
+            for shape in ("claude", "copilot"):
+                self.assertEqual(decide(command, shape), (0, ""), f"the normal prompt: {command}")
+
     def test_destructive_words_inside_single_quotes_are_text(self):
         for command in ("echo 'rm -rf is dangerous; never run it'", "git commit -m 'kill the old flow'", "rm notes.txt"):
             code, out = decide(command)

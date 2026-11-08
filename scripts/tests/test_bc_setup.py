@@ -571,9 +571,32 @@ class Migration(Home):
                          "the old GitHub token stays until nothing else can read the documents")
         self.assertTrue((self.home / ".buddy-council" / "atlassian.env").exists(), "Jira wasn't checked")
         self.assertIn("acme-rnd.atlassian.net wasn't checked this run", " ".join(result["lines"]))
-        self.assertIn("becomes a key only if nothing else can read your design documents", " ".join(result["lines"]))
-        self.assertEqual(set(json.loads((self.plugin / ".mcp.json").read_text())["mcpServers"]), {"github"},
-                         "bc's GitHub server stays with its token")
+        self.assertIn("becomes the github.com key only if nothing else can read your design documents",
+                      " ".join(result["lines"]))
+        self.assertFalse((self.plugin / ".mcp.json").exists(),
+                         "bc's old entries went, GitHub's included: no token stays in connector settings")
+
+    def test_bcs_old_github_entry_goes_at_once_and_its_token_stays_in_the_old_key_file(self):
+        servers = json.loads(self.copilot.read_text())
+        servers["mcpServers"]["github"] = {"type": "local", "command": "github-mcp-server", "args": ["stdio"],
+                                           "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "gh-old-token"}}
+        self.copilot.write_text(json.dumps(servers))
+        bc_setup.migrate()
+        result = bc_setup.cleanup([])
+        self.assertNotIn("github", json.loads(self.copilot.read_text())["mcpServers"],
+                         "gone though no site was checked: no token stays in connector settings")
+        self.assertEqual(set(json.loads((self.plugin / ".mcp.json").read_text())["mcpServers"]), {"testrail"})
+        secrets = json.loads((self.home / ".buddy-council" / "secrets.json").read_text())
+        self.assertEqual(secrets["github"], {"token": "gh-old-token"}, "the token stays until it's moved or deleted")
+        self.assertEqual(bc_keys.sites("github"), [], "removing the entry doesn't make the token a key")
+        told = [line for line in result["lines"] if "GitHub token" in line]
+        self.assertEqual(len(told), 1, result["lines"])
+        self.assertIn("~/.buddy-council/secrets.json", told[0])
+        self.assertIn("delete it there", told[0])
+        self.assertTrue(any("github" in line and line.startswith("Removed") for line in result["lines"]))
+        again = bc_setup.cleanup([])
+        self.assertEqual([line for line in again["lines"] if "GitHub" in line or "github" in line], [],
+                         "said once, not on every run")
 
     def test_a_full_update_removes_every_leftover_and_names_the_backup_once(self):
         bc_setup.migrate()

@@ -721,12 +721,11 @@ class SnapshotLoading(Exception):
             "pages_total": load.pages_total,
             "elapsed_seconds": round(elapsed),
         }
-        if load.pages_done > 1 and load.pages_total:
-            payload["estimated_seconds_left"] = round(elapsed / load.pages_done * (load.pages_total - load.pages_done))
         payload["summary"] = (
             f"Still reading project {load.project_id} from Jama ({progress} after {elapsed:.0f} s). The read carries "
-            "on in the background: call this tool again with the same arguments to get the result. Do not switch "
-            "to fetching requirements one at a time — that is slower."
+            "on in the background: call this tool again with the same arguments, right away — that call waits for "
+            "the read, so don't wait or sleep in between. Do not switch to fetching requirements one at a time — "
+            "that is slower."
         )
         return payload
 
