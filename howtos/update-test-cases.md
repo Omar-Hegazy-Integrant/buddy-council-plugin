@@ -34,12 +34,18 @@ Every TestRail call below passes `site`: `test_cases.base_url` from `.buddy-coun
 4. **Add a link to both fields, every time.** A requirement ID goes into `refs` **and** the requirement field
    (`test_cases.authoring.requirement_field`), for the reasons in `draft-test-cases` step 3: a case linked in
    `refs` alone comes back an orphan, and its requirement reads untested. The requirement field gets
-   requirement IDs only; match the delimiter already in the case, else the one the corpus uses. Only link IDs
-   that exist in a freshly fetched requirement set — never one the user or a model typed from memory.
+   requirement IDs only, as plain IDs separated by a comma and a space — `CWA-REQ-85, CWA-REQ-86` — the only
+   form traceability tools read; the server writes that form whatever separators you send. Only link IDs that
+   exist in a freshly fetched requirement set — never one the user or a model typed from memory.
+   **Something in the field that isn't a requirement ID** — a URL, a link, an ID with an N or P marker — is
+   never carried over and never dropped unasked. The server refuses to write it back, and leaving it out is a
+   removal (rule 3). Show it in the plan and ask what it stands for, or whether to drop it; send the answer
+   with `allow_unlink` on that case.
 5. **Steps are a whole list.** `steps_separated` replaces every step. To change one step, send the full list
    with only that step changed, copying the others verbatim from the fresh read.
-6. **Pass `requirement_field` on every call**, so the server protects it like `refs`. A path that writes
-   links (`orphans`, `scenarios`, an `edits` request that adds a link) **stops** when it is `null` or unset —
+6. **Pass `requirement_field` on every call**, so the server protects it like `refs` and writes it as plain
+   IDs separated by commas. A path that writes links (`orphans`, `scenarios`, an `edits` request that adds a
+   link) **stops** when it is `null` or unset —
    `/bc:setup` records `null` when it could not find the field, and writing links without it creates exactly
    the orphan this how-to exists to prevent. A path that changes only text uses `custom_jama_req_id` when the
    setting is absent, the same fallback the TestRail provider reads with.
@@ -179,6 +185,9 @@ caller prints in its status table.
   read; never re-send with the guard removed.
 - **`blocked` on an unlink** → the change would drop a requirement link. On the `edits` path, ask whether the
   user meant to remove it; on every other path, drop that change and report it.
+- **`blocked` on a requirement value** ("Not a requirement ID in …") → the change would write something into
+  the requirement field that isn't a requirement ID. Never send it in another form to get past the check: on
+  the `edits` path, ask what it stands for (rule 4); on every other path, drop that change and report it.
 - **`dropped_fields` / `stopped`** → the update reached TestRail but a field did not stick. Report the field
   and every `not_attempted` case; do not retry until the field name is fixed.
 - **403** → the TestRail account can read but not edit cases. Say so; the role needs case edit permission.

@@ -81,6 +81,14 @@ the requirements' features, and how a new case is filed beside the cases already
 requirement (`section_strategy: "linked"`). `testrail_get_requirement_ids` feeds the Jama scope proposal in
 `/bc:setup`: the IDs the suite links to show which part of a Jama project matters.
 
+**Writing the requirement field is strict.** Traceability tools read it and accept only plain IDs separated
+by commas, so the create and update tools, given `requirement_field`, write that field as
+`CWA-REQ-85, CWA-REQ-86` — whatever separators or markup they were sent, each ID once — and refuse a value
+holding anything that isn't a requirement ID (a URL, a link, an ID with an N or P marker): it is listed in
+`failed` when creating and `blocked` when updating. An update counts a value stored in any other form
+(semicolons, rich text) as a change, but not one TestRail itself wraps in `<p>`, so a re-run sends nothing.
+Reading stays lenient; see the end of *Updating cases*.
+
 ## Choosing the target folder
 
 `testrail_add_cases` needs to know which section (folder) of the suite a case belongs in. Give it either:
@@ -110,7 +118,8 @@ folder costs one section read and one duplicate read, not forty.
 Case content uses friendly aliases that map onto TestRail's field names: `preconditions` →
 `custom_preconds`, `steps` → `custom_steps`, `expected` → `custom_expected`, and `steps_separated` →
 `custom_steps_separated` (`[{"content": ..., "expected": ...}]`, which needs a steps-style template).
-Anything else goes in `custom_fields`, where a missing `custom_` prefix is added for you. Run
+Anything else goes in `custom_fields`, where a missing `custom_` prefix is added for you. Pass
+`requirement_field` too, so the requirement field is written as plain IDs (see *Requirement links*). Run
 `testrail_get_case_fields` first against an unfamiliar instance — a required custom field you didn't set is
 the usual cause of a 400.
 
@@ -123,6 +132,8 @@ case count as coverage — so `testrail_update_cases` guards every case it touch
   change is not written, so re-running a batch adds nothing to TestRail's history.
 - **Link protection.** An update that would remove an ID from `refs`, or from `requirement_field` (pass it on
   every call), is blocked unless that entry sets `allow_unlink`.
+- **Requirement format.** With `requirement_field`, that field is written as plain IDs separated by commas,
+  and a value that isn't one is blocked (see *Requirement links*).
 - **Conflict check.** `expected_updated_on` — the `updated_on` a dry run returned — blocks a case someone
   edited in between, instead of overwriting their change.
 - **Read-back.** Every sent field is compared with the case TestRail returns. TestRail accepts an unknown
@@ -138,7 +149,7 @@ previous values are at hand to undo a change. `steps_separated` replaces the who
 Requirement IDs are split on commas, semicolons, and newlines after any markup and entities are dropped —
 some instances store the requirement field as rich text (`<p>CWA-REQ-85,&nbsp;CWA-REQ-86</p>`), which would
 otherwise read as IDs nothing matches. The link index, canonical cases, and the update tools' link protection
-all read IDs this way.
+all read IDs this way. Writing is strict instead; see *Requirement links*.
 
 ## Canonical cases and run folders
 

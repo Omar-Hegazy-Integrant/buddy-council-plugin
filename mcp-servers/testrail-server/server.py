@@ -406,12 +406,13 @@ _FIELD_ALIASES = {
 }
 
 
-def _build_case_payload(spec: dict[str, Any]) -> dict[str, Any]:
+def _build_case_payload(spec: dict[str, Any], requirement_field: str | None = None) -> dict[str, Any]:
     """Turn a friendly case spec into TestRail's add_case body.
 
     Maps the readable aliases (preconditions/steps/expected/steps_separated) onto
     their custom_* names, passes the built-in fields through, and prefixes any
-    extra custom_fields keys with custom_ when the caller left it off.
+    extra custom_fields keys with custom_ when the caller left it off. The
+    requirement field, when named, is written as plain IDs separated by commas.
     """
     title = str(spec.get("title", "")).strip()
     if not title:
@@ -433,6 +434,8 @@ def _build_case_payload(spec: dict[str, Any]) -> dict[str, Any]:
     for key, value in extra.items():
         payload[key if str(key).startswith("custom_") else f"custom_{key}"] = value
 
+    if requirement_field and payload.get(requirement_field) is not None:
+        payload[requirement_field] = _requirement_value(payload[requirement_field], requirement_field)
     return payload
 
 
@@ -456,6 +459,7 @@ _UPDATE_FIELD_KEYS = {
 _UPDATE_REFUSED_KEYS = {"template_id", "section_id", "section_path", "suite_id", "project_id"}
 _STEPS_FIELD = "custom_steps_separated"
 _TOKEN_SPLIT = re.compile(r"[,;\n]")
+_REQUIREMENT_SHAPED = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*[-_]\d+$")
 
 
 def _parse_case_id(value: Any) -> int:
@@ -469,6 +473,10 @@ def _parse_case_id(value: Any) -> int:
 def _custom_key(name: Any) -> str:
     key = str(name).strip()
     return key if key.startswith("custom_") else f"custom_{key}"
+
+
+def _requirement_key(requirement_field: Any) -> str | None:
+    return _custom_key(requirement_field) if requirement_field and str(requirement_field).strip() else None
 
 
 def _build_update_payload(spec: dict[str, Any]) -> dict[str, Any]:
@@ -542,6 +550,25 @@ def _tokens(value: Any) -> list[str]:
     return [token for token in (_clean(item) for item in items) if token]
 
 
+def _requirement_value(value: Any, field: str) -> str:
+    """The requirement field as the plugin writes it: plain IDs separated by a comma and a space, each once.
+
+    Traceability tools read this field and accept nothing else, so whatever separators or markup came in,
+    the IDs go out as "CWA-REQ-85, CWA-REQ-86". Reading stays lenient (`_tokens`); writing is strict.
+    """
+    ids: dict[str, str] = {}
+    for token in _tokens(value):
+        ids.setdefault(token.casefold(), token)
+    invalid = [token for token in ids.values() if not _REQUIREMENT_SHAPED.match(token)]
+    if invalid:
+        listed = ", ".join(f'"{token}"' for token in invalid)
+        raise TestRailError(
+            f"Not a requirement ID in {field}: {listed}. The field takes plain requirement IDs separated by "
+            "commas, like CWA-REQ-85, CWA-REQ-86: no links, no URLs, no N or P (negative or positive) markers."
+        )
+    return ", ".join(ids.values())
+
+
 def _step_keys(steps: Any) -> tuple[str, ...]:
     """Compare only the step keys the caller sent; TestRail adds its own (shared_step_id, …)."""
     keys = {"content", "expected"}
@@ -559,7 +586,11 @@ def _steps_view(value: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
     ]
 
 
-def _same(field: str, current: Any, new: Any, token_fields: set[str]) -> bool:
+def _same(field: str, current: Any, new: Any, token_fields: set[str], formatted: frozenset[str] | set[str] = frozenset()) -> bool:
+    """Whether `current` already holds `new`. Reference fields compare by their IDs, except a field in
+    `formatted` — the requirement field when deciding what to send — which must already read as `new`."""
+    if field in formatted:
+        return _clean(current) == _clean(new)
     if field in token_fields:
         return [t.casefold() for t in _tokens(current)] == [t.casefold() for t in _tokens(new)]
     if field == _STEPS_FIELD:
@@ -1117,7 +1148,6 @@ async def testrail_get_templates(project_id: int, site: Site = None) -> str:
     return json.dumps(data, indent=2)
 
 
-_REQUIREMENT_SHAPED = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*[-_]\d+$")
 _REQUIREMENT_HINTS = ("req", "jama", "requirement", "story")
 
 
@@ -1584,6 +1614,7 @@ async def testrail_add_case(
     expected: str | None = None,
     steps_separated: list[dict[str, Any]] | None = None,
     custom_fields: dict[str, Any] | None = None,
+    requirement_field: str | None = None,
     skip_if_title_exists: bool = True,
     site: Site = None,
 ) -> str:
@@ -1610,6 +1641,11 @@ async def testrail_add_case(
             Requires a steps-style template.
         custom_fields: Any other custom fields, {"my_field": value}. A missing
             custom_ prefix is added for you.
+        requirement_field: The custom field holding requirement IDs
+            (test_cases.authoring.requirement_field); custom_ prefix optional.
+            Pass it whenever you write that field: it is then written as plain
+            IDs separated by a comma and a space, and a value holding anything
+            that isn't a requirement ID is refused (see testrail_add_cases).
         skip_if_title_exists: When true (default), do nothing if a case with this
             title already sits in the target folder, so re-runs don't duplicate.
 
@@ -1640,6 +1676,7 @@ async def testrail_add_case(
         create_missing_sections=create_missing_sections,
         skip_if_title_exists=skip_if_title_exists,
         dry_run=False,
+        requirement_field=requirement_field,
         site=site,
     )
 
@@ -1654,6 +1691,7 @@ async def testrail_add_cases(
     create_missing_sections: bool = True,
     skip_if_title_exists: bool = True,
     dry_run: bool = False,
+    requirement_field: str | None = None,
     site: Site = None,
 ) -> str:
     """Create one or more test cases in suite folders. WRITES to TestRail.
@@ -1684,6 +1722,15 @@ async def testrail_add_cases(
             would be created is reported in sections_created as
             'would create folder "…"', and its cases come back with
             section_id null.
+        requirement_field: The custom field holding requirement IDs
+            (test_cases.authoring.requirement_field); custom_ prefix optional.
+            Pass it on every call. That field is then written as plain IDs
+            separated by a comma and a space ("CWA-REQ-85, CWA-REQ-86"),
+            whatever separators or markup you send, each ID once — the only
+            form traceability tools read. A case whose value holds anything
+            that isn't a requirement ID (a URL, a link, an ID with an N or P
+            marker) is not created; it is listed in failed, naming what isn't
+            an ID.
 
     Returns JSON:
         {"dry_run": bool,
@@ -1699,6 +1746,7 @@ async def testrail_add_cases(
     if not cases:
         return json.dumps({"error": "No cases supplied — `cases` is empty."}, indent=2)
 
+    req_field = _requirement_key(requirement_field)
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -1740,7 +1788,7 @@ async def testrail_add_cases(
                     )
             dest_id, dest_path = resolved[key]
             titles_key = dest_id if dest_id is not None else f"new:{dest_path.casefold()}"
-            payload = _build_case_payload(spec)
+            payload = _build_case_payload(spec, req_field)
         except TestRailError as exc:
             failed.append({"index": index, "title": spec.get("title"), "error": str(exc)})
             continue
@@ -1836,7 +1884,8 @@ async def testrail_update_case(
         steps_separated: REPLACES the whole step list — send every step, not just the changed one.
         custom_fields: any other custom fields, {"my_field": value}; custom_ prefix optional.
         requirement_field: the custom field holding requirement IDs (test_cases.authoring.requirement_field).
-            Pass it whenever you have it: IDs in it are then protected like refs.
+            Pass it whenever you have it: IDs in it are then protected like refs, and the field is written as
+            plain IDs separated by a comma and a space.
         expected_updated_on: the case's updated_on from when you read it. If TestRail's value
             differs, someone edited the case since, and the update is refused.
         allow_unlink: set only when the user explicitly asked to remove a requirement link.
@@ -1885,6 +1934,12 @@ async def testrail_update_cases(
         `requirement_field` when given, is BLOCKED unless that entry sets
         allow_unlink. Losing a link turns the case into an orphan and leaves its
         requirement reading untested.
+      - Requirement format: with requirement_field, that field is written as
+        plain IDs separated by a comma and a space ("CWA-REQ-85, CWA-REQ-86"),
+        the only form traceability tools read. A stored value in any other form
+        (semicolons, rich text) counts as a change, and a value holding anything
+        that isn't a requirement ID (a URL, a link, an ID with an N or P marker)
+        is BLOCKED.
       - Conflicts: with expected_updated_on, a case edited in TestRail since it was
         read is BLOCKED rather than overwritten.
       - Read-back: every sent field is compared with the case TestRail returns.
@@ -1903,7 +1958,8 @@ async def testrail_update_cases(
             `expected_updated_on` and `allow_unlink`. Omit a field to leave it
             alone; pass "" to clear it. steps_separated replaces the whole list.
         requirement_field: the custom field holding requirement IDs
-            (test_cases.authoring.requirement_field), protected like refs.
+            (test_cases.authoring.requirement_field), protected like refs and
+            written as plain IDs separated by a comma and a space.
         dry_run: read and diff every case, write nothing. Each planned entry
             carries the case's current updated_on — pass it back as
             expected_updated_on when applying the plan.
@@ -1926,9 +1982,9 @@ async def testrail_update_cases(
     if not cases:
         return json.dumps({"error": "No cases supplied — `cases` is empty."}, indent=2)
 
-    token_fields = {"refs"}
-    if requirement_field and str(requirement_field).strip():
-        token_fields.add(_custom_key(requirement_field))
+    req_field = _requirement_key(requirement_field)
+    token_fields = {"refs"} | ({req_field} if req_field else set())
+    formatted = {req_field} if req_field else set()
 
     updated: list[dict[str, Any]] = []
     unchanged: list[dict[str, Any]] = []
@@ -1988,7 +2044,18 @@ async def testrail_update_cases(
             )
             continue
 
-        body = {field: value for field, value in payload.items() if not _same(field, current.get(field), value, token_fields)}
+        if req_field and payload.get(req_field) is not None:
+            try:
+                payload[req_field] = _requirement_value(payload[req_field], req_field)
+            except TestRailError as exc:
+                blocked.append({**base, "reason": str(exc)})
+                continue
+
+        body = {
+            field: value
+            for field, value in payload.items()
+            if not _same(field, current.get(field), value, token_fields, formatted)
+        }
         if not body:
             unchanged.append({**base, "updated_on": current.get("updated_on")})
             continue
