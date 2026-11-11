@@ -39,8 +39,9 @@ Every TestRail call below passes `site`: `test_cases.base_url` from `.buddy-coun
    exist in a freshly fetched requirement set — never one the user or a model typed from memory.
    **Something in the field that isn't a requirement ID** — a URL, a link, an ID with an N or P marker — is
    never carried over and never dropped unasked. The server refuses to write it back, and leaving it out is a
-   removal (rule 3). Show it in the plan and ask what it stands for, or whether to drop it; send the answer
-   with `allow_unlink` on that case.
+   removal (rule 3). On the `edits` path, show it in the plan and ask what it stands for, or whether to drop
+   it, and send the answer with `allow_unlink` on that case; on every other path, leave that case alone and
+   report it.
 5. **Steps are a whole list.** `steps_separated` replaces every step. To change one step, send the full list
    with only that step changed, copying the others verbatim from the fresh read.
 6. **Pass `requirement_field` on every call**, so the server protects it like `refs` and writes it as plain

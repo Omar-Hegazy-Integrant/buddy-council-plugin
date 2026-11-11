@@ -434,8 +434,7 @@ def _build_case_payload(spec: dict[str, Any], requirement_field: str | None = No
     for key, value in extra.items():
         payload[key if str(key).startswith("custom_") else f"custom_{key}"] = value
 
-    if requirement_field and payload.get(requirement_field) is not None:
-        payload[requirement_field] = _requirement_value(payload[requirement_field], requirement_field)
+    _format_requirement_field(payload, requirement_field)
     return payload
 
 
@@ -460,6 +459,7 @@ _UPDATE_REFUSED_KEYS = {"template_id", "section_id", "section_path", "suite_id",
 _STEPS_FIELD = "custom_steps_separated"
 _TOKEN_SPLIT = re.compile(r"[,;\n]")
 _REQUIREMENT_SHAPED = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*[-_]\d+$")
+_PARAGRAPH = re.compile(r"<p(?:\s[^>]*)?>(.*)</p>", re.IGNORECASE | re.DOTALL)
 
 
 def _parse_case_id(value: Any) -> int:
@@ -569,6 +569,21 @@ def _requirement_value(value: Any, field: str) -> str:
     return ", ".join(ids.values())
 
 
+def _format_requirement_field(payload: dict[str, Any], requirement_field: Any) -> None:
+    """Rewrite the requirement field in `payload`, when it carries one, as plain IDs separated by commas."""
+    key = _requirement_key(requirement_field)
+    if key and payload.get(key) is not None:
+        payload[key] = _requirement_value(payload[key], key)
+
+
+def _written_text(value: Any) -> str:
+    """A field's text as stored, minus the one <p> a rich-text field wraps it in. Any other markup or entity stays,
+    so a stored link or &nbsp; still reads as not written the way the plugin writes it."""
+    text = _norm_text(value)
+    match = _PARAGRAPH.fullmatch(text)
+    return match.group(1).strip() if match else text
+
+
 def _step_keys(steps: Any) -> tuple[str, ...]:
     """Compare only the step keys the caller sent; TestRail adds its own (shared_step_id, …)."""
     keys = {"content", "expected"}
@@ -586,11 +601,12 @@ def _steps_view(value: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
     ]
 
 
-def _same(field: str, current: Any, new: Any, token_fields: set[str], formatted: frozenset[str] | set[str] = frozenset()) -> bool:
-    """Whether `current` already holds `new`. Reference fields compare by their IDs, except a field in
-    `formatted` — the requirement field when deciding what to send — which must already read as `new`."""
-    if field in formatted:
-        return _clean(current) == _clean(new)
+def _same(field: str, current: Any, new: Any, token_fields: set[str], written_field: str | None = None) -> bool:
+    """Whether `current` already holds `new`. `refs` and the requirement field compare by the IDs they hold —
+    except `written_field` (the requirement field, when deciding what to send), which must already be stored
+    exactly as the plugin writes it."""
+    if field == written_field:
+        return _written_text(current) == _norm_text(new)
     if field in token_fields:
         return [t.casefold() for t in _tokens(current)] == [t.casefold() for t in _tokens(new)]
     if field == _STEPS_FIELD:
@@ -1746,7 +1762,6 @@ async def testrail_add_cases(
     if not cases:
         return json.dumps({"error": "No cases supplied — `cases` is empty."}, indent=2)
 
-    req_field = _requirement_key(requirement_field)
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -1768,6 +1783,7 @@ async def testrail_add_cases(
         key = (target_id, target_path)
 
         try:
+            payload = _build_case_payload(spec, requirement_field)  # before the folder: a refused case creates none
             if key not in resolved:
                 resolved_id, resolved_path, notes = await _resolve_section(
                     project_id=project_id,
@@ -1788,7 +1804,6 @@ async def testrail_add_cases(
                     )
             dest_id, dest_path = resolved[key]
             titles_key = dest_id if dest_id is not None else f"new:{dest_path.casefold()}"
-            payload = _build_case_payload(spec, req_field)
         except TestRailError as exc:
             failed.append({"index": index, "title": spec.get("title"), "error": str(exc)})
             continue
@@ -1982,9 +1997,8 @@ async def testrail_update_cases(
     if not cases:
         return json.dumps({"error": "No cases supplied — `cases` is empty."}, indent=2)
 
-    req_field = _requirement_key(requirement_field)
-    token_fields = {"refs"} | ({req_field} if req_field else set())
-    formatted = {req_field} if req_field else set()
+    req_key = _requirement_key(requirement_field)
+    token_fields = {"refs"} | ({req_key} if req_key else set())
 
     updated: list[dict[str, Any]] = []
     unchanged: list[dict[str, Any]] = []
@@ -2044,17 +2058,16 @@ async def testrail_update_cases(
             )
             continue
 
-        if req_field and payload.get(req_field) is not None:
-            try:
-                payload[req_field] = _requirement_value(payload[req_field], req_field)
-            except TestRailError as exc:
-                blocked.append({**base, "reason": str(exc)})
-                continue
+        try:
+            _format_requirement_field(payload, req_key)
+        except TestRailError as exc:
+            blocked.append({**base, "reason": str(exc)})
+            continue
 
         body = {
             field: value
             for field, value in payload.items()
-            if not _same(field, current.get(field), value, token_fields, formatted)
+            if not _same(field, current.get(field), value, token_fields, written_field=req_key)
         }
         if not body:
             unchanged.append({**base, "updated_on": current.get("updated_on")})

@@ -327,17 +327,37 @@ class UpdateCases(ServerTestCase):
         self.assertEqual(self.fake.cases[13][REQ_FIELD], "CWA-REQ-86")
 
     async def test_a_requirement_field_in_another_form_is_rewritten_as_ids_separated_by_commas(self):
-        for stored in ("CWA-REQ-85;CWA-REQ-86", "<p>CWA-REQ-85,&nbsp;CWA-REQ-86</p>", "CWA-REQ-85,CWA-REQ-86"):
-            self.fake.cases[14][REQ_FIELD] = stored
-            result = await self.update(
-                [{"case_id": 14, "custom_fields": {"jama_req_id": "CWA-REQ-85\nCWA-REQ-86\ncwa-req-85"}}],
-                requirement_field=REQ_FIELD,
-            )
-            self.assertEqual(
-                result["updated"][0]["changes"], {REQ_FIELD: {"before": stored, "after": "CWA-REQ-85, CWA-REQ-86"}}, stored
-            )
-        self.assertEqual(len(self.fake.posts()), 3)
+        forms = ("CWA-REQ-85;CWA-REQ-86", "CWA-REQ-85\nCWA-REQ-86", "<p>CWA-REQ-85,&nbsp;CWA-REQ-86</p>", "CWA-REQ-85,CWA-REQ-86")
+        for stored in forms:
+            for sent in forms:
+                self.fake.cases[14][REQ_FIELD] = stored
+                result = await self.update(
+                    [{"case_id": 14, "custom_fields": {"jama_req_id": sent}}], requirement_field=REQ_FIELD, dry_run=True
+                )
+                self.assertEqual(
+                    result["updated"][0]["changes"],
+                    {REQ_FIELD: {"before": stored, "after": "CWA-REQ-85, CWA-REQ-86"}},
+                    (stored, sent),
+                )
+        await self.update(
+            [{"case_id": 14, "custom_fields": {"jama_req_id": "CWA-REQ-85\nCWA-REQ-86\ncwa-req-85"}}], requirement_field=REQ_FIELD
+        )
+        self.assertEqual(len(self.fake.posts()), 1)
         self.assertEqual(self.fake.cases[14][REQ_FIELD], "CWA-REQ-85, CWA-REQ-86")
+
+    async def test_only_the_paragraph_testrail_adds_passes_as_already_written(self):
+        sent = [{"case_id": 14, "custom_fields": {"jama_req_id": "CWA-REQ-85, CWA-REQ-86"}}]
+        for stored in (
+            '<p><a href="https://jama.example/items/1">CWA-REQ-85</a>, CWA-REQ-86</p>',
+            "<b>CWA-REQ-85, CWA-REQ-86</b>",
+            "<p>CWA-REQ-85</p><p>CWA-REQ-86</p>",
+        ):
+            self.fake.cases[14][REQ_FIELD] = stored
+            result = await self.update(sent, requirement_field=REQ_FIELD, dry_run=True)
+            self.assertEqual(result["updated"][0]["changes"][REQ_FIELD]["after"], "CWA-REQ-85, CWA-REQ-86", stored)
+        self.fake.cases[14][REQ_FIELD] = '<P class="rich">CWA-REQ-85, CWA-REQ-86</P>\n'
+        self.assertEqual(len((await self.update(sent, requirement_field=REQ_FIELD))["unchanged"]), 1)
+        self.assertEqual(self.fake.posts(), [])
 
     async def test_links_in_a_rich_text_requirement_field_are_protected_by_their_ids(self):
         self.fake.cases[14][REQ_FIELD] = "<p>CWA-REQ-85,&nbsp;CWA-REQ-86</p>"
@@ -486,6 +506,12 @@ class UpdateCases(ServerTestCase):
         self.assertEqual(list(result["updated"][0]["changes"]), ["custom_preconds"])
         blocked = json.loads(await server.testrail_update_case(case_id=12, refs="", dry_run=True))
         self.assertEqual(blocked["blocked"][0]["removed"], {"refs": ["CWA-REQ-85"]})
+        linked = json.loads(
+            await server.testrail_update_case(
+                case_id=13, custom_fields={"jama_req_id": "CWA-REQ-86;CWA-REQ-85"}, requirement_field="jama_req_id", dry_run=True
+            )
+        )
+        self.assertEqual(linked["updated"][0]["changes"][REQ_FIELD]["after"], "CWA-REQ-86, CWA-REQ-85")
 
 
 class LinkIndex(ServerTestCase):
@@ -762,12 +788,11 @@ class AddCases(ServerTestCase):
     async def add(self, cases, **kwargs):
         return json.loads(await server.testrail_add_cases(project_id=1, cases=cases, section_id=5, **kwargs))
 
-    def stored(self, result):
+    def requirement_values(self, result):
         return [self.fake.cases[created["id"]][REQ_FIELD] for created in result["created"]]
 
     async def test_created_cases_report_updated_on(self):
-        result = json.loads(await server.testrail_add_cases(project_id=1, cases=[{"title": "Brand new"}], section_id=5))
-        created = result["created"][0]
+        created = (await self.add([{"title": "Brand new"}]))["created"][0]
         self.assertEqual(created["updated_on"], self.fake.cases[created["id"]]["updated_on"])
 
     async def test_the_requirement_field_is_written_as_ids_separated_by_commas(self):
@@ -781,14 +806,14 @@ class AddCases(ServerTestCase):
             [{"title": f"Case {n}", "custom_fields": {"jama_req_id": value}} for n, value in enumerate(given)],
             requirement_field="jama_req_id",
         )
-        self.assertEqual(self.stored(result), ["CWA-REQ-85, CWA-REQ-86"] * len(given))
+        self.assertEqual(self.requirement_values(result), ["CWA-REQ-85, CWA-REQ-86"] * len(given))
         one = json.loads(
             await server.testrail_add_case(
                 project_id=1, title="One", section_id=5, custom_fields={REQ_FIELD: "CWA-REQ-86;CWA-REQ-85"},
                 requirement_field=REQ_FIELD,
             )
         )
-        self.assertEqual(self.stored(one), ["CWA-REQ-86, CWA-REQ-85"], "the IDs keep their order")
+        self.assertEqual(self.requirement_values(one), ["CWA-REQ-86, CWA-REQ-85"], "the IDs keep their order")
 
     async def test_a_value_that_is_not_a_requirement_id_is_refused_and_the_rest_are_created(self):
         bad = ["https://jama.example/perspective.req#/items/123", "[CWA-REQ-85](https://jama.example/items/1)", "CWA-REQ-85 (P)"]
@@ -802,9 +827,21 @@ class AddCases(ServerTestCase):
             self.assertIn(f'"{value}"', failed["error"])
         self.assertEqual([body["title"] for _, body in self.fake.posts()], ["Good"])
 
+    async def test_a_refused_case_creates_no_folder(self):
+        result = json.loads(
+            await server.testrail_add_cases(
+                project_id=1,
+                cases=[{"title": "Bad", "custom_fields": {REQ_FIELD: "CWA-REQ-85 (P)"}}],
+                section_path="Sync/Brand new folder",
+                requirement_field=REQ_FIELD,
+            )
+        )
+        self.assertEqual((len(result["failed"]), result["sections_created"]), (1, []))
+        self.assertEqual(self.fake.posts(), [])
+
     async def test_without_requirement_field_the_value_is_written_as_given(self):
         result = await self.add([{"title": "As given", "custom_fields": {REQ_FIELD: "CWA-REQ-85;CWA-REQ-86 (P)"}}])
-        self.assertEqual(self.stored(result), ["CWA-REQ-85;CWA-REQ-86 (P)"])
+        self.assertEqual(self.requirement_values(result), ["CWA-REQ-85;CWA-REQ-86 (P)"])
 
 
 class Contract(ServerTestCase):
