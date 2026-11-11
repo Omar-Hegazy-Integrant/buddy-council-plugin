@@ -119,14 +119,14 @@ A made-up Test Case, **C1234 "Check the Welcome screen"**, for iOS and Android:
 
 | Q | Question | Ticket |
 |---|---|---|
-| Q21 | What does a test check for an element the Walk never found? | [#62][62] |
-| Q22 | What does a test's teardown put back? | [#62][62] |
-| Q23 | What goes in the separate pull request? | [#28][28] |
+| Q21 | If a step checks for something the plugin can't find on the screen, what should the new test do? | [#62][62] |
+| Q22 | When a test changes a phone setting, what should it put back at the end? | [#62][62] |
+| Q23 | When the plugin finishes a test a person wrote, what goes in the separate pull request? | [#28][28] |
 | Q24 | How does the plugin know a person edited a file it wrote? | [#28][28] |
-| Q25 | Where do the values a step types come from? | [#31][31] |
-| Q26 | How are passwords and other secrets kept safe? | [#31][31] |
-| Q27 | How does a test find an element that has no test ID? | [#32][32] |
-| Q28 | How does the app team learn which elements need a test ID? | [#32][32] |
+| Q25 | Where should the values a step types come from? | [#31][31] |
+| Q26 | How should passwords and other secrets be kept safe? | [#31][31] |
+| Q27 | How should a test find an element that has no test ID? | [#32][32] |
+| Q28 | How should the app team learn which elements need a test ID? | [#32][32] |
 
 Everything else that's not decided yet is on the [map][20].
 
@@ -146,7 +146,7 @@ and [the plugin posts its own test run results](../adr/0005-plugin-posts-its-own
 
 1. Each round, the team gets a set of questions in its chat, each with a recommended answer and an example.
 2. The team answers by number: agree, disagree, or a question.
-3. The answers go on each question's GitHub ticket, and this file is updated on the same branch.
+3. The answers go on each question's GitHub ticket, and this file is updated after the round.
 
 [20]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/20
 [22]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/22
