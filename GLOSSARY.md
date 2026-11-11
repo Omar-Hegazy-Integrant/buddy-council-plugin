@@ -90,6 +90,10 @@ _Avoid_: install script, bootstrap script
 The programs the plugin installs for itself to drive an app on a phone, kept apart from any test environment.
 _Avoid_: automation tools
 
+**Walk**:
+Following one Test Case's steps on a phone the way a person would, checking the results it expects and Capturing each screen the steps reach.
+_Avoid_: tour, crawl, exploration
+
 **Screen Map**:
 What the plugin learns about an app's screens by walking them: how to recognize each screen, how to find its elements, and how to reach it.
 _Avoid_: screen files, locator file
