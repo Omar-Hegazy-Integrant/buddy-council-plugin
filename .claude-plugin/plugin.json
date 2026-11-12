@@ -1,7 +1,7 @@
 {
   "name": "bc",
   "description": "Multi-agent requirements/test-case analysis — contradiction detection, alignment validation, and cross-artifact reasoning",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "author": {
     "name": "Omar Hegazy"
   },
@@ -31,7 +31,6 @@
     }
   },
   "agents": [
-    "./com.github.copilot/agents/contradiction-agent.agent.md",
     "./com.github.copilot/agents/coverage-agent.agent.md",
     "./com.github.copilot/agents/data-collector.agent.md",
     "./com.github.copilot/agents/onboarding-agent.agent.md",

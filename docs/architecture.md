@@ -19,7 +19,6 @@ buddy_council_plugin/
 │   ├── ask.md                   # /bc:ask — intent classification + routing
 │   └── setup.md                 # /bc:setup — onboarding and configuration
 ├── agents/                      # Reasoning engines
-│   ├── contradiction-agent.agent.md   # Orchestrates the contradiction workflow
 │   ├── coverage-agent.agent.md        # Orchestrates the coverage workflow
 │   ├── data-collector.agent.md        # Low-cost sub-agent: collects a run into .buddy-council/runs/
 │   └── scenario-mapping-agent.agent.md # User scenarios → requirement traces → TestRail cases
@@ -66,7 +65,7 @@ code links and counts, and the session's model only judges. The data travels as 
 ```
 User runs /bc:contradiction [scope]
   │
-  ├─ Command (commands/contradiction.md) → Agent (agents/contradiction-agent.agent.md), on the session's model
+  ├─ Command (skills/contradiction/SKILL.md), on the session's model
   │
   │    Step 1–2: Load .buddy-council/sources.json, determine the scope
   │
@@ -198,7 +197,7 @@ The `/bc:ask` command classifies intent and routes to the right agent:
 
 ```
 /bc:ask "Why does TC-1234 contradict REQ-85?"
-  └─ ask.md → CONTRADICTION intent → follows contradiction-agent.agent.md
+  └─ ask.md → CONTRADICTION intent → follows skills/contradiction/SKILL.md
 
 /bc:ask "What requirements have no tests?"
   └─ ask.md → COVERAGE intent → follows coverage-agent.agent.md

@@ -88,7 +88,8 @@ A JSON array in the canonical schema:
       "labels": ["authentication"],
       "sprint": "Sprint 14",
       "assignee": "Jane Doe",
-      "board_id": 42
+      "board_id": 42,
+      "url": "https://jira.company.com/browse/PROJ-123"
     }
   }
 ]
@@ -99,7 +100,8 @@ Field mapping, `issuelinks` → `linked_ids`, and feature derivation are all ide
 One addition specific to board issues: also scan `summary` and `description` for requirement-ID patterns
 (`project.id_patterns` in the config, e.g. `CWA-REQ-\d+`) and merge any matches into `linked_ids`. That is
 what lets coverage and contradiction analysis tie a sprint ticket back to a requirement when no formal Jira
-link exists.
+link exists. Also keep each issue's own link in `raw_fields.url` — `<jira.base_url>/browse/<KEY>` — so a report
+can link the ticket without knowing how Jira builds one.
 
 Request `fields` explicitly — `summary,status,issuetype,priority,labels,components,description` (plus the sprint
 field when you need it): the tool's default set adds reporter, assignee, versions, and dates, which this how-to
