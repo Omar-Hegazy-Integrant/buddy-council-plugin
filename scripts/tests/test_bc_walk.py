@@ -1,5 +1,5 @@
 """Tests for bc_walk.py — checking the fetched folders, batching their cases, and validating and merging the
-extractors' fragments into the graph. Standard library only.
+extractors' fragments into the graph, and planning, checking, and rendering the Walks. Standard library only.
 
     python3 -m unittest discover -s scripts/tests -v
 
@@ -698,6 +698,447 @@ class WalkCommandLine(FragmentRunTest):
     def test_the_schema_is_written_once_in_the_script(self):
         self.assertIn("screens", bc_walk.FRAGMENT_SCHEMA)
         self.assertEqual(bc_walk.ACTIONS, ("tap", "type", "select", "scroll", "back", "external"))
+
+
+
+BOTH = ["ios", "android"]
+
+
+def g_state(sid, requires=(), platforms=BOTH):
+    return {"id": sid, "requires": list(requires), "platforms": list(platforms), "sources": ["TC-1"]}
+
+
+def g_screen(sid, states, components=(), labels=(), platforms=BOTH):
+    return {"id": sid, "name": sid.title(), "platforms": list(platforms), "sources": ["TC-1"], "states": list(states),
+            "components": list(components), "labels": list(labels)}
+
+
+def g_component(cid, platforms=BOTH, only_in=None):
+    out = {"id": cid, "kind": "button"}
+    if only_in:
+        out["only_in"] = list(only_in)
+    return {**out, "platforms": list(platforms), "sources": ["TC-1"]}
+
+
+def g_label(lid, hint, only_in=None, platforms=BOTH):
+    out = {"id": lid, "text_hint": hint, "purpose": "shows " + hint}
+    if only_in:
+        out["only_in"] = list(only_in)
+    return {**out, "platforms": list(platforms), "sources": ["TC-1"]}
+
+
+def g_step(source, target, action="tap", component=None, requires=(), sets=(), clears=(), platforms=BOTH,
+           instruction=None):
+    out = {"from_state": source, "to_state": target, "action": action}
+    if component:
+        out["component"] = component
+    if instruction:
+        out["instruction"] = instruction
+    return {**out, "requires": list(requires), "sets": list(sets), "clears": list(clears),
+            "platforms": list(platforms), "sources": ["TC-1"]}
+
+
+def app_graph():
+    """Login → Home → Settings (back to Home) and Readings. Settings' error state needs the network off, which only a
+    person can do; Readings' empty state needs an account with no readings, which nothing in the app sets. Home's
+    banner is Android only. Log out clears the login; Continue on Login needs it."""
+    return {
+        "entries": [{"id": "entry.login.default", "state": "login.default", "conditions": [], "platforms": BOTH,
+                     "sources": ["TC-1"]}],
+        "conditions": [{"id": c, "description": c[5:].replace("_", " "), "sources": ["TC-1"]}
+                       for c in ("cond.logged_in", "cond.no_readings", "cond.offline")],
+        "screens": [
+            g_screen("home", [g_state("home.banner", platforms=["android"]), g_state("home.default")],
+                     [g_component("home.log_out_button"), g_component("home.readings_button"),
+                      g_component("home.settings_button")],
+                     [g_label("home.label.hello", "Hello")]),
+            g_screen("login", [g_state("login.default")],
+                     [g_component("login.continue_button"), g_component("login.log_in_button")],
+                     [g_label("login.label.welcome", "Welcome")]),
+            g_screen("readings", [g_state("readings.default"), g_state("readings.empty", ["cond.no_readings"])],
+                     [], [g_label("readings.label.no_readings_yet", "No readings yet", ["readings.empty"])]),
+            g_screen("settings", [g_state("settings.default", ["cond.logged_in"]),
+                                  g_state("settings.error", ["cond.offline"])],
+                     [], [g_label("settings.label.no_connection", "No connection", ["settings.error"]),
+                          g_label("settings.label.settings", "Settings")]),
+        ],
+        "transitions": [
+            g_step("home.default", "home.banner", "scroll", platforms=["android"]),
+            g_step("home.default", "login.default", component="home.log_out_button", clears=["cond.logged_in"]),
+            g_step("home.default", "readings.default", component="home.readings_button"),
+            g_step("home.default", "readings.empty", component="home.readings_button"),
+            g_step("home.default", "settings.default", component="home.settings_button",
+                   requires=["cond.logged_in"]),
+            g_step("login.default", "home.default", component="login.continue_button", requires=["cond.logged_in"]),
+            g_step("login.default", "home.default", component="login.log_in_button", sets=["cond.logged_in"]),
+            g_step("settings.default", "home.default", "back"),
+            g_step("settings.default", "settings.error", "external", instruction="Turn off the network",
+                   sets=["cond.offline"]),
+        ],
+    }
+
+
+def all_states(graph, platform):
+    return {s["id"] for screen in graph["screens"] if platform in screen["platforms"] for s in screen["states"]
+            if platform in s["platforms"]}
+
+
+def reached(walks, platform):
+    found = set()
+    for walk in walks:
+        if walk["platform"] == platform:
+            found.add(walk["entry"].split(".", 1)[1].split("+")[0])
+            found.update(step["to_state"] for step in walk["steps"])
+    return found
+
+
+class WalkGraphTest(FragmentRunTest):
+    """A run whose graph.json is app_graph(), written as merge writes it."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_graph(app_graph())
+
+    def write_graph(self, graph):
+        self.app = graph
+        bc_run.write_json(self.run / "graph.json", graph)
+
+    def plan(self):
+        return bc_walk.cmd_plan(str(self.run))
+
+    def planned(self):
+        return json.loads((self.run / "planned-walks.json").read_text())["walks"]
+
+    def on(self, walks, platform):
+        return [w for w in walks if w["platform"] == platform]
+
+    def reaching(self, walks, state):
+        return [w for w in walks if any(s["to_state"] == state for s in w["steps"])]
+
+    def write_walks(self, name, walks):
+        path = self.run / name
+        path.write_text(json.dumps({"walks": walks}))
+        return path
+
+    def check_walks(self, path):
+        return bc_walk.cmd_check(str(self.run), str(path))
+
+    def problems(self, result, walk_id=None):
+        return [(f["step"], f["problem"]) for f in result["failures"] if f["walk"] == walk_id]
+
+
+class Plan(WalkGraphTest):
+    def test_every_screen_state_is_reached_with_few_walks_each_starting_from_an_entry(self):
+        result = self.plan()
+        walks = self.planned()
+        for platform in BOTH:
+            self.assertEqual(reached(walks, platform), all_states(self.app, platform), platform)
+        self.assertEqual(result["walks"], {"ios": 3, "android": 4})
+        self.assertTrue(all(w["entry"] == "entry.login.default" for w in walks))
+        for walk in walks:
+            position = "login.default"
+            for step in walk["steps"]:
+                self.assertEqual(step["from_state"], position, walk["id"])
+                position = step["to_state"]
+        first = self.on(walks, "ios")[0]
+        self.assertEqual([(s["action"], s["to_state"]) for s in first["steps"]],
+                         [("tap", "home.default"), ("tap", "settings.default"), ("back", "home.default"),
+                          ("tap", "readings.default")], "the back step chains two branches into one Walk")
+        self.assertEqual(first["preconditions"], [])
+
+    def test_a_condition_nothing_sets_is_prepared_and_one_a_step_sets_comes_after_that_step(self):
+        self.plan()
+        walks = self.planned()
+        for walk in self.reaching(walks, "readings.empty"):
+            self.assertEqual(walk["preconditions"], ["cond.no_readings"])
+            self.assertEqual(walk["compatible_pairs"], [["cond.logged_in", "cond.no_readings"]],
+                             "plan names the pairs its own Walks hold together")
+        no_condition = [w for w in walks
+                        if not w["preconditions"] and all(s["action"] != "external" for s in w["steps"])]
+        self.assertTrue(no_condition and all(w["compatible_pairs"] == [] for w in no_condition))
+        for walk in walks:
+            states = [s["to_state"] for s in walk["steps"]]
+            if "settings.default" in states:
+                login = next(i for i, s in enumerate(walk["steps"]) if s.get("component") == "login.log_in_button")
+                self.assertLess(login, states.index("settings.default"), walk["id"])
+            self.assertNotIn("cond.logged_in", walk["preconditions"], "a step sets it, so it is never prepared")
+
+    def test_an_external_step_is_used_only_when_nothing_else_reaches_the_state(self):
+        self.plan()
+        external = [(w, s) for w in self.planned() for s in w["steps"] if s["action"] == "external"]
+        self.assertEqual(len(external), 2, "one Walk of its own per Platform")
+        for walk, step in external:
+            self.assertEqual(step["instruction"], "Turn off the network")
+            self.assertNotIn("component", step)
+            self.assertEqual(walk["steps"][-1], step)
+
+        graph = app_graph()
+        graph["screens"][3]["components"] = [g_component("settings.airplane_switch")]
+        graph["transitions"].append(g_step("settings.default", "settings.error", component="settings.airplane_switch",
+                                           sets=["cond.offline"]))
+        self.write_graph(graph)
+        self.plan()
+        walks = self.planned()
+        self.assertFalse([s for w in walks for s in w["steps"] if s["action"] == "external"])
+        self.assertIn("settings.error", reached(walks, "ios"))
+
+    def test_fewer_conditions_beat_fewer_steps(self):
+        graph = app_graph()
+        graph["entries"].append({"id": "entry.home.default+cond.logged_in", "state": "home.default",
+                                 "conditions": ["cond.logged_in"], "platforms": BOTH, "sources": ["TC-2"]})
+        self.write_graph(graph)
+        self.plan()
+        walks = self.planned()
+        self.assertTrue(all(w["entry"] == "entry.login.default" for w in walks),
+                        "starting logged in saves a step but needs a Condition")
+
+    def test_a_platform_only_state_is_walked_only_on_its_platform(self):
+        self.plan()
+        walks = self.planned()
+        self.assertNotIn("home.banner", reached(walks, "ios"))
+        self.assertIn("home.banner", reached(walks, "android"))
+
+    def test_labels_expected_after_each_step_are_those_shown_in_that_state(self):
+        self.plan()
+        steps = [s for w in self.on(self.planned(), "ios") for s in w["steps"]]
+        to_error = next(s for s in steps if s["to_state"] == "settings.error")
+        self.assertEqual(to_error["expect_labels"], ["settings.label.no_connection", "settings.label.settings"])
+        to_settings = next(s for s in steps if s["to_state"] == "settings.default")
+        self.assertEqual(to_settings["expect_labels"], ["settings.label.settings"])
+
+    def test_the_step_cap_splits_walks_and_is_reported(self):
+        with mock.patch.object(bc_walk, "STEP_CAP", 3):
+            result = self.plan()
+        ios = self.on(self.planned(), "ios")
+        self.assertEqual(result["step_cap"], 3)
+        self.assertTrue(all(len(w["steps"]) <= 3 for w in ios))
+        self.assertEqual(reached(ios, "ios"), all_states(self.app, "ios"))
+        self.assertEqual(result["over_cap"], [])
+
+        with mock.patch.object(bc_walk, "STEP_CAP", 1):
+            result = self.plan()
+        self.assertIn("ios-02", [o["walk"] for o in result["over_cap"]], "a path longer than the cap is kept whole")
+        self.assertTrue(any("cap" in line for line in result["lines"]))
+
+    def test_a_state_no_walk_can_reach_is_reported_never_dropped_silently(self):
+        graph = app_graph()
+        graph["screens"].append(g_screen("about", [g_state("about.default")]))
+        self.write_graph(graph)
+        result = self.plan()
+        self.assertEqual(result["unreached"], [{"platform": "ios", "state": "about.default"},
+                                               {"platform": "android", "state": "about.default"}])
+        self.assertTrue(any("about.default" in line for line in result["lines"]))
+
+    def test_the_plan_is_the_same_every_time(self):
+        self.plan()
+        first = (self.run / "planned-walks.json").read_bytes()
+        self.plan()
+        self.assertEqual((self.run / "planned-walks.json").read_bytes(), first)
+
+    def test_plan_needs_merge_first(self):
+        (self.run / "graph.json").unlink()
+        with self.assertRaisesRegex(bc_run.RunError, "merge"):
+            self.plan()
+
+    def test_planning_again_drops_the_last_check(self):
+        self.plan()
+        self.check_walks(self.run / "planned-walks.json")
+        self.assertTrue((self.run / "walks.json").exists())
+        self.plan()
+        self.assertFalse((self.run / "walks.json").exists())
+        self.assertFalse((self.run / "refine-failures.json").exists())
+
+
+class Check(WalkGraphTest):
+    def setUp(self):
+        super().setUp()
+        self.plan()
+
+    def test_plans_own_walks_pass_and_are_used(self):
+        result = self.check_walks(self.run / "planned-walks.json")
+        self.assertEqual((result["status"], result["failures"], result["used"]), ("ok", [], "planned"))
+        self.assertEqual(json.loads((self.run / "walks.json").read_text())["walks"], self.planned())
+
+    def test_refined_walks_that_pass_are_used(self):
+        walks = self.planned()
+        for walk in walks:
+            walk["title"] = "Refined " + walk["title"]
+        result = self.check_walks(self.write_walks("refined-1.json", walks))
+        self.assertEqual((result["status"], result["used"]), ("ok", "refined"))
+        self.assertEqual(json.loads((self.run / "walks.json").read_text())["walks"], walks)
+
+    def walk(self, wid, steps, preconditions=(), pairs=(), platform="ios"):
+        return {"id": wid, "title": wid, "platform": platform, "entry": "entry.login.default",
+                "preconditions": list(preconditions), "compatible_pairs": [list(p) for p in pairs],
+                "steps": [{"from_state": a, "action": act, **({"component": c} if c else {}), "to_state": b,
+                           "expect_labels": []} for a, act, c, b in steps]}
+
+    LOG_IN = ("login.default", "tap", "login.log_in_button", "home.default")
+
+    def test_each_failure_is_listed_by_walk_and_step(self):
+        walks = self.planned() + [
+            self.walk("gap", [self.LOG_IN, ("settings.default", "back", None, "home.default")]),
+            self.walk("ios-banner", [self.LOG_IN, ("home.default", "scroll", None, "home.banner")]),
+            self.walk("no-button", [("login.default", "tap", "login.nope_button", "home.default")]),
+            self.walk("unprepared", [self.LOG_IN, ("home.default", "tap", "home.readings_button", "readings.empty")]),
+            self.walk("cleared", [self.LOG_IN, ("home.default", "tap", "home.log_out_button", "login.default"),
+                                  ("login.default", "tap", "login.continue_button", "home.default")]),
+            self.walk("pairs", [self.LOG_IN, ("home.default", "tap", "home.readings_button", "readings.empty")],
+                      ["cond.no_readings"]),
+        ]
+        result = self.check_walks(self.write_walks("refined-1.json", walks))
+        self.assertEqual(result["status"], "retry")
+        self.assertIn("previous step ended at home.default", self.problems(result, "gap")[0][1])
+        self.assertEqual(self.problems(result, "gap")[0][0], 2)
+        self.assertIn("not on ios", self.problems(result, "ios-banner")[0][1])
+        self.assertIn("login.nope_button", self.problems(result, "no-button")[0][1])
+        self.assertEqual(self.problems(result, "unprepared"),
+                         [(2, "readings.empty needs cond.no_readings, which is not prepared or set earlier")])
+        self.assertEqual(self.problems(result, "cleared"),
+                         [(3, "the step needs cond.logged_in, which step 2 cleared")])
+        self.assertEqual(self.problems(result, "pairs"),
+                         [(1, "cond.logged_in and cond.no_readings are held together but not in compatible_pairs")])
+
+    def test_every_state_plans_walks_reach_must_still_be_reached(self):
+        walks = [w for w in self.planned() if not self.reaching([w], "settings.error")]
+        result = self.check_walks(self.write_walks("refined-1.json", walks))
+        self.assertIn((None, "ios: settings.error is no longer reached"), self.problems(result))
+        self.assertIn((None, "android: settings.error is no longer reached"), self.problems(result))
+
+    def test_the_step_cap_holds(self):
+        loop = [("home.default", "tap", "home.settings_button", "settings.default"),
+                ("settings.default", "back", None, "home.default")] * 20
+        walks = self.planned() + [self.walk("long", [self.LOG_IN] + loop)]
+        result = self.check_walks(self.write_walks("refined-1.json", walks))
+        self.assertEqual(self.problems(result, "long"), [(None, "41 steps; the cap is 40")])
+
+    def test_a_malformed_file_lists_its_errors(self):
+        walks = self.planned()
+        del walks[0]["steps"]
+        walks[1]["notes"] = "x"
+        walks[2]["platform"] = "web"
+        result = self.check_walks(self.write_walks("refined-1.json", walks))
+        problems = [f["problem"] for f in result["failures"]]
+        self.assertIn("walks[0].steps: missing", problems)
+        self.assertIn("walks[1].notes: not in the schema", problems)
+        self.assertIn("walks[2].platform: 'web' is not one of ios, android", problems)
+        path = self.run / "refined-2.json"
+        path.write_text("{nope")
+        self.assertIn("not valid JSON", self.check_walks(path)["failures"][0]["problem"])
+
+    def test_a_failure_is_re_asked_once_then_plans_walks_are_kept(self):
+        bad = self.planned()[1:]
+        first = self.check_walks(self.write_walks("refined-1.json", bad))
+        self.assertEqual((first["status"], first["attempt"]), ("retry", 1))
+        again = self.check_walks(self.run / "refined-1.json")
+        self.assertEqual((again["status"], again["attempt"]), ("retry", 1), "the same file is not a new attempt")
+        self.assertFalse((self.run / "walks.json").exists())
+        second = self.check_walks(self.write_walks("refined-2.json", bad[1:]))
+        self.assertEqual((second["status"], second["attempt"], second["used"]), ("failed", 2, "planned"))
+        self.assertEqual(json.loads((self.run / "walks.json").read_text())["walks"], self.planned())
+        log = json.loads((self.run / "refine-failures.json").read_text())
+        self.assertEqual([len(a["failures"]) > 0 for a in log["attempts"]], [True, True])
+        self.assertEqual(log["used"], "planned")
+
+    def test_the_file_must_be_in_the_run_and_the_graph_unchanged(self):
+        outside = Path(self.tmp.name, "walks.json")
+        outside.write_text(json.dumps({"walks": self.planned()}))
+        with self.assertRaisesRegex(bc_run.RunError, "run folder"):
+            self.check_walks(outside)
+        graph = app_graph()
+        graph["conditions"] = graph["conditions"][:2]
+        self.write_graph(graph)
+        with self.assertRaisesRegex(bc_run.RunError, "plan again"):
+            self.check_walks(self.run / "planned-walks.json")
+
+    def test_check_needs_plan_first(self):
+        (self.run / "planned-walks.json").unlink()
+        with self.assertRaisesRegex(bc_run.RunError, "plan"):
+            self.check_walks(self.write_walks("refined-1.json", []))
+
+
+class Render(WalkGraphTest):
+    def setUp(self):
+        super().setUp()
+        self.plan()
+
+    def render(self, batches=False):
+        return bc_walk.cmd_render(str(self.run), batches)
+
+    def test_walks_md_shows_every_walk_and_the_summary_is_counted(self):
+        walks = self.planned()
+        cond_walk = self.reaching(self.on(walks, "ios"), "readings.empty")[0]
+        cond_walk["compatible_pairs"].append(["cond.no_readings", "cond.offline"])
+        self.check_walks(self.write_walks("refined-1.json", walks))
+        bc_run.write_json(self.run / "decisions.json",
+                          {"same": [{"kind": "screen", "keep": "settings", "drop": "preferences"}], "different": []})
+        result = self.render()
+        self.assertEqual(result["summary"], {
+            "cases_read": 4, "screens": 4, "screen_states": 7, "walks": {"ios": 3, "android": 4},
+            "conditions_to_prepare": ["cond.no_readings"], "external_steps": 2, "names_merged": 1,
+            "own_walk_states": {"ios": ["readings.empty", "settings.error"],
+                                "android": ["readings.empty", "settings.error"]},
+            "walks_used": "refined", "single_platform_ratio": 0.14, "split_recommended": False})
+        text = (self.run / "walks.md").read_text()
+        for walk in walks:
+            self.assertIn(walk["id"], text)
+            self.assertIn(walk["title"], text)
+        self.assertIn("Turn off the network", text)
+        self.assertIn("`cond.logged_in` + `cond.no_readings` — shown together by the cases", text)
+        self.assertIn("`cond.no_readings` + `cond.offline` — judged compatible by the refiner", text)
+        self.assertNotIn("batch-001", text)
+        self.assertTrue(any(line.startswith("Walks: ios 3, android 4") for line in result["lines"]))
+        self.assertEqual(result["walks_md"], str(self.run / "walks.md"))
+
+    def test_the_fallback_is_named(self):
+        self.check_walks(self.write_walks("refined-1.json", []))
+        self.check_walks(self.write_walks("refined-2.json", self.planned()[:1]))
+        result = self.render()
+        self.assertEqual(result["summary"]["walks_used"], "planned")
+        self.assertTrue(any("fallback" in line for line in result["lines"]))
+
+    def test_mostly_single_platform_states_recommend_two_plans(self):
+        graph = app_graph()
+        for screen in graph["screens"]:
+            if screen["id"] in ("readings", "settings"):
+                for state in screen["states"]:
+                    state["platforms"] = ["android"]
+        self.write_graph(graph)
+        self.plan()
+        self.check_walks(self.run / "planned-walks.json")
+        result = self.render()
+        self.assertEqual(result["summary"]["single_platform_ratio"], 0.71)
+        self.assertTrue(result["summary"]["split_recommended"])
+        self.assertTrue(any("two plans" in line for line in result["lines"]))
+
+    def test_batches_are_listed_when_asked(self):
+        self.check_walks(self.run / "planned-walks.json")
+        self.render(batches=True)
+        text = (self.run / "walks.md").read_text()
+        self.assertIn("batch-001", text)
+        self.assertIn("TC-3, TC-4", text)
+
+    def test_render_needs_check_first(self):
+        with self.assertRaisesRegex(bc_run.RunError, "check"):
+            self.render()
+
+
+class WalksCommandLine(WalkGraphTest):
+    def call(self, *args):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = bc_walk.main(list(args))
+        return code, json.loads(out.getvalue())
+
+    def test_plan_check_and_render_print_one_json_object(self):
+        code, result = self.call("plan", str(self.run))
+        self.assertEqual((code, result["ok"]), (0, True))
+        code, result = self.call("check", str(self.run), str(self.run / "planned-walks.json"))
+        self.assertEqual((code, result["ok"], result["status"]), (0, True, "ok"))
+        code, result = self.call("render", str(self.run), "--batches")
+        self.assertEqual((code, result["ok"]), (0, True))
+        code, result = self.call("check", str(self.run), "/nowhere.json")
+        self.assertEqual((code, result["ok"]), (1, False))
 
 
 if __name__ == "__main__":
