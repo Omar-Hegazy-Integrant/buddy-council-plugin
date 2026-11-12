@@ -1,0 +1,5 @@
+interface:
+  display_name: "bc:gather-locators"
+  short_description: "Write the Walk Plan from TestRail folders"
+policy:
+  allow_implicit_invocation: false

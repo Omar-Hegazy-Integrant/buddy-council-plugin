@@ -33,6 +33,10 @@
 #     plugin's appium connector starts appium-mcp from), in ~/.buddy-council/automation, and the project's
 #     .buddy-council/sources.json; and runs nothing from the project. Its `project` subcommand runs the project's
 #     own setup script, and `remove` deletes bc's tools, so those two are never approved here: they always prompt.
+#   - scripts/bc_walk.py (check-cases, batch, validate, merge, plan, check, render, publish). It reads and writes
+#     only a run folder in <project>/.buddy-council/runs/, and talks to nothing; `publish` copies the run's three
+#     Walk Plan files into <project>/walk-plan/ for the team to commit. Its arguments are positional: the run
+#     folder first, then a batch id or a Walks file.
 #   - scripts/bc_keys.py (path, sites, check, migrate). It never prints a key: it names sites and files, tightens
 #     a key file's permissions, and copies the keys older setups saved into ~/.buddy-council/keys without ever
 #     replacing one. `forget` deletes a key, so it is never approved here: it always prompts.
@@ -77,6 +81,11 @@ SCRIPTS = {
         "smoke": {"--project"}, "start": {"--project"}, "stop": set(), "prune": set()}),
     "bc_keys.py": ("bc: key store (never prints a key)", {
         "path": {"--url", "--provider"}, "sites": {"--provider"}, "check": {"--url", "--provider"}, "migrate": set()}),
+    # (positional arguments, options that take a value, options that take none)
+    "bc_walk.py": ("bc: Walk Plan script", {
+        "check-cases": (1, {"--folder"}, set()), "batch": (1, set(), set()), "validate": (2, set(), set()),
+        "merge": (1, {"--same"}, set()), "plan": (1, set(), set()), "check": (2, set(), set()),
+        "render": (1, set(), {"--batches"}), "publish": (1, set(), set())}),
 }
 
 def plain_words(text):
@@ -94,6 +103,16 @@ def plugin_script(cmd, root):
         if os.path.realpath(words[1]) != os.path.realpath(os.path.join(root, "scripts", name)):
             continue
         options, rest = table.get(words[2]), words[3:]
+        if isinstance(options, tuple):
+            count, valued, flags = options
+            given, rest = rest[:count], rest[count:]
+            if len(given) < count or any(word.startswith("-") for word in given):
+                continue
+            while rest and rest[0] in flags:
+                rest = rest[1:]
+            if any(word in flags for word in rest):
+                continue
+            options = valued
         if options is not None and not len(rest) % 2 and all(option in options for option in rest[::2]):
             return reason
     return None

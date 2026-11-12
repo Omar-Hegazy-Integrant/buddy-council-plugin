@@ -22,7 +22,8 @@ import sync_version  # noqa: E402
 AGENT_PLUGINS_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 AGENT_PLUGINS_FIELDS = {"$schema", "name", "version", "description", "author", "homepage", "repository", "license",
                         "keywords", "extensions"}
-COMMANDS = {"ask", "codemap", "contradiction", "coverage", "onboarding", "setup", "validate", "vnv-sprint-prep"}
+COMMANDS = {"ask", "codemap", "contradiction", "coverage", "gather-locators", "onboarding", "setup", "validate",
+            "vnv-sprint-prep"}
 AGENTS_DIR = PLUGIN / "com.github.copilot" / "agents"
 PATH_REFERENCE = re.compile(
     r"(?<![\w./-])(howtos/[a-z0-9-]+\.md|providers/[a-z0-9-]+/[a-z0-9-]+\.md|skills/[a-z0-9-]+/SKILL\.md"
@@ -119,7 +120,7 @@ class Manifests(unittest.TestCase):
 
 
 class Skills(unittest.TestCase):
-    def test_the_skills_are_the_eight_commands(self):
+    def test_the_skills_are_the_nine_commands(self):
         self.assertEqual({path.parent.name for path in PLUGIN.glob("skills/*/SKILL.md")}, COMMANDS)
         self.assertEqual({path.name for path in (PLUGIN / "skills").iterdir() if path.is_dir()}, COMMANDS)
         self.assertFalse((PLUGIN / "SKILL.md").exists())
