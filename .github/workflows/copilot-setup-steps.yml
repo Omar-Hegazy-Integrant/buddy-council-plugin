@@ -17,13 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The scripts in scripts/ must keep running on macOS's Python 3.9, so python3 is 3.9 here.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
-
       # The MCP servers need Python 3.10+; uv fetches it for them (uv run --frozen in each server folder).
       - uses: astral-sh/setup-uv@v6
+
+      # The scripts in scripts/ must keep running on macOS's Python 3.9, so python3 is 3.9 here.
+      # setup-python has no 3.9 build for newer Ubuntu runners; uv's standalone build does.
+      - name: Python 3.9 as python3
+        run: |
+          uv venv --python 3.9 "$HOME/py39"
+          echo "$HOME/py39/bin" >> "$GITHUB_PATH"
 
       - name: Show versions
         run: |
