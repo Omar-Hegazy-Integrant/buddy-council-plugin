@@ -1,105 +1,82 @@
 # Detect Contradictions
 
-Analyze normalized requirements and test cases to find contradictions, inconsistencies, and missing alignment.
+The rules `skills/contradiction/SKILL.md` applies to each feature of a run, and the format of its report.
 
-## When to Use
+## What you read
 
-After artifacts have been fetched and normalized. This is the core analysis how-to the contradiction agent follows.
+A feature's bundle lists every requirement exactly as written — status, folder, description, rationale,
+custom fields, linked docs — and, under each one, the test cases that link to it, steps and expected results
+included. Code resolved the links, so a requirement's `Test cases:` line is exact, and the feature's
+`untested` and `orphans` lists from `bc_run.py summary --feature` are complete. Quote from the bundle.
 
-## Input from a run folder
+## The seven types
 
-The contradiction agent reads its input from a run folder (`howtos/collect-artifacts.md`): each
-feature's bundle lists every requirement verbatim — status, description, rationale, linked docs — followed
-by the test cases that link to it, steps and expected results included. The links were resolved by code
-from the requirement field, so a requirement's `Test cases:` line is exact; read the cases under it as its
-linked test cases. Quote from the bundle text, which is verbatim from the source.
+1. **Direct conflict** — a requirement states X, and a linked test case validates the opposite.
+   *Example:* the requirement says "time out after 30 seconds"; the test expects 60.
+2. **Behavioral conflict** — different expected behavior for the same trigger or condition.
+   *Example:* the requirement says "display a warning dialog"; the test expects a silent log entry.
+3. **Scope overlap** — two requirements cover the same behavior with incompatible constraints.
+   *Example:* REQ-10 says "support up to 100 users"; REQ-45 says "handle unlimited concurrent sessions".
+4. **Test case vs requirement** — a test case's steps or expected results contradict the requirement it
+   claims to verify. *Example:* a test linked to a read-only requirement has steps that change data.
+5. **Cross-feature tension** — requirements in different features set conflicting expectations.
+   *Example:* one feature logs out after 5 minutes idle; another keeps the session open during monitoring.
+6. **Missing alignment** — a requirement with no test case or a test case with no requirement, both taken
+   from the `untested` and `orphans` lists; or a linked test case whose steps don't verify its requirement.
+7. **Temporal or state conflict** — conflicting expectations about the system's state or timing.
+   *Example:* the requirement assumes data is there at once; the test waits for it to load.
 
-## Preconditions (MANDATORY)
+A board ticket is checked as proposed behavior, against the requirements, with the same types.
 
-This how-to requires BOTH normalized requirements AND test cases as input. If you were handed zero test cases (or zero requirements), do NOT produce a contradiction report — there is nothing valid to compare against. Stop and tell the calling agent the required data is missing so it can re-fetch or report the gap. Never fabricate test cases or treat requirements' `linked_ids` as a substitute for fetched test cases.
+## Severity
 
-## Contradiction Types
+| Severity | Types | Meaning |
+|---|---|---|
+| **CRITICAL** | 1 | The test validates the opposite of what the requirement states |
+| **HIGH** | 2, 4 | The test and the requirement describe meaningfully different behavior |
+| **MEDIUM** | 3, 5, 7 | A possible conflict that needs a person's judgment |
+| **LOW** | 6 | Missing alignment |
 
-Detect these seven types of issues:
+When you are unsure, rate the finding MEDIUM and say what is ambiguous.
 
-### 1. Direct Conflicts
-A requirement states X, but a linked test case validates the opposite of X.
-- Example: Requirement says "timeout after 30 seconds", test case expects "timeout after 60 seconds"
+## Every finding
 
-### 2. Behavioral Conflicts
-Different expected behaviors for the same trigger or condition across linked artifacts.
-- Example: Requirement says "display warning dialog", test expects "silent log entry"
+- Quote the exact words from both sides.
+- Explain why they conflict, in a sentence or two.
+- Recommend a concrete change.
+- For types 1, 2, 4, and 7, add a **Fix** line naming the side to change:
+  - `test case — TC-1234, step 3 expected result`
+  - `requirement — CWA-REQ-85`
+  - `decide — <why neither side is clearly right>`
 
-### 3. Scope Overlaps
-Two requirements cover overlapping functionality with incompatible constraints.
-- Example: REQ-10 says "support up to 100 users", REQ-45 says "system handles unlimited concurrent sessions"
+  The requirement is the specification, so a test case that contradicts a clear requirement is the side to
+  fix. Name the requirement only on evidence that it is out of date, such as a newer requirement or in-flight
+  board work that replaces it, and write `decide` when you can't tell. The fix offer rewrites exactly the test
+  cases a `test case` line names, so name the side with care.
+- Report conflicts in meaning. Two wordings of the same behavior agree.
 
-### 4. Test Case vs Requirement Conflicts
-Test steps or expected results contradict the requirement they claim to verify.
-- Example: Test case linked to a "read-only" requirement includes steps that modify data
-
-### 5. Cross-Feature Tensions
-Requirements in different features that create conflicting expectations.
-- Example: Feature A requires "auto-logout after 5 min idle", Feature B requires "maintain persistent session during monitoring"
-
-### 6. Missing Alignment
-- Requirements with no linked test cases (untested requirements)
-- Test cases with no linked requirements (orphan tests)
-- Test cases whose steps don't actually verify the linked requirement
-
-### 7. Temporal / State Conflicts
-Conflicting expectations about system state or timing.
-- Example: Requirement assumes data is available immediately, test case assumes async loading with delay
-
-## Analysis Approach
-
-### For Scoped Analysis (single requirement or feature)
-
-1. Take the target requirement(s) and all their linked test cases
-2. Also include sibling requirements in the same feature (for scope overlap detection)
-3. For each requirement-test case pair:
-   - Compare the requirement's description against each test step and expected result
-   - Look for semantic mismatches, not just keyword differences
-4. For each pair of sibling requirements:
-   - Check for conflicting constraints, overlapping scope, or incompatible expectations
-5. Flag any requirements with empty `linked_ids` as missing alignment
-
-### For Full Analysis (all requirements)
-
-For large scopes the **contradiction agent drives this as a per-feature loop** — it follows this how-to once per feature (intra-feature types 1–4, 6, 7) and once more for the cross-feature pass (type 5), so all artifacts never sit in context at once. Whether called per-feature or all at once, apply the same logic:
-1. Group requirements and test cases by feature
-2. Analyze within each feature (types 1-4, 6-7)
-3. Then analyze across features for cross-feature tensions (type 5)
-4. Aggregate findings
-
-### Batching for Large Datasets
-
-If the total artifact count exceeds ~50 items:
-- Process one feature at a time
-- Keep a running summary of key constraints from each feature for cross-feature analysis
-- Never try to fit all artifacts into a single analysis pass
-
-## Output Format
-
-Produce a human-readable report structured as:
+## Report
 
 ```markdown
 # Contradiction Analysis Report
 
+<PARTIAL — <missing source>, when the user chose to continue without one>
+<every line from load-settings and the run's Fetch:, Enrichment:, and Readiness: lines, exactly as printed>
+
 ## Summary
-- **Scope**: [what was analyzed]
-- **Requirements analyzed**: [count]
-- **Test cases analyzed**: [count]
-- **Issues found**: [count by severity]
+- **Scope**: <what was analyzed>
+- **Requirements analyzed**: <count from the run summary>
+- **Test cases analyzed**: <count from the run summary>
+- **Issues found**: <count per severity>
 
 ## Critical Issues
 
-### [CRITICAL] Direct conflict between REQ-85 and TC-1234
+### [CRITICAL] Direct conflict between CWA-REQ-85 and TC-1234
 **Requirement (CWA-REQ-85)**: "The system shall display patient vitals with a refresh rate of 3 seconds"
 **Test Case (TC-1234), Step 3**: Expects "vitals update every 10 seconds"
-**Explanation**: The test case validates a 10-second refresh interval, but the requirement specifies 3 seconds. The test would pass for a system that violates the requirement.
+**Explanation**: The test passes a system that refreshes every 10 seconds, which breaks the 3-second requirement.
 **Fix**: test case — TC-1234, step 3 expected result
-**Recommendation**: Update TC-1234 Step 3 to expect a 3-second refresh rate.
+**Recommendation**: Change TC-1234 step 3 to expect a 3-second refresh.
 
 ## High Issues
 ...
@@ -110,35 +87,17 @@ Produce a human-readable report structured as:
 ## Low Issues
 ...
 
+## In-flight Work
+<only when board tickets were checked>
+Checked <N> board tickets: <the board scope the fetch used, such as every ticket not done on board 42>.
+
+### [HIGH] PROJ-123 vs CWA-REQ-85 — <the ticket's link>
+...
+
 ## Missing Alignment
-### Requirements without test coverage:
-- CWA-REQ-92: "System shall support audit logging" — no linked test cases
+### Requirements without test cases
+- CWA-REQ-92: "System shall support audit logging"
 
-### Orphan test cases:
-- TC-1456: "Verify backup schedule" — no linked requirement
+### Test cases without a requirement
+- TC-1456: "Verify backup schedule"
 ```
-
-## Severity Classification
-
-| Severity | Criteria |
-|----------|----------|
-| **CRITICAL** | Direct conflict — test validates the opposite of what requirement states |
-| **HIGH** | Behavioral conflict — test and requirement describe meaningfully different behavior |
-| **MEDIUM** | Scope overlap or cross-feature tension — potential conflict that needs human judgment |
-| **LOW** | Missing alignment — untested requirement or orphan test case |
-
-## Important Guidelines
-
-- Be specific: quote exact text from requirements and test cases
-- Explain WHY it's a contradiction, don't just state that one exists
-- Provide actionable recommendations for each finding
-- **Name the side to change** on every requirement-versus-test-case finding (types 1, 2, 4, 7) with a
-  `**Fix**:` line — `test case — TC-1234, step 3 expected result`, `requirement — CWA-REQ-85`, or
-  `decide — <why neither side is clearly right>`. The requirement is the specification, so a test that
-  contradicts an unambiguous requirement is the side to fix. Name the requirement only on evidence that it is
-  stale — a newer requirement or in-flight board work supersedes it — and say `decide` when you cannot tell.
-  The contradiction agent offers to update only the cases a `test case` line names, so a wrong side here
-  rewrites a correct test.
-- Do not report stylistic differences or wording variations as contradictions
-- Only flag genuine semantic conflicts
-- When uncertain, classify as MEDIUM and note the ambiguity

@@ -35,9 +35,9 @@ Analyze the user's question and classify it into one of these intents:
 - "Find conflicts between requirements and test cases"
 - "What's mismatched in the BGM feature?"
 
-**Action**: Follow the instructions in `com.github.copilot/agents/contradiction-agent.agent.md`, using the user's question to determine scope (extract requirement ID, feature name, or default to "all").
+**Action**: Follow `skills/contradiction/SKILL.md` from its step 2, with the scope the question names: a requirement ID, a feature, or the whole project. *First* has already loaded the settings.
 
-**Asking to fix the test cases that contradict a requirement** ("fix the test cases that contradict CWA-REQ-85") is this intent too: run the analysis for that scope, then treat the request as the user's yes to the agent's fix offer — it still shows every change before writing.
+**Asking to fix the test cases that contradict a requirement** ("fix the test cases that contradict CWA-REQ-85") is this intent too: run the analysis for that scope, then treat the request as the user's yes to the skill's fix offer — it still shows every change before writing.
 
 ### Intent: COVERAGE
 **Trigger phrases**: coverage, untested, orphan, missing tests, gaps, "what's not tested", "which requirements have no tests", "test coverage"

@@ -108,7 +108,7 @@ class Manifests(unittest.TestCase):
         self.assertTrue(all(path.startswith("./") for path in listed), listed)
         files = sorted("./" + path.relative_to(PLUGIN).as_posix() for path in AGENTS_DIR.glob("*.agent.md"))
         self.assertEqual(sorted(listed), files)
-        self.assertEqual(len(files), 7)
+        self.assertEqual(len(files), 6)
 
     def test_every_agent_keeps_its_name(self):
         for path in AGENTS_DIR.glob("*.agent.md"):

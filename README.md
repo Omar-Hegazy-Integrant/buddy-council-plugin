@@ -403,7 +403,7 @@ so it works whatever your PATH is — and records an `automation` block in that 
 
 A feature is a **Jama folder** — by default one of the folders your linked requirements sit in, inside the document `/bc:setup` anchored on your test suite, with deeper folders rolled into it. The scope covers everything under it; a sub-folder name narrows to just that part, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`. Test cases are found by their requirement links, whatever their TestRail folders are called.
 
-The agent fetches requirements, test cases, and the in-flight issues on your Jira dev board, normalizes and cross-links them, then analyzes for 7 types of contradictions:
+It reads the requirements, the test cases, and the in-flight tickets on your Jira dev board, code links them, and your assistant checks them for 7 types of contradictions:
 
 | Type | Severity |
 |------|----------|
@@ -596,14 +596,14 @@ Command → Agent → How-tos (fetch → normalize → analyze) → Report
 
 - **Manifests** — two of them (ADR 0007): the root `plugin.json` in the open Agent Plugins format, which Copilot CLI, VS Code, Codex, and Cursor read, and `.claude-plugin/plugin.json` for Claude Code. The root one holds the version
 - **Commands** — user-facing entry points, in `skills/<name>/SKILL.md`: skills only you can start, so none of them loads into a session until you type it (ADR 0006)
-- **Agents** — orchestrate the analysis workflow end-to-end, in `com.github.copilot/agents/`
+- **Agents** — steps that run as a separate agent, in `com.github.copilot/agents/`: the data collector, on a low-cost model, and the steps of the commands that haven't moved into their skills yet. `/bc:contradiction` keeps its steps in its skill (ADR 0011)
 - **How-tos** — reusable capabilities (fetching, normalization, analysis), plain files in `howtos/` that the commands and agents read by path. They cost nothing until a command needs them
 - **Providers** — one folder per tool (TestRail, Jama, Jira, GitHub), each with its fetch guide and its setup guide (`providers/<name>/setup.md`), which `/bc:setup` reads only for the tools a project uses
 - **Connectors** — the MCP servers the plugin ships, declared in both manifests (`mcp.json`, `.claude-plugin/plugin.json`) and started by `scripts/bc-mcp`, which finds `uv` and runs each one: `testrail` and `jama` (under `mcp-servers/`, `uv` projects with a committed `uv.lock`, so every machine resolves the identical dependency set — after changing a server's `pyproject.toml`, re-run `uv lock --directory mcp-servers/<name>` and commit the updated lock), `atlassian` (`mcp-servers/jira-router/`, which hands each Jira call to a copy of the community [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) for that call's site, serving Cloud and Server/Data Center alike — it never talks to Jira itself), and `appium`. Every tool takes `site`, and each site's key lives in its own file (`scripts/bc_keys.py`, ADR 0008). GitHub is read with whatever sign-in works — `gh`, a token in the environment, none for public repositories, or the assistant's own GitHub connection. appium-mcp, the server `/bc:automate` drives the phone with, isn't vendored either: `/bc:setup` installs it on each Mac from the lockfile in `scripts/automation/appium-mcp/`, on bc's own pinned Node, and the `appium` connector starts it — or answers with no tools until then. To move a pin, change `scripts/automation/pins.json` (Node, by version and SHA-256) or regenerate the lockfile with `npm install --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org/`, and release it only after a device check passed. To move mcp-atlassian's pin, change `PACKAGE` in `mcp-servers/jira-router/server.py` and run its `--snapshot`
 - **Hooks** — dual-manifest: `hooks/hooks.json` (Claude Code) and `com.github.copilot/hooks/hooks.json` (Copilot CLI, VS Code) register the same three runtime-agnostic scripts
 - **Scripts** — `scripts/`: the settings script `bc_setup.py` (the only code that saves a project's settings), the run-folder script `bc_run.py` (which also saves the onboarding and V&V progress), the key store, the Plugin Tools, the connector launcher `bc-mcp`, `sync_version.py`, and every script, hook, and manifest test (`python3 -m unittest discover -s scripts/tests`)
 
-Agents never call providers directly — they go through router how-tos, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
+Commands and agents never call providers directly — they go through router how-tos, which read the config and delegate to the correct provider. This means adding a new platform (e.g., Jira, Qase) only requires adding a `providers/<name>/` folder and updating the router.
 
 ### Low-cost collection for `/bc:coverage`, `/bc:contradiction`, and `/bc:ask` lookups
 
