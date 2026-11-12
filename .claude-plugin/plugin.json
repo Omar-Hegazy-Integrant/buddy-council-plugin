@@ -37,6 +37,9 @@
     "./com.github.copilot/agents/onboarding-agent.agent.md",
     "./com.github.copilot/agents/scenario-mapping-agent.agent.md",
     "./com.github.copilot/agents/ticket-validation-agent.agent.md",
-    "./com.github.copilot/agents/vnv-sprint-prep-agent.agent.md"
+    "./com.github.copilot/agents/vnv-sprint-prep-agent.agent.md",
+    "./com.github.copilot/agents/walk-collector.agent.md",
+    "./com.github.copilot/agents/walk-extractor.agent.md",
+    "./com.github.copilot/agents/walk-refiner.agent.md"
   ]
 }

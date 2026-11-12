@@ -238,6 +238,7 @@ def cmd_batch(run_text: str) -> dict[str, Any]:
     for old in [*(run / FRAGMENT_DIR).glob("batch-*.json"), run / VALIDATION_FILE]:
         if old.exists():
             old.unlink()  # fragments of the old batches would cite the wrong cases
+    (run / FRAGMENT_DIR).mkdir(mode=0o700, exist_ok=True)  # an extractor's file tool may not create it
     batches: list[dict[str, Any]] = []
     split_cases: list[str] = []
 

@@ -1,5 +1,6 @@
 """Tests for bc_walk.py — checking the fetched folders, batching their cases, and validating and merging the
-extractors' fragments into the graph, and planning, checking, and rendering the Walks. Standard library only.
+extractors' fragments into the graph, planning, checking, and rendering the Walks, and the agents that collect,
+extract, and refine. Standard library only.
 
     python3 -m unittest discover -s scripts/tests -v
 
@@ -502,6 +503,14 @@ class Validate(FragmentRunTest):
         self.assertEqual(second["status"], "failed")
         self.assertEqual(second["case_ids"], ["TC-1", "TC-2"])
         self.assertIn("TC-1, TC-2", second["line"])
+
+    def test_batching_makes_the_folder_the_extractors_write_into(self):
+        folder = self.run / "fragments"
+        if folder.exists():
+            folder.rmdir()
+        printed = bc_walk.cmd_batch(str(self.run))
+        self.assertTrue(folder.is_dir(), "an assistant's file tool may not create a missing parent folder")
+        self.assertTrue(all(Path(b["fragment"]).parent == folder for b in printed["batches"]))
 
     def test_batching_again_drops_the_old_fragments(self):
         self.fragment("batch-001", LOGIN_FRAGMENT)
@@ -1139,6 +1148,117 @@ class WalksCommandLine(WalkGraphTest):
         self.assertEqual((code, result["ok"]), (0, True))
         code, result = self.call("check", str(self.run), "/nowhere.json")
         self.assertEqual((code, result["ok"]), (1, False))
+
+
+# ---- The agents: collector, extractor, and refiner --------------------------------------------------------------
+
+PLUGIN = SCRIPTS.parent
+AGENTS = PLUGIN / "com.github.copilot" / "agents"
+WALK_AGENTS = ("walk-collector", "walk-extractor", "walk-refiner")
+LOW_COST = "[claude-haiku-4.5, gpt-5-mini]"
+WRITE_TOOLS = re.compile(r"_(add|update|create|delete|edit|transition)_|jira_|jama_")
+
+
+def agent_text(name):
+    return (AGENTS / f"{name}.agent.md").read_text(encoding="utf-8")
+
+
+def agent_header(name):
+    """The frontmatter's flat fields, and its tools list."""
+    head = re.match(r"\A---\n(.*?)\n---\n", agent_text(name), re.S).group(1)
+    fields = {}
+    for line in head.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and not line.startswith((" ", "-")):
+            fields[key.strip()] = value.strip()
+    tools = re.findall(r"^  - (\S+)$", head.split("tools:", 1)[1], re.M) if "tools:" in head else []
+    return fields, tools
+
+
+def json_block(name, tag):
+    found = re.findall(r"```json " + tag + r"\n(.*?)\n```", agent_text(name), re.S)
+    return [json.loads(text) for text in found]
+
+
+def named_in_code(text):
+    """Every word inside the agent's inline code spans, such as `{name, kind, role?}`."""
+    return {word for span in re.findall(r"`([^`\n]+)`", text) for word in re.findall(r"[a-z_]+", span)}
+
+
+def schema_keys(spec):
+    if isinstance(spec, dict):
+        return {k.rstrip("?") for k in spec} | set().union(*(schema_keys(v) for v in spec.values()))
+    if isinstance(spec, list):
+        return schema_keys(spec[0])
+    return set()
+
+
+class WalkAgents(unittest.TestCase):
+    def test_each_agent_is_a_hidden_low_cost_agent_listed_for_claude_code(self):
+        listed = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["agents"]
+        for name in WALK_AGENTS:
+            fields, _ = agent_header(name)
+            self.assertEqual(fields.get("name"), name)
+            self.assertEqual(fields.get("model"), LOW_COST, name)
+            self.assertEqual(fields.get("user-invocable"), "false", name)
+            self.assertIn(f"./com.github.copilot/agents/{name}.agent.md", listed)
+
+    def test_each_agent_gets_the_plugin_root_and_the_run_folder_in_its_prompt(self):
+        for name in WALK_AGENTS:
+            text = agent_text(name)
+            self.assertIn("`plugin_root`", text, name)
+            self.assertIn("`run_dir`", text, name)
+
+    def test_only_the_collector_fetches_and_nothing_writes_to_a_tool(self):
+        _, tools = agent_header("walk-collector")
+        for spelling in ("mcp__plugin_bc_testrail__", "mcp__testrail__", "testrail/", "testrail-"):
+            self.assertIn(spelling + "testrail_get_canonical_cases", tools, "both assistants' spellings")
+        self.assertIn("Bash", tools)
+        self.assertNotIn("Write", tools, "save_to writes the cases; the collector writes no file itself")
+        for name in ("walk-extractor", "walk-refiner"):
+            _, tools = agent_header(name)
+            self.assertEqual(sorted(tools), ["Read", "Write"], f"{name} reads files and writes one; it runs nothing")
+        for name in WALK_AGENTS:
+            self.assertFalse([t for t in agent_header(name)[1] if WRITE_TOOLS.search(t)], name)
+
+    def test_every_script_command_an_agent_runs_exists(self):
+        subcommands = set(re.findall(r'sub\.add_parser\("([a-z-]+)"', (SCRIPTS / "bc_walk.py").read_text("utf-8")))
+        for name in WALK_AGENTS:
+            for used in re.findall(r"bc_walk\.py`? ([a-z][a-z-]+)", agent_text(name)):
+                self.assertIn(used, subcommands, f"{name} runs bc_walk.py {used}")
+        collector = agent_text("walk-collector")
+        for needed in ("bc_walk.py check-cases", "bc_walk.py batch", "`section`", "`save_to`", "`site`"):
+            self.assertIn(needed, collector)
+
+    def test_the_extractor_example_is_a_valid_fragment_and_every_schema_key_is_explained(self):
+        text = agent_text("walk-extractor")
+        examples = json_block("walk-extractor", "fragment")
+        self.assertEqual(len(examples), 1)
+        fragment = examples[0]
+        batch = {"id": fragment["batch"], "case_ids": sorted(bc_walk.cited(fragment))}
+        errors = []
+        bc_walk.shape_errors(fragment, bc_walk.FRAGMENT_SCHEMA, "", errors, batch)
+        self.assertEqual(errors + bc_walk.reference_errors(fragment, batch), [])
+        explained = named_in_code(text)
+        for key in schema_keys(bc_walk.FRAGMENT_SCHEMA) | set(bc_walk.ACTIONS) | set(bc_walk.PLATFORMS):
+            self.assertIn(key, explained)
+
+    def test_the_extractor_knows_the_split_threshold(self):
+        self.assertIn(f"{round(bc_walk.SPLIT_RATIO * 100)}%", agent_text("walk-extractor"))
+
+    def test_the_refiner_example_is_valid_walks_and_it_knows_what_check_replays(self):
+        text = agent_text("walk-refiner")
+        examples = json_block("walk-refiner", "walks")
+        self.assertEqual(len(examples), 1)
+        errors = []
+        bc_walk.shape_errors(examples[0], bc_walk.WALKS_SCHEMA, "", errors, {})
+        self.assertEqual(errors, [])
+        self.assertTrue(any(w["compatible_pairs"] for w in examples[0]["walks"]), "the example names a pair")
+        explained = named_in_code(text)
+        for key in schema_keys(bc_walk.WALKS_SCHEMA):
+            self.assertIn(key, explained)
+        for needed in (bc_walk.GRAPH_FILE, bc_walk.PLANNED_FILE, bc_walk.REFINE_FILE, f"{bc_walk.STEP_CAP} steps"):
+            self.assertIn(needed, text)
 
 
 if __name__ == "__main__":
