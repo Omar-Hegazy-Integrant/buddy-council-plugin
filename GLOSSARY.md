@@ -94,6 +94,10 @@ _Avoid_: automation tools
 Following one Test Case's steps on a phone the way a person would, checking the results it expects and Capturing each screen the steps reach.
 _Avoid_: tour, crawl, exploration
 
+**Trial**:
+Running a new Automated Test once on a phone, right after it's written, to check that it works. Unlike a Test Run, it records no result in TestRail.
+_Avoid_: proof run, proving
+
 **Screen Map**:
 What the plugin learns about an app's screens by walking them: how to recognize each screen, how to find its elements, and how to reach it.
 _Avoid_: screen files, locator file
