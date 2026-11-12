@@ -97,3 +97,19 @@ _Avoid_: screen files, locator file
 **Capture**:
 A raw record of one screen as the app showed it, such as its element tree or a screenshot.
 _Avoid_: screen file, snapshot
+
+**Screen State**:
+A version of a screen whose set of elements differs from its other versions, such as an empty list, an error banner, or a dialog on top. Text or data that only changes value is not a new state.
+_Avoid_: page state, variant
+
+**Condition**:
+A fact about the app or the phone that a Screen State needs, such as "an account with no readings". A Walk either prepares it before starting or reaches a step that sets it.
+_Avoid_: precondition (alone), setup
+
+**Walk**:
+One path through an app's screens, starting from a named entry state, that visits Screen States in a given order.
+_Avoid_: end-to-end scenario, flow, journey
+
+**Walk Plan**:
+The Screen States, elements, and Conditions the plugin reads out of Test Cases, and the fewest Walks that visit every Screen State. Committed beside the Screen Map, which records what walking them proved.
+_Avoid_: locator plan, crawl plan

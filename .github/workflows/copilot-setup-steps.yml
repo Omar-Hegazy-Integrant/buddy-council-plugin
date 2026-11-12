@@ -1,0 +1,34 @@
+name: "Copilot Setup Steps"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # The scripts in scripts/ must keep running on macOS's Python 3.9, so python3 is 3.9 here.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      # The MCP servers need Python 3.10+; uv fetches it for them (uv run --frozen in each server folder).
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Show versions
+        run: |
+          python3 --version
+          uv --version
+
+      - name: Script, hook, and manifest tests on Python 3.9
+        run: python3 -m unittest discover -s scripts/tests
