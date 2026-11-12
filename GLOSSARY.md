@@ -40,6 +40,10 @@ _Avoid_: project, workspace, repo
 The one summary of everything setup found and chose, shown before it saves.
 _Avoid_: summary, save prompt, review
 
+**Plan**:
+What a command will do, shown before it changes anything so a person can review and adjust it, such as `/bc:automate`'s list of each Test Case in a folder and what will happen to it.
+_Avoid_: preview, mapping outcome
+
 **Command**:
 What the user starts by name, such as `/bc:coverage`. Each is a skill only the user can start.
 _Avoid_: slash command
@@ -67,6 +71,10 @@ _Avoid_: automation test case, automation test
 **Automate**:
 To give a Test Case an Automated Test, by linking one that already exists or writing a new one.
 _Avoid_: map, mapping
+
+**Semi-automated**:
+Describes a Test Case whose Automated Test does every step except the ones only a person can do, such as hearing an alert. A person still does those.
+_Avoid_: partly automated
 
 **Test Run**:
 A set of Test Cases in TestRail, run against one build of the app, with a result for each.
