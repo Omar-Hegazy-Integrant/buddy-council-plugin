@@ -1100,6 +1100,20 @@ def site_problems(provider: str, configured: Any, data: dict[str, Any], what: st
     return [] if got == wanted else [f"{what} were read from {got}, but the config names {wanted}."]
 
 
+def testrail_problems(tests: dict[str, Any], cases_data: dict[str, Any], what: str) -> list[str]:
+    """Where a TestRail file was read from, and through which field, when that differs from ``test_cases``."""
+    problems = site_problems("testrail", tests.get("base_url"), cases_data, what)
+    if cases_data.get("project_id") != tests.get("project_id") or (cases_data.get("suite_id") or None) != (tests.get("suite_id") or None):
+        problems.append(
+            f"{what} were read from TestRail project {cases_data.get('project_id')} suite {cases_data.get('suite_id')}, "
+            f"not project {tests.get('project_id')} suite {tests.get('suite_id')}."
+        )
+    field = custom_key((tests.get("authoring") or {}).get("requirement_field") or DEFAULT_REQUIREMENT_FIELD)
+    if cases_data.get("requirement_field") != field:
+        problems.append(f"{what} were linked through {cases_data.get('requirement_field')}, but the config says {field}.")
+    return problems
+
+
 def verify_run(
     config: dict[str, Any], manifest: dict[str, Any], requirements_data: Any, cases_data: Any, background_data: Any = None,
 ) -> list[str]:
@@ -1143,15 +1157,7 @@ def verify_run(
     if not tests:
         return problems
     if isinstance(cases_data, dict):
-        field = custom_key((tests.get("authoring") or {}).get("requirement_field") or DEFAULT_REQUIREMENT_FIELD)
-        problems += site_problems("testrail", tests.get("base_url"), cases_data, "test cases")
-        if cases_data.get("project_id") != tests.get("project_id") or (cases_data.get("suite_id") or None) != (tests.get("suite_id") or None):
-            problems.append(
-                f"test cases were read from TestRail project {cases_data.get('project_id')} suite {cases_data.get('suite_id')}, "
-                f"not project {tests.get('project_id')} suite {tests.get('suite_id')}."
-            )
-        if cases_data.get("requirement_field") != field:
-            problems.append(f"test cases were linked through {cases_data.get('requirement_field')}, but the config says {field}.")
+        problems += testrail_problems(tests, cases_data, "test cases")
         selection = cases_data.get("filter") or {}
         if selection.get("requirement_ids") or selection.get("section") or selection.get("unlinked"):
             problems.append("test cases were filtered; the collect step needs every case in the suite.")
