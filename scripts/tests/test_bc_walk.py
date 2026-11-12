@@ -1,6 +1,7 @@
 """Tests for bc_walk.py — checking the fetched folders, batching their cases, and validating and merging the
-extractors' fragments into the graph, planning, checking, and rendering the Walks, and the agents that collect,
-extract, and refine. Standard library only.
+extractors' fragments into the graph, planning, checking, rendering, and publishing the Walks — the agents that
+collect, extract, and refine, and the /bc:gather-locators command and its bash-hook approval. Standard library
+only.
 
     python3 -m unittest discover -s scripts/tests -v
 
@@ -1148,6 +1149,168 @@ class WalksCommandLine(WalkGraphTest):
         self.assertEqual((code, result["ok"]), (0, True))
         code, result = self.call("check", str(self.run), "/nowhere.json")
         self.assertEqual((code, result["ok"]), (1, False))
+
+
+class Publish(WalkGraphTest):
+    """publish copies the Walk Plan into the Test Project's walk-plan/ folder, and only a finished one."""
+
+    def setUp(self):
+        super().setUp()
+        self.plan()
+        self.check_walks(self.run / "planned-walks.json")
+        bc_walk.cmd_render(str(self.run))
+        self.target = self.project.resolve() / "walk-plan"
+
+    def publish(self):
+        return bc_walk.cmd_publish(str(self.run))
+
+    def test_the_three_files_go_into_walk_plan_unchanged_and_readable_by_the_team(self):
+        result = self.publish()
+        for name in ("graph.json", "walks.json", "walks.md"):
+            self.assertEqual((self.target / name).read_bytes(), (self.run / name).read_bytes(), name)
+            self.assertEqual((self.target / name).stat().st_mode & 0o777, 0o644, "committed, so not private")
+        self.assertEqual(sorted(p.name for p in self.target.iterdir()), ["graph.json", "walks.json", "walks.md"])
+        self.assertEqual(result["folder"], str(self.target))
+        self.assertEqual(result["files"], [str(self.target / n) for n in ("graph.json", "walks.json", "walks.md")])
+        self.assertTrue(any("walk-plan" in line for line in result["lines"]))
+
+    def test_a_new_plan_replaces_the_files_and_leaves_anything_else_in_the_folder(self):
+        self.target.mkdir()
+        (self.target / "walks.md").write_text("old")
+        (self.target / "README.md").write_text("the team's own note")
+        self.publish()
+        self.assertEqual((self.target / "walks.md").read_bytes(), (self.run / "walks.md").read_bytes())
+        self.assertEqual((self.target / "README.md").read_text(), "the team's own note")
+
+    def test_nothing_is_published_before_render(self):
+        (self.run / "walks.md").unlink()
+        with self.assertRaisesRegex(bc_run.RunError, "render"):
+            self.publish()
+        self.assertFalse(self.target.exists())
+
+    def test_walks_checked_again_after_render_must_be_rendered_again(self):
+        walks = self.run / "walks.json"
+        later = (self.run / "walks.md").stat().st_mtime + 5
+        os.utime(walks, (later, later))
+        with self.assertRaisesRegex(bc_run.RunError, "render"):
+            self.publish()
+        self.assertFalse(self.target.exists())
+
+    def test_a_graph_changed_since_plan_is_not_published(self):
+        graph = app_graph()
+        graph["screens"] = graph["screens"][:1]
+        self.write_graph(graph)
+        with self.assertRaisesRegex(bc_run.RunError, "plan again"):
+            self.publish()
+        self.assertFalse(self.target.exists())
+
+    def test_publish_prints_one_json_object(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = bc_walk.main(["publish", str(self.run)])
+        self.assertEqual((code, json.loads(out.getvalue())["ok"]), (0, True))
+
+
+# ---- The command and the bash hook ------------------------------------------------------------------------------
+
+COMMAND = SCRIPTS.parent / "skills" / "gather-locators"
+HOOK = SCRIPTS.parent / "hooks" / "validate-bash.sh"
+WALK = SCRIPTS / "bc_walk.py"
+RUN_DIR = "/Users/qa/app-tests/.buddy-council/runs/20261112-120000-gather-locators"
+
+
+def hook_decision(command, shape="claude"):
+    if shape == "claude":
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+    else:
+        payload = {"toolName": "bash", "toolArgs": json.dumps({"command": command})}
+    done = subprocess.run([str(HOOK)], input=json.dumps(payload), capture_output=True, text=True, timeout=20)
+    return done.returncode, done.stdout.strip()
+
+
+class GatherLocatorsCommand(unittest.TestCase):
+    def setUp(self):
+        self.text = (COMMAND / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_it_runs_every_step_of_the_pipeline_with_the_script_the_agents_and_load_settings(self):
+        subcommands = set(re.findall(r'sub\.add_parser\("([a-z-]+)"', WALK.read_text("utf-8")))
+        used = set(re.findall(r"bc_walk\.py'? ([a-z][a-z-]+)", self.text))
+        self.assertEqual(used - subcommands, set(), "every subcommand the command runs exists")
+        self.assertEqual(used, {"validate", "merge", "plan", "check", "render", "publish"},
+                         "the collector runs check-cases and batch; the command runs the rest")
+        for agent in ("walk-collector", "walk-extractor", "walk-refiner"):
+            self.assertIn(f"com.github.copilot/agents/{agent}.agent.md", self.text)
+            self.assertIn(f"bc:{agent}", self.text)
+        self.assertIn("howtos/load-settings.md", self.text)
+        self.assertIn("--need test_cases", self.text)
+        self.assertIn("bc_run.py' new --project", self.text)
+        self.assertIn("--command gather-locators", self.text)
+        self.assertIn("--same", self.text)
+
+    def test_each_agent_gets_its_inputs_and_assistants_without_sub_agents_run_them_inline(self):
+        for name in ("plugin_root", "run_dir", "folders", "batch", "file", "fragment", "errors", "attempt",
+                     "failures"):
+            self.assertIn(f"`{name}`", self.text, name)
+        self.assertIn("inline", self.text)
+        self.assertIn("Codex", self.text)
+
+    def test_it_writes_the_walk_plan_into_walk_plan_and_stops_before_the_phone(self):
+        self.assertIn("walk-plan/", self.text)
+        for name in ("graph.json", "walks.json", "walks.md"):
+            self.assertIn(name, self.text)
+        self.assertIn("Walking the phone", self.text)
+
+
+class WalkScriptApproval(unittest.TestCase):
+    def assertAllowed(self, command):
+        for shape in ("claude", "copilot"):
+            code, out = hook_decision(command, shape)
+            self.assertEqual(code, 0, command)
+            self.assertIn('"permissionDecision":"allow"', out, command)
+            self.assertIn("bc: Walk Plan script", out, command)
+
+    def assertNotAllowed(self, command):
+        code, out = hook_decision(command)
+        self.assertNotIn("permissionDecision", out, command)
+        self.assertIn(code, (0, 2), command)
+
+    def test_every_subcommand_as_one_plain_command_is_approved(self):
+        for command in [
+            f"python3 {WALK} check-cases {RUN_DIR} --folder 'App/Settings' --folder 'App/Log in & out'",
+            f"python3 '{WALK}' batch '{RUN_DIR}'",
+            f"python3 {WALK} validate {RUN_DIR} batch-001",
+            f"python3 {WALK} merge {RUN_DIR}",
+            f"python3 {WALK} merge {RUN_DIR} --same '[[\"settings\", \"preferences\"]]'",
+            f"python3 {WALK} merge {RUN_DIR} --same '[]'",
+            f"python3 {WALK} plan {RUN_DIR}",
+            f"python3 {WALK} check {RUN_DIR} {RUN_DIR}/refined-1.json",
+            f"python3 {WALK} check {RUN_DIR} 'refined-2.json'",
+            f"python3 {WALK} render {RUN_DIR}",
+            f"python3 {WALK} render {RUN_DIR} --batches",
+            f"python3 {WALK} publish {RUN_DIR}",
+            f"python3 {WALK} render {RUN_DIR} | head -c 4000",
+        ]:
+            self.assertAllowed(command)
+
+    def test_anything_else_asks(self):
+        for command in [
+            f"python3 {WALK} plan",
+            f"python3 {WALK} plan {RUN_DIR} extra",
+            f"python3 {WALK} validate {RUN_DIR}",
+            f"python3 {WALK} render {RUN_DIR} --batches yes",
+            f"python3 {WALK} merge {RUN_DIR} --same",
+            f"python3 {WALK} merge --same '[]' {RUN_DIR}",
+            f"python3 {WALK} plan --force {RUN_DIR}",
+            f"python3 {WALK} wipe {RUN_DIR}",
+            f"python3 {WALK} plan {RUN_DIR} && rm -rf ~/x",
+            f"python3 {WALK} plan {RUN_DIR}; echo done",
+            f"python3 {WALK} plan \"$(cat run.txt)\"",
+            f"python3 {WALK} plan {RUN_DIR} > /tmp/out",
+            f"python3 /tmp/elsewhere/scripts/bc_walk.py plan {RUN_DIR}",
+            f"python3 scripts/bc_walk.py plan {RUN_DIR}",
+            f"cd {RUN_DIR} && python3 {WALK} plan .",
+        ]:
+            self.assertNotAllowed(command)
 
 
 # ---- The agents: collector, extractor, and refiner --------------------------------------------------------------

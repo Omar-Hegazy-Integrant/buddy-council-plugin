@@ -43,8 +43,10 @@ Subcommands, each printing one JSON object to stdout:
                                                      by Walk and step; ``retry`` once, and a second failure makes
                                                      walks.json plan's Walks
   render RUN [--batches]                             write walks.md and print the run's summary
+  publish RUN                                        copy graph.json, walks.json, and walks.md into the Test
+                                                     Project's walk-plan/ folder, once render has run on them
 
-Nothing here talks to TestRail, and nothing is written outside the run folder.
+Nothing here talks to TestRail, and nothing is written outside the run folder but publish's three files.
 """
 
 from __future__ import annotations
@@ -985,6 +987,8 @@ PLAN_FILE = "plan.json"
 WALKS_FILE = "walks.json"
 REFINE_FILE = "refine-failures.json"
 WALKS_MD = "walks.md"
+PUBLISH_DIR = "walk-plan"  # in the Test Project: the folder that holds .buddy-council/
+PUBLISHED = (GRAPH_FILE, WALKS_FILE, WALKS_MD)
 
 # walks.json's shape. A key ending in "?" may be left out. "entry" is an entry's ID from graph.json, "preconditions"
 # are the Conditions prepared before the first step, and "compatible_pairs" lists every pair of Conditions the Walk
@@ -1523,6 +1527,25 @@ def cmd_render(run_text: str, batches: bool = False) -> dict[str, Any]:
     return {"walks_md": str(run / WALKS_MD), "summary": summary, "lines": lines}
 
 
+def cmd_publish(run_text: str) -> dict[str, Any]:
+    run = bc_run.run_folder(run_text)
+    plan = bc_run.read_json(run / PLAN_FILE) or {}
+    if fingerprint(run / GRAPH_FILE) != plan.get("graph"):
+        raise RunError(f"{GRAPH_FILE} changed since plan — plan again, then refine, check, and render.")
+    walks, md = run / WALKS_FILE, run / WALKS_MD
+    if not walks.is_file() or not md.is_file() or md.stat().st_mtime_ns < walks.stat().st_mtime_ns:
+        raise RunError(f"{WALKS_MD} is missing or older than {WALKS_FILE} — run render first.")
+    target = run.parent.parent.parent / PUBLISH_DIR
+    target.mkdir(exist_ok=True)
+    files = []
+    for name in PUBLISHED:
+        path = target / name
+        bc_run.write_private(path, (run / name).read_text(encoding="utf-8"))
+        path.chmod(0o644)  # committed to the Test Project, so the team reads it
+        files.append(str(path))
+    return {"folder": str(target), "files": files,
+            "lines": [f"Walk Plan: {', '.join(PUBLISHED)} written to {target} — commit them with the Test Project"]}
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Buddy-Council Walk Plan steps.")
@@ -1547,6 +1570,8 @@ def main(argv: list[str] | None = None) -> int:
     render = sub.add_parser("render", help="write walks.md and print the summary")
     render.add_argument("run", help="the run folder")
     render.add_argument("--batches", action="store_true", help="list which cases were batched together")
+    publish = sub.add_parser("publish", help="copy the Walk Plan into the Test Project's walk-plan/ folder")
+    publish.add_argument("run", help="the run folder")
     args = parser.parse_args(argv)
     try:
         if args.action == "check-cases":
@@ -1561,8 +1586,10 @@ def main(argv: list[str] | None = None) -> int:
             result = cmd_plan(args.run)
         elif args.action == "check":
             result = cmd_check(args.run, args.walks)
-        else:
+        elif args.action == "render":
             result = cmd_render(args.run, args.batches)
+        else:
+            result = cmd_publish(args.run)
     except (RunError, OSError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 1
