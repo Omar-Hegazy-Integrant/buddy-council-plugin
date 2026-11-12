@@ -14,6 +14,11 @@ They work in a run folder made by ``bc_run.py new --command gather-locators``:
                               Conditions, entries, and transitions, each with a slug ID, platforms, and sources
   near-duplicates.json        the pairs merge couldn't settle, for the main model
   decisions.json              the main model's answers to them, applied by every later merge
+  planned-walks.json          plan's separate minimal Walks per Platform, in WALKS_SCHEMA (below)
+  plan.json                   the graph.json plan read, the step cap, and the Screen States no Walk reaches
+  refine-failures.json        each refined Walks file check replayed, its failures, and which Walks were used
+  walks.json                  the Walks to walk: the checked refined ones, or plan's when they failed twice
+  walks.md                    the Walks for people to read, with render's summary
 
 Subcommands, each printing one JSON object to stdout:
 
@@ -31,6 +36,13 @@ Subcommands, each printing one JSON object to stdout:
                                                      name, name the batches left out and their cases, and list
                                                      near-duplicates; --same answers the last list (pairs left out
                                                      of it are different)
+  plan RUN                                           plan separate minimal Walks per Platform from graph.json:
+                                                     no-Condition Walks first, external steps only where nothing
+                                                     else reaches a state; name every state no Walk reaches
+  check RUN WALKS-FILE                               replay a Walks file against graph.json and list every failure
+                                                     by Walk and step; ``retry`` once, and a second failure makes
+                                                     walks.json plan's Walks
+  render RUN [--batches]                             write walks.md and print the run's summary
 
 Nothing here talks to TestRail, and nothing is written outside the run folder.
 """
@@ -40,6 +52,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import hashlib
+import heapq
 import json
 import re
 import sys
@@ -962,6 +975,553 @@ def cmd_merge(run_text: str, same_text: str | None = None) -> dict[str, Any]:
         result["warnings"] = warnings
     return result
 
+# ---- Walks: plan them from graph.json, check any Walks against it, and render them ----------------------------
+
+STEP_CAP = 40  # the soft cap on a Walk's steps; only a path longer than it on its own goes over
+SPLIT_RATIO = 0.4  # above this share of single-Platform Screen States, the run recommends two plans
+PLANNED_FILE = "planned-walks.json"
+PLAN_FILE = "plan.json"
+WALKS_FILE = "walks.json"
+REFINE_FILE = "refine-failures.json"
+WALKS_MD = "walks.md"
+
+# walks.json's shape. A key ending in "?" may be left out. "entry" is an entry's ID from graph.json, "preconditions"
+# are the Conditions prepared before the first step, and "compatible_pairs" lists every pair of Conditions the Walk
+# holds at the same time. An external step carries the "instruction" a person follows.
+WALKS_SCHEMA: dict[str, Any] = {
+    "walks": [{
+        "id": TEXT,
+        "title": TEXT,
+        "platform": PLATFORMS,
+        "entry": TEXT,
+        "preconditions": NAMES,
+        "compatible_pairs": [NAMES],
+        "steps": [{"from_state": TEXT, "action": ACTIONS, "component?": TEXT, "input?": TEXT, "instruction?": TEXT,
+                   "to_state": TEXT, "expect_labels": NAMES}],
+    }],
+}
+
+
+def fingerprint(path: Path) -> str:
+    try:
+        return hashlib.sha1(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return "missing"
+
+
+def load_graph(run: Path) -> dict[str, Any]:
+    graph = bc_run.read_json(run / GRAPH_FILE)
+    if not isinstance(graph, dict) or not isinstance(graph.get("screens"), list):
+        raise RunError(f"{GRAPH_FILE} is missing — run merge first.")
+    return graph
+
+
+def on(item: dict[str, Any], platform: str) -> bool:
+    return platform in (item.get("platforms") or PLATFORMS)
+
+
+class Ways:
+    """One Platform's view of the graph: its Screen States, components, labels, entries, and transitions."""
+
+    def __init__(self, graph: dict[str, Any], platform: str):
+        self.platform = platform
+        self.names: dict[str, str] = {}
+        self.states: dict[str, dict[str, Any]] = {}
+        self.all_components: set[str] = set()
+        self.components: set[str] = set()
+        self.labels: dict[str, list[str]] = {}
+        for screen in graph.get("screens", []):
+            for state in screen.get("states", []):
+                self.names[state["id"]] = screen.get("name") or screen["id"]
+                if on(screen, platform) and on(state, platform):
+                    self.states[state["id"]] = state
+            for comp in screen.get("components", []):
+                self.all_components.add(comp["id"])
+                if on(screen, platform) and on(comp, platform):
+                    self.components.add(comp["id"])
+            for label in screen.get("labels", []):
+                if not (on(screen, platform) and on(label, platform)):
+                    continue
+                for state in screen.get("states", []):
+                    if not label.get("only_in") or state["id"] in label["only_in"]:
+                        self.labels.setdefault(state["id"], []).append(label["id"])
+        self.conditions = {c["id"] for c in graph.get("conditions", [])}
+        self.entries = {e["id"]: e for e in graph.get("entries", []) if on(e, platform) and e["state"] in self.states}
+        self.all_entries = {e["id"] for e in graph.get("entries", [])}
+        self.all_transitions = list(graph.get("transitions", []))
+        self.transitions = [t for t in self.all_transitions
+                            if on(t, platform) and t["from_state"] in self.states and t["to_state"] in self.states
+                            and (not t.get("component") or t["component"] in self.components)]
+        self.out: dict[str, list[dict[str, Any]]] = {}
+        for t in self.transitions:
+            self.out.setdefault(t["from_state"], []).append(t)
+        self.settable = {c for t in self.transitions for c in t.get("sets", [])}
+
+    def requires(self, state: str) -> set[str]:
+        return set(self.states[state].get("requires") or [])
+
+    def expect_labels(self, state: str) -> list[str]:
+        return sorted(self.labels.get(state, []))
+
+    def title(self, state: str) -> str:
+        name = self.names.get(state, state.split(".")[0])
+        rest = state.split(".", 1)[1] if "." in state else "default"
+        return name if rest == "default" else f"{name} ({rest.replace('_', ' ')})"
+
+    def advance(self, held: frozenset, cleared: frozenset, t: dict[str, Any],
+                prepare: bool) -> tuple[frozenset, frozenset, frozenset] | None:
+        """The Conditions held and ever cleared after the step, and what had to be prepared for it; None if it can't.
+        A Condition prepared now is held from the Walk's start, so one a step already cleared can't be."""
+        missing = set(t.get("requires", [])) - held
+        if missing and (not prepare or missing & cleared):
+            return None
+        after = ((held | missing) - set(t.get("clears", []))) | set(t.get("sets", []))
+        gone = cleared | set(t.get("clears", []))
+        need = self.requires(t["to_state"]) - after
+        if need and (not prepare or need & gone):
+            return None
+        return frozenset(after | need), frozenset(gone), frozenset(missing | need)
+
+    def search(self, starts: list[dict[str, Any]], prepare: bool, external: bool) -> dict[tuple, dict[str, Any]]:
+        """Cheapest way to every (state, held, cleared) from the starts. Cost: Conditions prepared that a step could
+        set, then external steps, then Conditions to prepare, then steps."""
+        best: dict[tuple, dict[str, Any]] = {}
+        queue: list[tuple] = []
+        for n, node in enumerate(starts):
+            heapq.heappush(queue, (self.cost(node), n, node))
+        counter = len(starts)
+        while queue:
+            cost, _, node = heapq.heappop(queue)
+            key = (node["state"], node["held"], node["cleared"])
+            if key in best:
+                continue
+            best[key] = node
+            for t in self.out.get(node["state"], []):
+                if t["action"] == "external" and not external:
+                    continue
+                moved = self.advance(node["held"], node["cleared"], t, prepare)
+                if moved is None:
+                    continue
+                held, cleared, prepared = moved
+                nxt = {"state": t["to_state"], "held": held, "cleared": cleared, "entry": node["entry"],
+                       "prepared": node["prepared"] | prepared, "external": node["external"] + (t["action"] == "external"),
+                       "steps": node["steps"] + 1, "parent": node, "via": t}
+                if (nxt["state"], held, cleared) not in best:
+                    counter += 1
+                    heapq.heappush(queue, (self.cost(nxt), counter, nxt))
+        return best
+
+    def cost(self, node: dict[str, Any]) -> tuple:
+        entry = set(self.entries[node["entry"]]["conditions"])
+        extra = node["prepared"] - entry
+        return (len(extra & self.settable), node["external"], len(entry | node["prepared"]), node["steps"],
+                node["state"], sorted(node["prepared"]))
+
+    def start(self, entry_id: str, held: frozenset = frozenset()) -> dict[str, Any] | None:
+        entry = self.entries[entry_id]
+        have = frozenset(entry["conditions"]) | held
+        need = self.requires(entry["state"]) - have
+        return {"state": entry["state"], "held": have | need, "cleared": frozenset(), "entry": entry_id,
+                "prepared": frozenset(need) | held, "external": 0, "steps": 0, "parent": None, "via": None}
+
+
+def path_of(node: dict[str, Any], stop: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """The transitions from stop (or the Walk's start) to node."""
+    steps = []
+    while node is not stop and node.get("via") is not None:
+        steps.append(node["via"])
+        node = node["parent"]
+    return steps[::-1]
+
+
+def nearest(found: dict[tuple, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Each state's cheapest node."""
+    out: dict[str, dict[str, Any]] = {}
+    for node in found.values():
+        if node["state"] not in out or node["steps"] < out[node["state"]]["steps"]:
+            out[node["state"]] = node
+    return out
+
+
+def replay_conditions(ways: Ways, entry_id: str, steps: list[dict[str, Any]]) -> tuple[list[str], list[list[str]]]:
+    """The fewest preconditions a valid sequence of transitions needs, and every pair of Conditions it holds at once."""
+    entry = ways.entries[entry_id]
+    prepared = set(entry["conditions"]) | ways.requires(entry["state"])
+    held = set(prepared)
+    for t in steps:
+        missing = set(t.get("requires", [])) - held
+        prepared |= missing
+        held = ((held | missing) - set(t.get("clears", []))) | set(t.get("sets", []))
+        need = ways.requires(t["to_state"]) - held
+        prepared |= need
+        held |= need
+    # A Condition prepared for a later step is held from the start, so it is in every moment until a step clears it.
+    pairs: set[tuple[str, str]] = set()
+    held = set(prepared)
+    pairs.update((a, b) for a in held for b in held if a < b)
+    for t in steps:
+        held = (held - set(t.get("clears", []))) | set(t.get("sets", []))
+        pairs.update((a, b) for a in held for b in held if a < b)
+    return sorted(prepared), [list(p) for p in sorted(pairs)]
+
+
+def walk_step(ways: Ways, t: dict[str, Any]) -> dict[str, Any]:
+    step: dict[str, Any] = {"from_state": t["from_state"], "action": t["action"]}
+    if t.get("component"):
+        step["component"] = t["component"]
+    if t.get("instruction"):
+        step["instruction"] = t["instruction"]
+    return {**step, "to_state": t["to_state"], "expect_labels": ways.expect_labels(t["to_state"])}
+
+
+def plan_platform(ways: Ways) -> tuple[list[dict[str, Any]], list[str]]:
+    """Separate minimal Walks for one Platform: no-Condition Walks first, then Condition Walks, then external ones."""
+    starts = [s for s in (ways.start(e) for e in sorted(ways.entries)) if s]
+    best = nearest(ways.search(starts, prepare=True, external=True))
+    targets = sorted(s for s in ways.states if s in best)
+    unreached = sorted(s for s in ways.states if s not in best)
+    groups: dict[tuple, list[str]] = {}
+    for state in targets:
+        node = best[state]
+        prepared = tuple(sorted(set(ways.entries[node["entry"]]["conditions"]) | node["prepared"]))
+        groups.setdefault((node["external"] > 0, len(prepared), node["entry"], prepared), []).append(state)
+    covered: set[str] = set()
+    walks: list[tuple[str, list[dict[str, Any]]]] = []
+    for (external, _, entry_id, prepared), group in sorted(groups.items()):
+        while set(group) - covered:
+            node = ways.start(entry_id, frozenset(prepared))
+            gained = {node["state"]} - covered
+            covered.add(node["state"])
+            steps: list[dict[str, Any]] = []
+            while True:
+                found = nearest(ways.search([dict(node, steps=0, external=0, parent=None, via=None)], False, external))
+                options = sorted((n["steps"], s) for s, n in found.items() if s not in covered and s in best)
+                if not options:
+                    break
+                pick_state = options[0][1]
+                for _, state in options:
+                    path = path_of(found[state])
+                    after = covered | {t["to_state"] for t in path}
+                    onward = nearest(ways.search([dict(found[state], steps=0, external=0, parent=None, via=None)],
+                                                 False, external))
+                    if any(s not in after and s in best for s in onward):
+                        pick_state = state
+                        break
+                path = path_of(found[pick_state])
+                if steps and len(steps) + len(path) > STEP_CAP:
+                    break
+                steps += path
+                for t in path:
+                    gained |= {t["to_state"]} - covered
+                    covered.add(t["to_state"])
+                node = found[pick_state]
+            if not gained:  # nothing new from this start: can't happen with a sound search, but never loop
+                unreached += sorted(set(group) - covered)
+                covered |= set(group)
+                break
+            walks.append((entry_id, steps))
+    out = []
+    for n, (entry_id, steps) in enumerate(walks, 1):
+        preconditions, pairs = replay_conditions(ways, entry_id, steps)
+        start = ways.entries[entry_id]["state"]
+        end = steps[-1]["to_state"] if steps else start
+        out.append({"id": f"{ways.platform}-{n:02d}", "title": f"{ways.title(start)} to {ways.title(end)}",
+                    "platform": ways.platform, "entry": entry_id, "preconditions": preconditions,
+                    "compatible_pairs": pairs, "steps": [walk_step(ways, t) for t in steps]})
+    return out, sorted(unreached)
+
+
+def stale(run: Path) -> None:
+    for name in (WALKS_FILE, REFINE_FILE, WALKS_MD):
+        (run / name).unlink(missing_ok=True)
+
+
+def cmd_plan(run_text: str) -> dict[str, Any]:
+    run = bc_run.run_folder(run_text)
+    graph = load_graph(run)
+    walks: list[dict[str, Any]] = []
+    unreached: list[dict[str, str]] = []
+    for platform in PLATFORMS:
+        found, missed = plan_platform(Ways(graph, platform))
+        walks += found
+        unreached += [{"platform": platform, "state": s} for s in missed]
+    over = [{"walk": w["id"], "steps": len(w["steps"])} for w in walks if len(w["steps"]) > STEP_CAP]
+    stale(run)
+    bc_run.write_json(run / PLANNED_FILE, {"walks": walks})
+    bc_run.write_json(run / PLAN_FILE, {"graph": fingerprint(run / GRAPH_FILE), "step_cap": STEP_CAP,
+                                        "longest": max([len(w["steps"]) for w in walks] or [0]),
+                                        "unreached": unreached})
+    counts = {p: sum(1 for w in walks if w["platform"] == p) for p in PLATFORMS}
+    lines = ["Plan: " + ", ".join(f"{p} {n} Walks" for p, n in counts.items())
+             + f" ({sum(1 for w in walks if not w['preconditions'])} need no Condition); step cap {STEP_CAP}"]
+    lines += [f"Plan: {o['walk']} has {o['steps']} steps, over the cap of {STEP_CAP} — its path is that long"
+              for o in over]
+    lines += [f"Plan: {u['platform']}: {u['state']} → NOT REACHED — no entry and transitions lead to it"
+              for u in unreached]
+    return {"walks_file": str(run / PLANNED_FILE), "walks": counts, "step_cap": STEP_CAP, "over_cap": over,
+            "unreached": unreached, "lines": lines}
+
+
+def walks_path(run: Path, text: str) -> Path:
+    path = Path(text).expanduser()
+    path = (path if path.is_absolute() else run / path).resolve()
+    if run not in path.parents:
+        raise RunError(f"{text} is not in the run folder {run}; write the Walks there.")
+    return path
+
+
+def replay(ways: Ways, walk: dict[str, Any], allowed: int) -> tuple[list[dict[str, Any]], set[str]]:
+    """Every failure in one Walk, by step, and the Screen States it reaches."""
+    failures: list[dict[str, Any]] = []
+
+    def fail(step: int | None, problem: str) -> None:
+        failures.append({"walk": walk["id"], "step": step, "problem": problem})
+
+    entry = ways.entries.get(walk["entry"])
+    if entry is None:
+        fail(None, f"entry {walk['entry']} is " + ("not on " + ways.platform if walk["entry"] in ways.all_entries
+                                                     else "not in the graph"))
+        return failures, set()
+    for c in walk["preconditions"]:
+        if c not in ways.conditions:
+            fail(None, f"precondition {c} is not a Condition in the graph")
+    compatible = {tuple(sorted(p)) for p in walk["compatible_pairs"] if len(p) == 2}
+    reported: set[tuple[str, str]] = set()
+
+    def pairs(step: int | None, held: frozenset) -> None:
+        for a, b in sorted((a, b) for a in held for b in held if a < b):
+            if (a, b) not in compatible and (a, b) not in reported:
+                reported.add((a, b))
+                fail(step, f"{a} and {b} are held together but not in compatible_pairs")
+
+    def why(c: str, cleared_at: dict[str, int]) -> str:
+        return f"which step {cleared_at[c]} cleared" if c in cleared_at else "which is not prepared or set earlier"
+
+    held = frozenset(entry["conditions"]) | frozenset(walk["preconditions"])
+    for c in sorted(ways.requires(entry["state"]) - held):
+        fail(None, f"{entry['state']} needs {c}, which is not prepared")
+    pairs(None, held)
+    cleared_at: dict[str, int] = {}
+    position, reached = entry["state"], {entry["state"]}
+    for n, step in enumerate(walk["steps"], 1):
+        if step["from_state"] != position:
+            fail(n, f"starts at {step['from_state']}, but the previous step ended at {position}")
+        position = step["to_state"]
+        reached.add(position)
+        component = step.get("component")
+        if component and component not in ways.components:
+            fail(n, f"{component} is " + ("not on " + ways.platform if component in ways.all_components
+                                          else "not a component in the graph"))
+            continue
+        alike = [t for t in ways.all_transitions
+                 if (t["from_state"], t["to_state"], t["action"], t.get("component")) ==
+                 (step["from_state"], step["to_state"], step["action"], component)
+                 and (not step.get("instruction") or t.get("instruction") == step["instruction"])]
+        what = f"the {step['action']} from {step['from_state']} to {step['to_state']}" + (
+            f" with {component}" if component else "")
+        if not alike:
+            fail(n, f"{what} is not a transition in the graph")
+            continue
+        here = [t for t in alike if t in ways.transitions]
+        if not here:
+            fail(n, f"{what} is not on {ways.platform}")
+            continue
+        done = None
+        for t in here:
+            moved = ways.advance(held, frozenset(cleared_at), t, prepare=False)
+            if moved is not None:
+                done = t
+                break
+        if done is None:
+            t = here[0]
+            for c in sorted(set(t.get("requires", [])) - held):
+                fail(n, f"the step needs {c}, {why(c, cleared_at)}")
+            after = (held - set(t.get("clears", []))) | set(t.get("sets", []))
+            for c in sorted(ways.requires(t["to_state"]) - after):
+                fail(n, f"{t['to_state']} needs {c}, {why(c, {k: v for k, v in cleared_at.items() if k not in after})}")
+            done = t
+        held = (held - set(done.get("clears", []))) | set(done.get("sets", []))
+        for c in done.get("clears", []):
+            cleared_at[c] = n
+        for c in done.get("sets", []):
+            cleared_at.pop(c, None)
+        pairs(n, held)
+    if len(walk["steps"]) > allowed:
+        fail(None, f"{len(walk['steps'])} steps; the cap is {allowed}")
+    return failures, reached
+
+
+def check_walks(graph: dict[str, Any], data: Any, planned: list[dict[str, Any]],
+                allowed: int) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return [{"walk": None, "step": None, "problem": "the file must be an object with \"walks\""}]
+    errors: list[str] = []
+    shape_errors(data, WALKS_SCHEMA, "", errors, {})
+    for i, walk in enumerate(data.get("walks") if isinstance(data.get("walks"), list) else []):
+        for j, pair in enumerate(walk.get("compatible_pairs") or [] if isinstance(walk, dict) else []):
+            if isinstance(pair, list) and len(pair) != 2:
+                errors.append(f"walks[{i}].compatible_pairs[{j}]: must name two Conditions")
+    ids = [w.get("id") for w in data.get("walks", []) if isinstance(w, dict)]
+    errors += [f"walk id {i} is used twice" for i in sorted({i for i in ids if ids.count(i) > 1})]
+    if errors:
+        return [{"walk": None, "step": None, "problem": e} for e in errors]
+    failures: list[dict[str, Any]] = []
+    ways = {p: Ways(graph, p) for p in PLATFORMS}
+    reached: dict[str, set[str]] = {p: set() for p in PLATFORMS}
+    for walk in data["walks"]:
+        found, states = replay(ways[walk["platform"]], walk, allowed)
+        failures += found
+        reached[walk["platform"]] |= states
+    for platform in PLATFORMS:
+        needed = set().union(*[replay(ways[platform], w, 10 ** 9)[1] for w in planned if w["platform"] == platform])
+        failures += [{"walk": None, "step": None, "problem": f"{platform}: {s} is no longer reached"}
+                     for s in sorted(needed - reached[platform])]
+    return failures
+
+
+def keep_walks(data: dict[str, Any]) -> dict[str, Any]:
+    return {"walks": data["walks"]}
+
+
+def cmd_check(run_text: str, walks_text: str) -> dict[str, Any]:
+    run = bc_run.run_folder(run_text)
+    path = walks_path(run, walks_text)
+    plan = bc_run.read_json(run / PLAN_FILE)
+    planned = bc_run.read_json(run / PLANNED_FILE)
+    if not isinstance(plan, dict) or not isinstance(planned, dict):
+        raise RunError(f"{PLANNED_FILE} is missing — run plan first.")
+    graph = load_graph(run)
+    if fingerprint(run / GRAPH_FILE) != plan.get("graph"):
+        raise RunError(f"{GRAPH_FILE} changed since plan — plan again, then refine and check its Walks.")
+    allowed = max(STEP_CAP, int(plan.get("longest") or 0))
+    own = path == (run / PLANNED_FILE).resolve()
+    print_name = path.name
+    mark = fingerprint(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        data, failures = None, [{"walk": None, "step": None, "problem": f"no file at {path}"}]
+    except ValueError as exc:
+        data, failures = None, [{"walk": None, "step": None, "problem": f"{print_name} is not valid JSON ({exc})"}]
+    if data is not None:
+        failures = check_walks(graph, data, planned["walks"], allowed)
+    log = bc_run.read_json(run / REFINE_FILE) or {"attempts": []}
+    if not own and not any(a.get("fingerprint") == mark for a in log["attempts"]):
+        log["attempts"].append({"file": str(path), "fingerprint": mark, "checked_at": bc_run.utc_now(),
+                                "failures": failures})
+    attempt = 0 if own else next(i for i, a in enumerate(log["attempts"], 1) if a["fingerprint"] == mark)
+    result: dict[str, Any] = {"walks_file": str(path), "failures": failures, "attempt": attempt}
+    if not failures:
+        used = "planned" if own else "refined"
+        bc_run.write_json(run / WALKS_FILE, keep_walks(data))
+        log["used"] = used
+        result |= {"status": "ok", "used": used,
+                   "lines": [f"Check: {print_name} → ok, {len(data['walks'])} Walks; walks.json is "
+                             + ("plan's Walks" if own else "the refined Walks")]}
+    elif own:
+        result |= {"status": "failed", "lines": [f"Check: {print_name} → {len(failures)} failures in plan's own "
+                                                 "Walks — a bug in bc_walk.py; nothing to fall back to"]}
+    elif attempt < 2:
+        result |= {"status": "retry", "lines": [f"Check: {print_name} → {len(failures)} failures; give them to the "
+                                                "refiner and check its next file once"]}
+    else:
+        log["used"] = "planned"
+        bc_run.write_json(run / WALKS_FILE, keep_walks(planned))
+        result |= {"status": "failed", "used": "planned",
+                   "lines": [f"Check: {print_name} → FAILED again ({len(failures)} failures); walks.json is plan's "
+                             "separate Walks (the fallback)"]}
+    bc_run.write_json(run / REFINE_FILE, log)
+    return result
+
+
+def own_walk_states(ways: Ways, walks: list[dict[str, Any]]) -> list[str]:
+    """States a Walk was made for alone: it needs an external step or a prepared Condition, and reaches exactly one
+    Screen State no other Walk on its Platform reaches."""
+    reach = [replay(ways, w, 10 ** 9)[1] for w in walks]
+    out = []
+    for i, walk in enumerate(walks):
+        others = set().union(*(r for j, r in enumerate(reach) if j != i))
+        alone = reach[i] - others
+        needs = walk["preconditions"] or any(s["action"] == "external" for s in walk["steps"])
+        if needs and len(alone) == 1:
+            out += sorted(alone)
+    return sorted(out)
+
+
+def cmd_render(run_text: str, batches: bool = False) -> dict[str, Any]:
+    run = bc_run.run_folder(run_text)
+    walks_data = bc_run.read_json(run / WALKS_FILE)
+    log = bc_run.read_json(run / REFINE_FILE) or {}
+    if not isinstance(walks_data, dict) or not log.get("used"):
+        raise RunError(f"{WALKS_FILE} is missing — run check first.")
+    graph = load_graph(run)
+    planned = (bc_run.read_json(run / PLANNED_FILE) or {}).get("walks", [])
+    walks = walks_data["walks"]
+    batch_list = (bc_run.read_json(run / BATCHES_FILE) or {}).get("batches", [])
+    states = [s for screen in graph["screens"] for s in screen["states"]]
+    single = sum(1 for s in states if len(set(s.get("platforms") or PLATFORMS) & set(PLATFORMS)) == 1)
+    ratio = round(single / len(states), 2) if states else 0.0
+    ways = {p: Ways(graph, p) for p in PLATFORMS}
+    by_platform = {p: [w for w in walks if w["platform"] == p] for p in PLATFORMS}
+    decisions = bc_run.read_json(run / DECISIONS_FILE) or {}
+    shown_together = {tuple(sorted(p)) for w in planned for p in w["compatible_pairs"]}
+    summary = {
+        "cases_read": len({c for b in batch_list for c in b.get("case_ids", [])}),
+        "screens": len(graph["screens"]),
+        "screen_states": len(states),
+        "walks": {p: len(by_platform[p]) for p in PLATFORMS},
+        "conditions_to_prepare": sorted({c for w in walks for c in w["preconditions"]}),
+        "external_steps": sum(1 for w in walks for s in w["steps"] if s["action"] == "external"),
+        "names_merged": len(decisions.get("same") or []),
+        "own_walk_states": {p: own_walk_states(ways[p], by_platform[p]) for p in PLATFORMS},
+        "walks_used": log["used"],
+        "single_platform_ratio": ratio,
+        "split_recommended": ratio > SPLIT_RATIO,
+    }
+    lines = [
+        f"Walks: " + ", ".join(f"{p} {n}" for p, n in summary["walks"].items())
+        + f" — from {summary['cases_read']} cases, {summary['screens']} screens, {summary['screen_states']} Screen States",
+        f"Walks: {len(summary['conditions_to_prepare'])} Conditions to prepare, {summary['external_steps']} external "
+        f"steps, {summary['names_merged']} names merged",
+        "Walks: " + ("the refiner's Walks, checked" if log["used"] == "refined" and any(
+            a.get("failures") == [] for a in log.get("attempts", [])) else
+            "plan's separate Walks" + (" (fallback: the refined Walks failed the check twice)"
+                                       if len(log.get("attempts", [])) >= 2 else "")),
+    ]
+    for p in PLATFORMS:
+        if summary["own_walk_states"][p]:
+            lines.append(f"Walks: {p}: a Walk of their own for " + ", ".join(summary["own_walk_states"][p]))
+    lines.append(f"Walks: {round(ratio * 100)}% of Screen States are on one Platform only"
+                 + (f" — above {round(SPLIT_RATIO * 100)}%, so two plans (one per Platform) are recommended"
+                    if summary["split_recommended"] else ""))
+
+    conditions = {c["id"]: c.get("description", "") for c in graph.get("conditions", [])}
+    md = ["# Walk Plan", "", *[f"- {line[len('Walks: '):]}" for line in lines], ""]
+    for p in PLATFORMS:
+        md += [f"## {p}", ""]
+        for walk in by_platform[p]:
+            md += [f"### {walk['id']}: {walk['title']}", "", f"Starts at `{walk['entry']}`.", ""]
+            if walk["preconditions"]:
+                md += ["Prepare first:", ""] + [f"- `{c}` — {conditions.get(c, '')}" for c in walk["preconditions"]] + [""]
+            if walk["compatible_pairs"]:
+                md += ["Conditions held together:", ""]
+                md += [f"- `{a}` + `{b}` — " + ("shown together by the cases" if tuple(sorted((a, b))) in shown_together
+                                                 else "judged compatible by the refiner")
+                       for a, b in walk["compatible_pairs"]] + [""]
+            md += ["| # | From | Do | To | Expect |", "|---|---|---|---|---|"]
+            for n, s in enumerate(walk["steps"], 1):
+                do = s["action"] + (f" `{s['component']}`" if s.get("component") else "") + (
+                    f" “{s['input']}”" if s.get("input") else "") + (f": {s['instruction']}" if s.get("instruction") else "")
+                md.append(f"| {n} | `{s['from_state']}` | {do} | `{s['to_state']}` | "
+                          + ", ".join(f"`{l}`" for l in s["expect_labels"]) + " |")
+            md.append("")
+    if batches:
+        md += ["## Batches", ""] + [f"- {b['id']} ({b.get('folder', '')}): {cases_text(b.get('case_ids', []))}"
+                                    for b in batch_list] + [""]
+    bc_run.write_private(run / WALKS_MD, "\n".join(md))
+    return {"walks_md": str(run / WALKS_MD), "summary": summary, "lines": lines}
+
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Buddy-Council Walk Plan steps.")
@@ -978,6 +1538,14 @@ def main(argv: list[str] | None = None) -> int:
     merge.add_argument("run", help="the run folder")
     merge.add_argument("--same", help="answers to the near-duplicate list: '[[\"keep-id\", \"drop-id\"], ...]', "
                                       "or '[]' when none are the same")
+    plan = sub.add_parser("plan", help="plan the separate minimal Walks per Platform from graph.json")
+    plan.add_argument("run", help="the run folder")
+    check_walks_cmd = sub.add_parser("check", help="replay a Walks file against graph.json")
+    check_walks_cmd.add_argument("run", help="the run folder")
+    check_walks_cmd.add_argument("walks", help="the Walks file in the run folder, e.g. refined-1.json")
+    render = sub.add_parser("render", help="write walks.md and print the summary")
+    render.add_argument("run", help="the run folder")
+    render.add_argument("--batches", action="store_true", help="list which cases were batched together")
     args = parser.parse_args(argv)
     try:
         if args.action == "check-cases":
@@ -986,8 +1554,14 @@ def main(argv: list[str] | None = None) -> int:
             result = cmd_batch(args.run)
         elif args.action == "validate":
             result = cmd_validate(args.run, args.batch)
-        else:
+        elif args.action == "merge":
             result = cmd_merge(args.run, args.same)
+        elif args.action == "plan":
+            result = cmd_plan(args.run)
+        elif args.action == "check":
+            result = cmd_check(args.run, args.walks)
+        else:
+            result = cmd_render(args.run, args.batches)
     except (RunError, OSError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 1
