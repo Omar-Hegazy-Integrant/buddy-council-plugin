@@ -3,21 +3,22 @@
 What we've decided so far, in plain words. We decide with the team one round of questions at a time, one level at
 a time, in the order `/bc:automate` works. This file is updated after each round.
 
-- **Last updated:** 12 Nov 2026. Now: Round 6, redone, finishing Level 1 (Q29 to Q35).
+- **Last updated:** 12 Nov 2026, after Round 6. Now: Round 7, finishing Level 1 (Q33, Q34, Q36).
 - **Q numbers** match the questions in the team's rounds.
-- **Words** like *Automate*, *Test Run*, *Walk* and *Trial* are defined in the [glossary](../../GLOSSARY.md).
+- **Words** like *Automate*, *Test Run*, *Plan*, *Walk*, *Trial* and *Semi-automated* are defined in the
+  [glossary](../../GLOSSARY.md).
 
 ## Where we are
 
 | Level | What happens | Settled | Still open |
 |---|---|---|---|
-| 1. Linking cases to tests | Read the cases from TestRail, find the test each one already has, and plan what to automate | Q1–Q9, Q12, Q13, Q18 | Q29–Q35, now in Round 6 |
-| 2. The Walk | Follow each case's steps on a phone, and note how to find each element | Q16, Q19, Q20 | Q22, Q25–Q27, approving taps ([#29][29]), the phone work |
-| 3. Writing the code | Write page objects and one Automated Test per case | Q10, Q11, Q16, Q18, Q20 | Q21, Q22, Q24 |
+| 1. Linking cases to tests | Read the cases from TestRail, find the test each one already has, and show the Plan | Q1–Q9, Q12, Q13, Q18, Q29–Q32, Q35 | Q33, Q34, Q36, now in Round 7 |
+| 2. The Walk | Follow each case's steps on a phone, and note how to find each element | Q16, Q19, Q20 | Q22, Q25–Q27, checks of how a screen looks, approving taps ([#29][29]), the phone work |
+| 3. Writing the code | Write page objects and one Automated Test per case | Q10, Q11, Q16, Q18, Q20 | Q21, Q22, Q24, marking a step a person does |
 | 4. The Trial | The new test compiles, passes lint, and runs once on the phone | Q14, Q15, Q17 | |
 | 5. Report and pull requests | What the plugin reports at the end, and the pull requests it offers | | Q23, Q28, the report, the pull-request offer |
 | 6. The name check | A separate command, before Test Runs: does each case's title match its test's name? | | [#55][55] |
-| 7. CI | Both commands, with no one there to answer | | [#52][52], [#53][53], [#54][54] |
+| 7. CI | Both commands, with no one there to answer | | [#52][52], [#53][53], [#54][54], a periodic check |
 
 Before Level 1, setup learns how the Test Project works ([#33][33]).
 
@@ -39,6 +40,9 @@ So "fails" always says where: **during the Walk** (Level 2), **in its Trial** (L
 - **The name check.** Before a Test Run of a project's tests, it checks that every Test Case's title in TestRail
   matches its Automated Test's name, and lists every mismatch ([#55][55]).
 - **Both work in CI too**, with no one there to answer questions ([#52][52], [#53][53], [#54][54]).
+- **TestRail is the source of truth** (Q32). The tests follow TestRail's cases as they are: one test per case, even
+  when two cases look alike. Finding duplicate cases, and adding cases, belong to the workflows that write cases
+  ([#57][57]).
 - **It only automates.** Anything wrong is reported, never fixed: a case that doesn't match the app, a title that
   drifted, an app bug. No edits to TestRail, no renamed tests, no changes to the app.
 
@@ -52,12 +56,12 @@ A made-up Test Case, **C1234 "Check the Welcome screen"**, for iOS and Android:
 
 ## Level 1 · Linking cases to tests
 
-Nothing touches the phone yet. `/bc:automate` reads the cases, finds each one's test, and shows a plan.
+Nothing touches the phone yet. `/bc:automate` reads the cases, finds each one's test, and shows the Plan.
 
 ### Starting ([#37][37], [#27][27])
 
 - **What you give it** (Q1): a TestRail link to a folder or to one case, case IDs (`C1234 C1235`), or a folder's
-  path typed by name. A folder includes its subfolders. Before anything happens, the plan shows how many cases it
+  path typed by name. A folder includes its subfolders. Before anything happens, the Plan shows how many cases it
   found.
 - **Which suite** (Q2): always the suite in the project's settings. A link to another suite stops it, with how to
   switch the project to that suite.
@@ -76,33 +80,61 @@ Nothing touches the phone yet. `/bc:automate` reads the cases, finds each one's 
   with Allure, `@TmsLink("C1234")` next to the test's title. Setup learns which way the project uses.
 - **Tests people already wrote** (Q5, Q7):
   - A test whose name matches the case's title exactly is that case's test, so the case counts as automated.
-  - Near matches are listed in the plan, to confirm all at once, with the likely pairs already ticked. Example:
+  - Near matches are listed in the Plan, to confirm all at once, with the likely pairs already ticked. Example:
     the case "Check the Welcome screen" and the test "Check Welcome screen". Nothing is linked by guessing.
-  - Linking only adds the case ID to the test, and the plan shows that change first.
+  - Linking only adds the case ID to the test, and the Plan shows that change first.
   - In CI, with no one to confirm, near matches are only reported.
 - **Titles that drifted** (Q8): `/bc:automate` renames nothing. Each drifted title is reported with a suggested
-  fix, for a person to make.
+  fix, for a person to make. The fix always renames the test, never the case, since TestRail is the source of truth
+  (Q32).
 - **TestRail stays as it is** (Q6): for now the plugin writes nothing to TestRail; the case ID lives in the test's
   code. Once `/bc:vnv-sprint-prep` checks a case's content instead of its last-updated time ([#56][56]), the plugin
   can also mark cases as automated in TestRail.
 
+### Cases that look alike (Q32)
+
+Each case gets its own test, even when two cases look alike. Example: suppose "Check the Welcome screen (iOS)" is
+an iOS-only case and "Check the Welcome screen (Android)" an Android-only one, with the same steps. Each gets its
+own test, marked for its platform. `/bc:automate` doesn't merge or report them: that belongs to the workflows that
+write cases ([#57][57]).
+
 ### A test that covers only part of its case (Q18)
 
-The plan compares each linked test with its case's steps, and lists the steps that have no code. Example: the
-existing test for C1234 only checks step 2, so the plan lists steps 1 and 3. Adding them happens in Level 3, and
+The Plan compares each linked test with its case's steps, and lists the steps that have no code. Example: the
+existing test for C1234 only checks step 2, so the Plan lists steps 1 and 3. Adding them happens in Level 3, and
 they go in a pull request of their own (Level 5).
 
-### Still open: Round 6, redone
+### Reading each case's steps
+
+- **A step that checks several things** (Q29) is split into one check per line, each walked and written on its own.
+  Example: C1234's step 1 becomes 1a (the title), 1b (the button) and 1c (the version). TestRail isn't changed. That
+  way the report can name the one check that didn't match.
+- **A step too vague to follow** (Q30), such as "Verify the UI is correct": the Plan lists the case as unclear,
+  quoting the step, so a tester can reword it in TestRail. The case isn't automated until then. CI does the same.
+- **A step only a person can do** (Q31): the case is Semi-automated. Its test does every other step, and the Plan
+  and the report point out the step a person does.
+  - It's "can't automate" only when that step blocks the case, meaning the steps after it need it: the same rule as
+    an element the Walk can't find (Q19).
+  - Example: suppose a step says "Check that the alert sound is clearly audible". It only checks, so the case is
+    Semi-automated. Suppose instead a step says "Plug headphones into the phone", and the next one checks that the
+    alert plays in them. The next step needs it, so the case can't be automated.
+  - If the project already automates that kind of step, with a simulator for example, the plugin does it the
+    project's way.
+
+### Big folders (Q35)
+
+There's no limit on how many cases a folder has. Each new test is kept as soon as its Trial is done, and starting
+`/bc:automate` on the same folder again skips the cases that now have tests. Example: suppose a folder has 60 cases,
+and the laptop goes to sleep after 20; starting again carries on with the other 40. In CI, running the job again
+does the same.
+
+### Still open: Round 7
 
 | Q | Question |
 |---|---|
-| Q29 | A step checks several things at once. How does the plan handle it? |
-| Q30 | A step is too vague to follow. What does the plan do? |
-| Q31 | A case needs something the phone can't do on its own. What does the plan do? |
-| Q32 | Two cases are the same except for the platform. One test, or two? |
-| Q33 | A case changed in TestRail after its test was written. How is that noticed? |
-| Q34 | What does the plan show, and what can you change before the Walk? |
-| Q35 | A folder has more cases than one session can finish. What happens? |
+| Q33 | How does `/bc:automate` notice that a case changed after its test was written? |
+| Q34 | What does the Plan show, and what can you change before the Walk? |
+| Q36 | Should the Plan read a TestRail field that says whether a case can be automated? |
 
 ## Level 2 · The Walk: gathering locators
 
@@ -129,8 +161,9 @@ they go in a pull request of their own (Level 5).
   "blocked: the phone". If every case would be blocked, `/bc:automate` stops.
 
 Still open: Q22 (putting the phone back between cases), Q25 (the values a step types), Q26 (passwords and other
-secrets), Q27 (finding an element that has no test ID), approving taps ([#29][29]), and the phone work we set aside
-for now ([#21][21], [#26][26], [#34][34], [#35][35], [#47][47]).
+secrets), Q27 (finding an element that has no test ID), checks of how a screen looks, such as "the UI is correct"
+(raised in Q30), approving taps ([#29][29]), and the phone work we set aside for now ([#21][21], [#26][26],
+[#34][34], [#35][35], [#47][47]).
 
 ## Level 3 · Writing the code
 
@@ -152,7 +185,8 @@ for now ([#21][21], [#26][26], [#34][34], [#35][35], [#47][47]).
   test turns Bluetooth off, so its teardown turns it on again, and the next test starts from the same phone.
 
 Still open: Q21 (checking for something the Walk couldn't find), Q22 (what a test's teardown puts back), Q24
-(telling the plugin's files from a person's), and writing the first test ([#36][36]).
+(telling the plugin's files from a person's), how a Semi-automated test marks the step a person does (raised in
+Q31), and writing the first test ([#36][36]).
 
 ## Level 4 · The Trial ([#38][38])
 
@@ -182,6 +216,10 @@ Not started.
 
 Each level says what it does in CI. The questions only CI raises are open in [#52][52], [#53][53] and [#54][54].
 
+- **A periodic check** (asked for by the team, 12 Nov): a job on a schedule finds the cases that changed since their
+  tests were written, runs `/bc:automate` on them, and opens a pull request ([#54][54]). How a changed case is
+  noticed is Q33, in Level 1; the signals are researched in [#48][48].
+
 ## Research
 
 - [What a hook can allow for the phone's actions](../research/issue-22-hook-approvals.md) ([#22][22])
@@ -200,7 +238,7 @@ and [the plugin posts its own test run results](../adr/0005-plugin-posts-its-own
 2. Each question has an example and a recommended answer.
 3. The team answers by number: agree, disagree, or a question.
 4. The answers go on each question's GitHub ticket, and this file is updated after the round.
-5. A question about another level waits for that level's round.
+5. A question about another level waits for that level's round, and keeps its number.
 
 [21]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/21
 [22]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/22
@@ -217,6 +255,7 @@ and [the plugin posts its own test run results](../adr/0005-plugin-posts-its-own
 [37]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/37
 [38]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/38
 [47]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/47
+[48]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/48
 [52]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/52
 [53]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/53
 [54]: https://github.com/Omar-Hegazy-Integrant/buddy-council-plugin/issues/54
