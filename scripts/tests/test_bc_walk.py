@@ -1,4 +1,5 @@
-"""Tests for bc_walk.py — checking the fetched folders and batching their cases. Standard library only.
+"""Tests for bc_walk.py — checking the fetched folders, batching their cases, and validating and merging the
+extractors' fragments into the graph. Standard library only.
 
     python3 -m unittest discover -s scripts/tests -v
 
@@ -330,6 +331,373 @@ class CommandLine(WalkRunTest):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(json.loads(done.stdout)["ok"])
         self.assertTrue(re.search(r"Fetch: App/Login → 2 cases", done.stdout))
+
+
+LOGIN_FRAGMENT = {
+    "batch": "batch-001",
+    "conditions": [{"name": "Server error", "description": "the server answers with an error", "sources": ["TC-4"]}],
+    "screens": [
+        {
+            "name": "Login screen",
+            "sources": ["TC-3", "TC-4"],
+            "states": [
+                {"name": "default", "sources": ["TC-3"]},
+                {"name": "Error", "requires": ["Server error"], "sources": ["TC-4"]},
+            ],
+            "components": [
+                {"name": "Sign in", "kind": "button", "sources": ["TC-4", "TC-3"]},
+                {"name": "Error banner", "kind": "banner", "states": ["Error"], "sources": ["TC-4"]},
+            ],
+            "labels": [
+                {"text_hint": "Wrong password", "purpose": "error message", "states": ["Error"], "sources": ["TC-4"]},
+            ],
+        },
+        {"name": "Home", "sources": ["TC-3"]},
+    ],
+    "entries": [{"screen": "Login", "sources": ["TC-3"]}],
+    "transitions": [
+        {"from": {"screen": "Login"}, "to": {"screen": "Home"}, "action": "tap", "component": "Sign in",
+         "sources": ["TC-3"]},
+        {"from": {"screen": "Login"}, "to": {"screen": "Login", "state": "Error"}, "action": "tap",
+         "component": "Sign in", "requires": ["Server error"], "sources": ["TC-4"]},
+    ],
+}
+
+SETTINGS_FRAGMENT = {
+    "batch": "batch-002",
+    "conditions": [{"name": "server error!", "description": "Server returns an error", "sources": ["TC-2"]}],
+    "screens": [
+        {"name": "Home page", "sources": ["TC-1"],
+         "components": [{"name": "Settings", "kind": "tab", "sources": ["TC-1"]}]},
+        {"name": "Settings", "platforms": ["ios"], "sources": ["TC-1"],
+         "components": [{"name": "Save button", "kind": "button", "sources": ["TC-1"]},
+                        {"name": "Units", "kind": "switch", "sources": ["TC-1"]}]},
+        {"name": "Preferences", "platforms": ["android"], "sources": ["TC-2"],
+         "components": [{"name": "Save", "kind": "button", "sources": ["TC-2"]},
+                        {"name": "Units", "kind": "switch", "sources": ["TC-2"]}]},
+    ],
+    "transitions": [
+        {"from": {"screen": "Home"}, "to": {"screen": "Settings"}, "action": "tap", "component": "Settings",
+         "platforms": ["ios"], "sources": ["TC-1"]},
+        {"from": {"screen": "Home"}, "to": {"screen": "Preferences"}, "action": "tap", "component": "Settings",
+         "platforms": ["android"], "sources": ["TC-2"]},
+        {"from": {"screen": "Preferences"}, "to": {"screen": "Preferences"}, "action": "external",
+         "instruction": "Turn off the network", "sets": ["Server error"], "sources": ["TC-2"]},
+    ],
+}
+
+
+class FragmentRunTest(WalkRunTest):
+    """A run with two batches: batch-001 is App/Login (TC-3, TC-4), batch-002 is App/Settings (TC-1, TC-2)."""
+
+    def setUp(self):
+        super().setUp()
+        self.save("App/Login", folder_file(LOGIN, "App/Login"))
+        self.save("App/Settings", folder_file(SETTINGS, "App/Settings"))
+        self.check("App/Login", "App/Settings")
+        self.batched = bc_walk.cmd_batch(str(self.run))
+
+    def fragment(self, batch_id, payload):
+        path = self.run / "fragments" / f"{batch_id}.json"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(payload if isinstance(payload, str) else json.dumps(payload))
+        return path
+
+    def validate(self, batch_id):
+        return bc_walk.cmd_validate(str(self.run), batch_id)
+
+    def merge(self, same=None):
+        return bc_walk.cmd_merge(str(self.run), same)
+
+    def graph(self):
+        return json.loads((self.run / "graph.json").read_text())
+
+    def screen(self, graph, sid):
+        return next(s for s in graph["screens"] if s["id"] == sid)
+
+    def node(self, items, nid):
+        return next(i for i in items if i["id"] == nid)
+
+
+class Validate(FragmentRunTest):
+    def test_each_batch_names_the_fragment_file_its_extractor_writes(self):
+        batches = json.loads((self.run / "batches.json").read_text())["batches"]
+        self.assertEqual([b["id"] for b in self.batched["batches"]], ["batch-001", "batch-002"])
+        for printed, saved in zip(self.batched["batches"], batches):
+            self.assertEqual(printed["fragment"], str(self.run / "fragments" / f"{saved['id']}.json"))
+            self.assertEqual(saved["fragment"], printed["fragment"])
+
+    def test_a_good_fragment_passes(self):
+        self.fragment("batch-001", LOGIN_FRAGMENT)
+        result = self.validate("batch-001")
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["status"], "ok")
+
+    def test_a_case_no_item_cites_is_a_warning(self):
+        fragment = json.loads(json.dumps(LOGIN_FRAGMENT))
+        fragment["conditions"] = []
+        fragment["screens"] = [{"name": "Home", "sources": ["TC-3"]}]
+        fragment["entries"], fragment["transitions"] = [], []
+        self.fragment("batch-001", fragment)
+        result = self.validate("batch-001")
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["uncited"], ["TC-4"])
+
+    def test_a_malformed_fragment_lists_every_error(self):
+        bad = {
+            "batch": "batch-009",
+            "extra": 1,
+            "conditions": [{"name": "Offline", "sources": ["TC-3"]}],
+            "screens": [
+                {"sources": ["TC-3"]},
+                {"name": "Login", "platforms": ["windows"], "sources": ["TC-99"],
+                 "components": [{"name": "Go", "kind": "button", "states": ["Nowhere"], "sources": ["TC-3"]}],
+                 "labels": [{"text_hint": "Hi", "sources": ["TC-3"]}]},
+            ],
+            "transitions": [
+                {"from": {"screen": "Login"}, "to": {"screen": "Mars"}, "action": "fly", "sources": ["TC-3"]},
+                {"from": {"screen": "Login"}, "to": {"screen": "Login"}, "action": "tap", "sources": ["TC-3"]},
+                {"from": {"screen": "Login"}, "to": {"screen": "Login"}, "action": "external",
+                 "requires": ["Rain"], "sources": []},
+            ],
+        }
+        self.fragment("batch-001", bad)
+        result = self.validate("batch-001")
+        self.assertFalse(result["valid"])
+        errors = "\n".join(result["errors"])
+        for expected in (
+            "batch: is 'batch-009', not 'batch-001'",
+            "extra: not in the schema",
+            "conditions[0].description: missing",
+            "screens[0].name: missing",
+            "screens[1].platforms[0]: 'windows' is not one of ios, android",
+            "screens[1].sources: TC-99 is not a case in batch-001",
+            "screens[1].components[0].states: 'Nowhere' is not a state of screen 'Login'",
+            "screens[1].labels[0].purpose: missing",
+            "transitions[0].to: no screen 'Mars' in this fragment",
+            "transitions[0].action: 'fly' is not one of tap, type, select, scroll, back, external",
+            "transitions[1].component: a tap needs the component it acts on",
+            "transitions[2].instruction: an external step needs an instruction for a person",
+            "transitions[2].requires: no condition 'Rain' in this fragment",
+            "transitions[2].sources: empty",
+        ):
+            self.assertIn(expected, errors)
+
+    def test_a_fragment_that_is_not_json_or_missing_fails(self):
+        self.fragment("batch-001", "{not json")
+        self.assertIn("not valid JSON", self.validate("batch-001")["errors"][0])
+        result = self.validate("batch-002")
+        self.assertFalse(result["valid"])
+        self.assertIn("no fragment", result["errors"][0])
+
+    def test_a_batch_is_re_asked_once_then_its_cases_are_reported(self):
+        self.fragment("batch-002", {"batch": "batch-002"})
+        first = self.validate("batch-002")
+        self.assertEqual((first["valid"], first["attempts"], first["retry"]), (False, 1, True))
+        self.assertEqual(self.validate("batch-002")["attempts"], 1, "the same file again is not a new attempt")
+        self.fragment("batch-002", {"batch": "batch-002", "screens": "none"})
+        second = self.validate("batch-002")
+        self.assertEqual((second["valid"], second["attempts"], second["retry"]), (False, 2, False))
+        self.assertEqual(second["status"], "failed")
+        self.assertEqual(second["case_ids"], ["TC-1", "TC-2"])
+        self.assertIn("TC-1, TC-2", second["line"])
+
+    def test_batching_again_drops_the_old_fragments(self):
+        self.fragment("batch-001", LOGIN_FRAGMENT)
+        self.validate("batch-001")
+        bc_walk.cmd_batch(str(self.run))
+        self.assertFalse((self.run / "fragments" / "batch-001.json").exists())
+        self.assertEqual(self.validate("batch-001")["attempts"], 1)
+
+    def test_an_unknown_batch_is_refused(self):
+        with self.assertRaises(bc_run.RunError):
+            self.validate("batch-404")
+
+
+class Merge(FragmentRunTest):
+    def setUp(self):
+        super().setUp()
+        self.fragment("batch-001", LOGIN_FRAGMENT)
+        self.fragment("batch-002", SETTINGS_FRAGMENT)
+
+    def test_fragments_merge_into_one_graph_by_normalized_name(self):
+        result = self.merge()
+        graph = self.graph()
+        self.assertEqual(result["graph"], str(self.run / "graph.json"))
+        self.assertEqual([s["id"] for s in graph["screens"]], ["home", "login", "preferences", "settings"])
+        home = self.screen(graph, "home")
+        self.assertEqual(home["sources"], ["TC-1", "TC-3"], "Home and Home page are one screen")
+        self.assertEqual(home["name"], "Home")
+        self.assertEqual([s["id"] for s in home["states"]], ["home.default"])
+        self.assertEqual(graph["conditions"], [{"id": "cond.server_error", "description": "Server returns an error",
+                                                "sources": ["TC-2", "TC-4"]}])
+        login = self.screen(graph, "login")
+        self.assertEqual([s["id"] for s in login["states"]], ["login.default", "login.error"])
+        self.assertEqual(self.node(login["states"], "login.error")["requires"], ["cond.server_error"])
+        sign_in = self.node(login["components"], "login.sign_in_button")
+        self.assertEqual(sign_in["sources"], ["TC-3", "TC-4"])
+        self.assertNotIn("only_in", sign_in, "it is in every state of its screen")
+        self.assertEqual(self.node(login["components"], "login.error_banner")["only_in"], ["login.error"])
+        self.assertEqual(login["labels"], [{"id": "login.label.wrong_password", "text_hint": "Wrong password",
+                                            "purpose": "error message", "only_in": ["login.error"],
+                                            "platforms": ["ios", "android"], "sources": ["TC-4"]}])
+        self.assertIn({"id": "entry.login.default", "state": "login.default", "conditions": [],
+                       "platforms": ["ios", "android"], "sources": ["TC-3"]}, graph["entries"])
+        failing = [t for t in graph["transitions"] if t["to_state"] == "login.error"]
+        self.assertEqual(failing, [{"from_state": "login.default", "to_state": "login.error", "action": "tap",
+                                    "component": "login.sign_in_button", "requires": ["cond.server_error"],
+                                    "sets": [], "clears": [], "platforms": ["ios", "android"],
+                                    "sources": ["TC-4"]}])
+        external = next(t for t in graph["transitions"] if t["action"] == "external")
+        self.assertEqual(external["instruction"], "Turn off the network")
+        self.assertEqual(external["sets"], ["cond.server_error"])
+        self.assertNotIn("component", external)
+        self.assertEqual(result["counts"]["screens"], 4)
+
+    def test_platforms_default_to_both(self):
+        self.merge()
+        graph = self.graph()
+        self.assertEqual(self.screen(graph, "home")["platforms"], ["ios", "android"])
+        self.assertEqual(self.screen(graph, "settings")["platforms"], ["ios"])
+        self.assertEqual(self.screen(graph, "preferences")["platforms"], ["android"])
+
+    def test_output_is_sorted_and_the_same_whatever_the_order(self):
+        self.merge()
+        first = (self.run / "graph.json").read_text()
+        graph = json.loads(first)
+        for key in ("entries", "conditions", "screens"):
+            ids = [n["id"] for n in graph[key]]
+            self.assertEqual(ids, sorted(ids))
+        for screen in graph["screens"]:
+            for key in ("states", "components", "labels"):
+                ids = [n["id"] for n in screen[key]]
+                self.assertEqual(ids, sorted(ids))
+        edges = [(t["from_state"], t["to_state"], t["action"]) for t in graph["transitions"]]
+        self.assertEqual(edges, sorted(edges))
+        shuffled = json.loads(json.dumps(LOGIN_FRAGMENT))
+        for key in ("screens", "transitions", "conditions"):
+            shuffled[key].reverse()
+        for screen in shuffled["screens"]:
+            for key in ("states", "components"):
+                screen.get(key, []).reverse()
+        self.fragment("batch-001", shuffled)
+        self.merge()
+        self.assertEqual((self.run / "graph.json").read_text(), first)
+
+    def test_near_duplicates_are_listed_and_settled_by_the_answers(self):
+        result = self.merge()
+        pairs = result["near_duplicates"]
+        self.assertEqual([(p["kind"], p["ids"]) for p in pairs], [("screen", ["preferences", "settings"])])
+        self.assertEqual(pairs[0]["names"], ["Preferences", "Settings"])
+        self.assertTrue((self.run / "near-duplicates.json").exists())
+
+        result = self.merge(json.dumps([["settings", "preferences"]]))
+        self.assertEqual(result["near_duplicates"], [])
+        graph = self.graph()
+        self.assertEqual([s["id"] for s in graph["screens"]], ["home", "login", "settings"])
+        settings = self.screen(graph, "settings")
+        self.assertEqual(settings["platforms"], ["ios", "android"])
+        self.assertEqual(settings["sources"], ["TC-1", "TC-2"])
+        self.assertEqual([c["id"] for c in settings["components"]], ["settings.save_button", "settings.units_switch"])
+        into = [t for t in graph["transitions"] if t["from_state"] == "home.default"]
+        self.assertEqual(len(into), 1, "the two platforms' taps into the screen are one transition now")
+        self.assertEqual((into[0]["to_state"], into[0]["platforms"], into[0]["sources"]),
+                         ("settings.default", ["ios", "android"], ["TC-1", "TC-2"]))
+        external = next(t for t in graph["transitions"] if t["action"] == "external")
+        self.assertEqual((external["from_state"], external["to_state"]), ("settings.default", "settings.default"))
+
+        again = self.merge()
+        self.assertEqual(again["near_duplicates"], [], "the answers are kept for the next merge")
+        self.assertEqual([s["id"] for s in self.graph()["screens"]], ["home", "login", "settings"])
+
+    def test_a_listed_pair_left_out_of_the_answers_is_kept_apart(self):
+        self.merge()
+        self.merge("[]")
+        self.assertEqual(self.merge()["near_duplicates"], [])
+        self.assertIn("preferences", [s["id"] for s in self.graph()["screens"]])
+
+    def test_an_answer_about_a_pair_not_on_the_list_is_refused(self):
+        self.merge()
+        before = (self.run / "graph.json").read_text()
+        for answer in ('[["home", "login"]]', '{"settings": "preferences"}', "not json"):
+            with self.assertRaises(bc_run.RunError):
+                self.merge(answer)
+        self.assertEqual((self.run / "graph.json").read_text(), before)
+
+    def test_near_identical_labels_on_one_state_merge(self):
+        fragment = {
+            "batch": "batch-001",
+            "screens": [{
+                "name": "Login", "sources": ["TC-3", "TC-4"],
+                "states": [{"name": "default", "sources": ["TC-3"]}, {"name": "Error", "sources": ["TC-4"]}],
+                "labels": [
+                    {"text_hint": "Wrong password!", "purpose": "error", "states": ["Error"], "sources": ["TC-4"]},
+                    {"text_hint": "wrong  password", "purpose": "error", "states": ["Error"], "sources": ["TC-3"]},
+                    {"text_hint": "Wrong passwords", "purpose": "error", "states": ["Error"], "sources": ["TC-3"]},
+                    {"text_hint": "Wrong passwords", "purpose": "hint", "states": ["default"], "sources": ["TC-3"]},
+                ],
+            }],
+        }
+        self.fragment("batch-001", fragment)
+        (self.run / "fragments" / "batch-002.json").unlink()
+        self.merge()
+        login = self.screen(self.graph(), "login")
+        self.assertEqual([(label["text_hint"], label["sources"]) for label in login["labels"]],
+                         [("Wrong password!", ["TC-3", "TC-4"]), ("Wrong passwords", ["TC-3"])])
+
+    def test_bad_or_missing_fragments_are_left_out_and_their_cases_named(self):
+        self.fragment("batch-002", {"batch": "batch-002", "screens": "none"})
+        result = self.merge()
+        self.assertEqual(result["left_out"], [{"batch": "batch-002", "case_ids": ["TC-1", "TC-2"],
+                                               "reason": "the fragment does not match the schema"}])
+        self.assertTrue(any("TC-1, TC-2" in line for line in result["lines"]))
+        self.assertEqual([s["id"] for s in self.graph()["screens"]], ["home", "login"])
+        (self.run / "fragments" / "batch-001.json").unlink()
+        with self.assertRaises(bc_run.RunError):
+            self.merge()
+
+    def test_a_component_with_a_different_control_per_platform_is_two_sharing_a_role(self):
+        fragment = {
+            "batch": "batch-001",
+            "screens": [{"name": "Login", "sources": ["TC-3"], "components": [
+                {"name": "Remember me", "kind": "switch", "role": "remember", "platforms": ["ios"], "sources": ["TC-3"]},
+                {"name": "Remember me", "kind": "checkbox", "role": "remember", "platforms": ["android"],
+                 "sources": ["TC-4"]},
+            ]}],
+        }
+        self.fragment("batch-001", fragment)
+        (self.run / "fragments" / "batch-002.json").unlink()
+        result = self.merge()
+        login = self.screen(self.graph(), "login")
+        self.assertEqual([(c["id"], c["role"], c["platforms"]) for c in login["components"]],
+                         [("login.remember_me_checkbox", "remember", ["android"]),
+                          ("login.remember_me_switch", "remember", ["ios"])])
+        self.assertEqual(result["near_duplicates"], [], "they are meant to be two")
+
+
+class WalkCommandLine(FragmentRunTest):
+    def call(self, *args):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = bc_walk.main(list(args))
+        return code, json.loads(out.getvalue())
+
+    def test_validate_and_merge_print_one_json_object(self):
+        self.fragment("batch-001", LOGIN_FRAGMENT)
+        self.fragment("batch-002", SETTINGS_FRAGMENT)
+        code, result = self.call("validate", str(self.run), "batch-001")
+        self.assertEqual((code, result["ok"], result["valid"]), (0, True, True))
+        code, result = self.call("merge", str(self.run))
+        self.assertEqual((code, result["ok"]), (0, True))
+        code, result = self.call("merge", str(self.run), "--same", '[["settings", "preferences"]]')
+        self.assertEqual((code, result["ok"], result["counts"]["screens"]), (0, True, 3))
+        code, result = self.call("merge", str(self.run), "--same", "nope")
+        self.assertEqual((code, result["ok"]), (1, False))
+
+    def test_the_schema_is_written_once_in_the_script(self):
+        self.assertIn("screens", bc_walk.FRAGMENT_SCHEMA)
+        self.assertEqual(bc_walk.ACTIONS, ("tap", "type", "select", "scroll", "back", "external"))
 
 
 if __name__ == "__main__":
