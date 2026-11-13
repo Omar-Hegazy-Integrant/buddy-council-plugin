@@ -57,8 +57,12 @@ One problem `/bc:contradiction` reports, such as a test case that expects a diff
 _Avoid_: issue, conflict (alone)
 
 **Slice**:
-A share of the requirements and test cases a command checks, small enough for one reader to check at once: a few whole features, or some of the requirements of a big one, each with its test cases — or pairs of items on the same subject from different parts of the product.
+A share of the requirements and test cases a command checks, small enough for one reader to check at once: a few whole features, or some of the requirements of a big one, each with its test cases — or pairs of items on the same subject from different parts of the Product.
 _Avoid_: chunk, batch
+
+**Product**:
+Everything the requirements and test cases describe, all features together. A `/bc:contradiction` run on one requirement or feature is compared with the rest of the Product.
+_Avoid_: system, project (alone)
 
 **Subject line**:
 One line a Slice's reader writes for each requirement and test case: what it is about, then what it says. *(made-up)* "Idle logout: the session ends after 5 minutes idle." Code pairs the items whose subject lines share a subject but no Slice.

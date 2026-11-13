@@ -31,15 +31,15 @@ its own command, and read files with your view tool.
    still needs a subject line for.
 2. Read each part and each doc once, in order, one per view. Together they are the whole slice.
 3. Make every comparison in *What to compare*, and judge each by the rules below.
-4. Save the slice's findings in one command, as *Saving* shows, with `--slice <n>`. When the slice holds no
-   conflict, save `[]`.
-5. Save a subject line for each ID in `needs_lines`, as *Subject lines* shows. When it is empty, there is nothing
+4. Save a subject line for each ID in `needs_lines`, as *Subject lines* shows. When it is empty, there is nothing
    to save.
+5. Save the slice's findings in one command, as *Saving* shows, with `--slice <n>`. When the slice holds no
+   conflict, save `[]`.
 6. **A helper** ends with one line of JSON, and nothing else: `{"slice": <n>, "saved": <how many>}`. Add
    `"docs_not_read": ["<link>: <why>"]` for each doc a part told you to read that you couldn't, and answer
    `{"slice": <n>, "error": "<what stopped you>"}` when you couldn't finish.
 
-**Done when** the slice's last save answered `"checked": true`, and a helper has sent its line.
+**Done when** the findings save answered `"checked": true`, and a helper has sent its line.
 
 A helper works from its slice alone — its parts and the docs they name — and leaves every question to the session
 that started it.
@@ -135,8 +135,8 @@ one: every ID must be in the run, and every quote must be in its item, whatever 
 marks. It answers `saved`, `total`, and `rejected`. A rejected finding comes back with its problems, and a quote
 that isn't in its item comes with the closest text code found there. Copy the exact words from the bundle and
 save it again, or drop it. A finding saved again with the same quotes replaces the first. With `--slice`, it also
-answers `checked`: the slice counts as checked once a save of it leaves nothing rejected, so after dropping the
-last rejected finding, save `[]`.
+answers `checked`: the slice counts as checked once a save of it leaves nothing rejected — so after dropping the
+last rejected finding, save `[]` — and each ID in its `needs_lines` has a subject line.
 
 **Done when** every finding is saved and `rejected` is empty, or each finding still in it was dropped on
 purpose — and, with `--slice`, the answer says `"checked": true`.
@@ -145,12 +145,14 @@ purpose — and, with `--slice`, the answer says `"checked": true`.
 
 Code finds the items in other slices, or elsewhere in the product, that could conflict with this slice's by their
 subject lines: one line per item, its subject, a colon, then what it says about it, at most 200 characters.
-*(made-up)* `Idle logout: the session ends after 5 minutes idle.`
 
-- **The subject** — the screen, setting, or behavior the item is about, in the product's own words for it, so an item
-  on the same subject elsewhere names it alike.
-- **What it says** — the values, results, and states the item states, or for a test case expects, as behavior:
-  `Idle logout: logs the user out after 5 minutes idle.`
+- **The subject** — the thing the item is about: the screen, setting, data, or state, in the product's own word for
+  it. Name the thing rather than what happens to it — `Session`, not `Idle logout` — so an item on the same thing in
+  another feature names it alike.
+- **What it says** — the values, results, and states the item states, or for a test case expects, as behavior.
+
+*(made-up)* Login's `Session: ends after 5 minutes idle.` and Monitoring's `Session: stays open while monitoring.`
+share a subject, so code pairs them.
 
 Save them together, as their own command:
 
@@ -158,7 +160,7 @@ Save them together, as their own command:
 python3 '<plugin root>/scripts/bc_run.py' subjects --run '<run_dir>' --slice <n> --add '<json>'
 ```
 
-`--add` is one JSON object on one line, each ID with its line, with every `'` written as `\u0027`:
+`--add` is one JSON object on one line, each ID with its line, with every `'` written as `\u0027` — *(made-up)*
 `{"CWA-REQ-85": "Vitals refresh: every 3 seconds.", "TC-1234": "Vitals refresh: every 10 seconds."}`. It answers
 `saved`, `rejected` with each problem, the IDs still `missing` a line, and `checked`.
 
