@@ -869,6 +869,8 @@ def cmd_link(run_text: str) -> dict[str, Any]:
     }
     if slicing:
         links["slices"] = slice_run(run, pieces)
+        # Items in different slices, or outside the scope, are matched by the subject lines their readers save.
+        links["subject_lines"] = len(links["slices"]) > 1 or bool(outside and any(outside))
     write_json(run / "links.json", links)
     update_manifest(run, linked_at=links["linked_at"], readiness=readiness, counts=counts, lines=lines, missing=missing, mismatches=mismatches)
     printed = [
@@ -2059,7 +2061,8 @@ MAX_SLICE_FEATURES = 5  # feature names a slice's row shows; the rest are counte
 
 
 def checked_slices(run: Path) -> tuple[set[int], dict[int, int]]:
-    """The slices whose reader saved with nothing left rejected — `[]` included — and how many findings each saved."""
+    """The slices whose reader saved with nothing left rejected — `[]` included — and, in a run matched across slices,
+    a subject line for each of their items; and how many findings each saved."""
     checked: set[int] = set()
     found: dict[int, set[str]] = {}
     folder = run / "findings"
@@ -2069,7 +2072,81 @@ def checked_slices(run: Path) -> tuple[set[int], dict[int, int]]:
             found.setdefault(data["slice"], set()).update(finding_key(f) for f in data.get("findings") or [])
             if data.get("checked") is True:
                 checked.add(data["slice"])
+    links = read_json(run / "links.json")
+    if isinstance(links, dict) and links.get("subject_lines"):
+        missing = missing_lines(run, links.get("slices") or [])
+        checked = {n for n in checked if not missing.get(n)}
     return checked, {n: len(keys) for n, keys in found.items()}
+
+
+MAX_LINE_CHARS = 200  # a subject line names what an item is about, then what it says: one line, never its text
+
+
+def saved_lines(run: Path) -> dict[str, str]:
+    """Every subject line saved in the run, by item key; a line saved again replaces the first."""
+    lines: dict[str, str] = {}
+    folder = run / "lines"
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        data = read_json(path)
+        if isinstance(data, dict) and isinstance(data.get("lines"), dict):
+            lines.update({key(rid): str(text) for rid, text in data["lines"].items()})
+    return lines
+
+
+def slice_items(entry: dict[str, Any]) -> list[str]:
+    return list(dict.fromkeys([*(entry.get("requirements") or []), *(entry.get("test_cases") or [])]))
+
+
+def missing_lines(run: Path, slices: list[dict[str, Any]]) -> dict[int, list[str]]:
+    """For each slice of requirements and test cases, its items with no subject line yet."""
+    saved = saved_lines(run)
+    return {n: [rid for rid in slice_items(entry) if key(rid) not in saved]
+            for n, entry in enumerate(slices, start=1) if entry.get("kind") != "pairs"}
+
+
+def as_case_key(text: Any) -> str:
+    """A bare test case number or a C-number, keyed as the run keys test cases: TC-<number>."""
+    number = re.fullmatch(r"(?i)(?:tc-?|c)?(\d+)", str(text or "").strip())
+    return key(f"TC-{number.group(1)}") if number else ""
+
+
+def cmd_subjects(run_text: str, number: int, add_text: str) -> dict[str, Any]:
+    """Save a slice reader's subject lines — one per requirement and test case: what it is about, then what it says —
+    which code matches to find items on the same subject in other slices, or outside the scope."""
+    run = run_folder(run_text)
+    links = read_json(run / "links.json") or {}
+    slices = run_slices(run)
+    entry = slice_at(slices, number)
+    if not links.get("subject_lines"):
+        raise RunError("this run needs no subject lines: it is one slice, with nothing outside it to compare it with.")
+    if entry.get("kind") == "pairs":
+        raise RunError(f"slice {number} holds pairs: their items' lines were saved with the slices they come from.")
+    try:
+        batch = json.loads(add_text)
+    except ValueError as exc:
+        raise RunError(f"--add isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
+    if not isinstance(batch, dict):
+        raise RunError('--add takes one JSON object: {"<ID>": "<subject>: <what it says>", …}')
+    items = {key(rid): rid for rid in slice_items(entry)}
+    saved: dict[str, str] = {}
+    rejected: list[dict[str, str]] = []
+    for rid, text in batch.items():
+        found = items.get(key(rid)) or items.get(as_case_key(rid))
+        line = one_line(text) if isinstance(text, str) else ""
+        if found is None:
+            rejected.append({"id": str(rid), "problem": f"not in slice {number}: save a line for each ID in its needs_lines"})
+        elif not line or len(line) > MAX_LINE_CHARS:
+            rejected.append({"id": found, "problem": f"one line of at most {MAX_LINE_CHARS} characters: its subject, "
+                                                     "a colon, then what it says"})
+        else:
+            saved[found] = line
+    if saved:
+        folder = run / "lines"
+        folder.mkdir(mode=0o700, exist_ok=True)
+        write_json(folder / f"{time.time_ns():020d}-{os.getpid()}.json",
+                   {"slice": number, "saved_at": utc_now(), "lines": saved})
+    return {"saved": len(saved), "rejected": rejected, "missing": missing_lines(run, slices).get(number, []),
+            "checked": number in checked_slices(run)[0]}
 
 
 def run_slices(run: Path) -> list[dict[str, Any]]:
@@ -2105,9 +2182,13 @@ def cmd_slices(run_text: str, number: int = 0) -> dict[str, Any]:
 
     if number:
         entry = slice_at(slices, number)
-        return {"run_dir": str(run), **row(number, entry), "of": len(slices),
-                "parts": [str(run / part) for part in entry.get("parts") or []],
-                "docs": [str(run / doc) for doc in entry.get("docs") or []]}
+        answer = {"run_dir": str(run), **row(number, entry), "of": len(slices),
+                  "parts": [str(run / part) for part in entry.get("parts") or []],
+                  "docs": [str(run / doc) for doc in entry.get("docs") or []]}
+        if entry.get("kind") != "pairs":
+            links = read_json(run / "links.json") or {}
+            answer["needs_lines"] = missing_lines(run, slices).get(number, []) if links.get("subject_lines") else []
+        return answer
     rows = [row(n, entry) for n, entry in enumerate(slices, start=1)]
     return {"run_dir": str(run), "total": len(rows), "checked": sum(1 for r in rows if r["checked"]), "slices": rows}
 

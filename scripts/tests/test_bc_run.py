@@ -497,7 +497,34 @@ class Slices(RunFolderTest):
                  "requirement_ids": ["CWA-REQ-4"]}]
         files = {"docs/01-alarms-1.md": "a" * 3_000, "docs/02-vitals-1.md": "v" * 3_000}
         with mock.patch.object(bc_run, "SLICE_BYTES", 6_000):
-            return self.link(REQUIREMENTS, CASES, docs, files)
+            run = self.link(REQUIREMENTS, CASES, docs, files)
+        self.save_lines(run, 1, 2)
+        return run
+
+    def save_lines(self, run, *numbers):
+        for n in numbers:
+            ids = bc_run.cmd_slices(str(run), n)["needs_lines"]
+            bc_run.cmd_subjects(str(run), n, json.dumps({i: f"Subject of {i}: what it says." for i in ids}))
+
+    def test_a_slice_is_checked_once_its_reader_saved_a_subject_line_for_each_of_its_items(self):
+        self.assertEqual(bc_run.cmd_slices(str(self.link(REQUIREMENTS, CASES)), 1)["needs_lines"], [],
+                         "one slice of the whole product has nothing to be matched with")
+        with mock.patch.object(bc_run, "SLICE_BYTES", 1_000):
+            run = self.link(REQUIREMENTS, CASES)
+        ids = bc_run.cmd_slices(str(run), 1)["needs_lines"]
+        self.assertGreater(len(ids), 1)
+        self.assertFalse(bc_run.cmd_findings(str(run), add_text="[]", slice_number=1)["checked"], "its lines are to come")
+        answer = bc_run.cmd_subjects(str(run), 1, json.dumps({ids[0].lower(): "Alarm sound: an alarm sounds.", "TC-14": "x"}))
+        self.assertEqual((answer["saved"], [r["id"] for r in answer["rejected"]], answer["missing"], answer["checked"]),
+                         (1, ["TC-14"], ids[1:], False), "an ID from another slice is sent back")
+        answer = bc_run.cmd_subjects(str(run), 1, json.dumps({i: "Alarm sound: " + "loud " * 60 for i in ids[1:]}))
+        self.assertEqual((answer["saved"], answer["checked"]), (0, False), "a line is one line, not the item's text")
+        answer = bc_run.cmd_subjects(str(run), 1, json.dumps({i: f"Alarm {i}: it sounds." for i in ids[1:]}))
+        self.assertEqual((answer["saved"], answer["rejected"], answer["missing"], answer["checked"]),
+                         (len(ids) - 1, [], [], True))
+        self.assertEqual(bc_run.cmd_slices(str(run), 1)["needs_lines"], [])
+        with self.assertRaises(bc_run.RunError):
+            bc_run.cmd_subjects(str(run), 1, '["a list"]')
 
     def test_the_report_names_a_slice_no_one_checked(self):
         run = self.two_slices()
@@ -516,6 +543,7 @@ class Slices(RunFolderTest):
             run = self.link(REQUIREMENTS, CASES)
         total = bc_run.cmd_slices(str(run))["total"]
         self.assertGreater(total, 2)
+        self.save_lines(run, *range(1, total + 1))
         found = {"severity": "high", "fix": "TC-10", "why": "It expects a sound where the requirement asks for a light.",
                  "items": [{"id": "CWA-REQ-2", "quote": "show a visual alarm"}, {"id": "TC-10", "quote": "It happens"}]}
         self.assertEqual(bc_run.cmd_findings(str(run), add_text=json.dumps([found]), slice_number=1)["saved"], 1)
