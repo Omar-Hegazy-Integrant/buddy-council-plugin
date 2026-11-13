@@ -15,6 +15,8 @@ step to the analysis as files, so the data itself never passes through a model:
                      stands alone
   lines/*.json       each slice reader's subject lines: what each item is about, and what it says (``subjects``)
   pairs.json, pairs/ items on the same subject in different slices, or outside the scope, in slices of pairs (``match``)
+  tickets.json, tickets/  the board tickets the session read, each with its subject line, and slices of tickets, each
+                     with the requirements and test cases it is compared with (``tickets``)
   findings/*.json    what /bc:contradiction found, each checked against the run (``findings``)
   report-N.md        the contradiction report, written from the findings, in parts (``report``)
   manifest.json      what was collected, when, and the counts
@@ -50,6 +52,9 @@ Subcommands, each printing one JSON object to stdout:
   match  --run DIR                                     pair the items on the same subject in different slices — or,
                                                        in a run on part of the product, with the rest of it — and
                                                        cut the pairs into slices of their own
+  tickets --run DIR --add JSON                         save the board tickets, each with its subject line; find for
+                                                       each the requirements it links to and the requirements and
+                                                       test cases on its subject; cut them into slices of their own
   report --run DIR [--lines JSON] [--partial TEXT]     write the contradiction report from the saved findings,
                                                        in parts small enough for one read
 
@@ -3258,6 +3263,10 @@ def main(argv: list[str] | None = None) -> int:
                                                        "write every ' as \\u0027")
     matcher = sub.add_parser("match", help="pair the items on the same subject in different slices, or outside the scope")
     matcher.add_argument("--run", required=True)
+    tickets = sub.add_parser("tickets", help="save the board tickets, match each with what is on its subject, cut their slices")
+    tickets.add_argument("--run", required=True)
+    tickets.add_argument("--add", required=True, help='[{"id", "title", "url", "linked_ids", "line"}, …] as JSON on one line; '
+                                                      "write every ' as \\u0027")
     report = sub.add_parser("report", help="write the contradiction report from the saved findings")
     report.add_argument("--run", required=True)
     report.add_argument("--lines", default="", help="more lines for its top, as a JSON list: the board's and the settings'")
@@ -3294,6 +3303,8 @@ def main(argv: list[str] | None = None) -> int:
             result = cmd_subjects(args.run, args.slice, args.add)
         elif args.action == "match":
             result = cmd_match(args.run)
+        elif args.action == "tickets":
+            result = cmd_tickets(args.run, args.add)
         elif args.action == "report":
             result = cmd_report(args.run, args.lines, args.partial)
         else:

@@ -135,6 +135,18 @@ class RunScriptApproval(unittest.TestCase):
         ]:
             self.assertNotAllowed(command)
 
+    def test_saving_the_board_tickets_is_approved_as_one_line_of_single_quoted_json(self):
+        tickets = ('[{"id": "PROJ-7", "title": "Don\\u0027t log out (idle) & warn", "url": "https://jira.test/browse/PROJ-7", '
+                   '"linked_ids": ["CWA-REQ-1"], "line": "Session: ends after 2 minutes idle; $(not run) | `nor this`"}]')
+        self.assertAllowed(f"python3 {SCRIPT} tickets --run {RUN} --add '{tickets}'", "claude")
+        self.assertAllowed(f"python3 '{SCRIPT}' tickets --run '{RUN}' --add '{tickets}'", "copilot")
+        for command in [
+            f"python3 {SCRIPT} tickets --run {RUN} --add '[{{\"title\": \"it's\"}}]'",
+            f"python3 {SCRIPT} tickets --run {RUN} --add \"$(cat tickets.json)\"",
+            f"python3 {SCRIPT} tickets --run {RUN} --slice 2 --add '[]'",
+        ]:
+            self.assertNotAllowed(command)
+
     def test_a_symlinked_path_to_the_same_script_is_approved(self):
         with tempfile.TemporaryDirectory() as tmp:
             link = Path(tmp, "plugin")

@@ -1690,10 +1690,12 @@ class Cli(RunFolderTest):
         bc_run.cmd_link(str(run))
         finding = {"severity": "high", "fix": "TC-10", "why": "It expects a sound the requirement doesn\u0027t ask for.",
                    "items": [{"id": "CWA-REQ-2", "quote": "show a visual alarm"}, {"id": "TC-10", "quote": "It happens"}]}
-        for argv in (["findings", "--run", str(run), "--add", json.dumps(finding)], ["report", "--run", str(run)]):
+        ticket = {"id": "PROJ-7", "title": "Louder visual alarm", "line": "Visual alarm: flashes brighter."}
+        for argv in (["tickets", "--run", str(run), "--add", json.dumps([ticket])],
+                     ["findings", "--run", str(run), "--add", json.dumps(finding)], ["report", "--run", str(run)]):
             out = io.StringIO()
             with redirect_stdout(out):
-                self.assertEqual(bc_run.main(argv), 0)
+                self.assertEqual(bc_run.main(argv), 0, argv)
             self.assertTrue(json.loads(out.getvalue())["ok"])
         self.assertEqual(json.loads(out.getvalue())["fix_test_cases"], [1])
 
