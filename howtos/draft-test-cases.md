@@ -164,9 +164,11 @@ user-scenario or gap-fill case carrying one would make phase 7 skip the story's 
 whenever the story reaches V&V later. The requirement custom field carries **requirement IDs only** — it is
 what coverage parses, and a Jira key in there would read as a bogus requirement.
 
-**Match the delimiter the existing corpus uses.** Sample one existing case in the target suite and copy its
-formatting for the custom field (`"CWA-REQ-85, CWA-REQ-86"` is the common shape). A delimiter the parser
-doesn't recognize is the same silent failure by another route.
+**Write the requirement field as plain IDs separated by a comma and a space** — `CWA-REQ-85, CWA-REQ-86` —
+whatever the suite's other cases use. Traceability tools read that field and accept nothing else: no
+semicolons, no links or URLs, no N or P (negative or positive) marker after an ID. Pass `requirement_field`
+on every `testrail_add_cases` call (step 6): the server then writes the field in that form, and refuses a case
+whose value holds anything that isn't a requirement ID, listing it under `failed`.
 
 Never create a case with neither field populated. A scenario with no `traces_to` was already excluded in
 step 2 precisely so this cannot happen.
@@ -263,7 +265,8 @@ Write in two calls, so the step-3 linkage check runs before most of the cases ex
    one call per remaining story. **Other paths:** one call for the rest of the batch — each case carries its
    own `section_path`.
 
-Pass `project_id`, `suite_id`, `section_path`, `create_missing_sections`, and the case list on every call.
+Pass `project_id`, `suite_id`, `section_path`, `create_missing_sections`, `requirement_field`, and the case
+list on every call.
 
 The tool loops `add_case` internally — TestRail has no bulk-create endpoint — so a failed case does not stop
 the others, and a `429` is retried with its `Retry-After`. Take `created`, `skipped`, `failed`, and
@@ -298,7 +301,8 @@ alone. The other paths keep no log: TestRail itself, via the requirement field, 
 ## Dry run
 
 With `apply: false`, resolve folders, run the step-5 checks, and print the plan without creating anything.
-Pass `dry_run: true` to `testrail_add_cases` so its own folder resolution and duplicate-check run too. A
+Pass `dry_run: true` to `testrail_add_cases` so its own folder resolution, duplicate check, and
+requirement-field check run too. A
 folder that does not exist yet comes back with `section_id: null` and a `would create folder "…"` entry in
 `sections_created` — that is the plan, not a failure. It only fails when `create_missing_sections` is false.
 The dry run is a single call; the step-6 split applies to the real write only:
@@ -376,5 +380,7 @@ both `null`; `comment_posted` is always empty. On the `scenarios` path each
   not substitute another folder.
 - **Partial batch failure** → keep going, then report created/skipped/failed per story. Always surface
   `failed`: a silently dropped case is a test that never gets written.
+- **A case refused for its requirement field** (`failed`: "Not a requirement ID in …") → a trace that isn't a
+  requirement ID reached the writer. Report it, and never write it in another form to get past the check.
 - **Comment fails after cases were created** → the cases still exist. Say so plainly and print the case
   links in the session so the traceability is not lost.

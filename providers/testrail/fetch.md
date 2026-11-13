@@ -207,8 +207,11 @@ Use the readable aliases; the server maps them onto TestRail's field names:
 the requirement field — the *Linking* section above — so a case written with `refs` alone comes back with no
 `linked_ids` and is counted an **orphan**, while the requirement it covers still reads **untested**. Write
 both: `refs` gets the requirement IDs plus any originating Jira key,
-`test_cases.authoring.requirement_field` (default `custom_jama_req_id`) gets the requirement IDs only, in
-the same delimiter format the existing cases use. `type_id`,
+`test_cases.authoring.requirement_field` (default `custom_jama_req_id`) gets the requirement IDs only, as
+plain IDs separated by a comma and a space — `CWA-REQ-85, CWA-REQ-86` — the only form traceability tools
+read. Pass `requirement_field` to `testrail_add_cases` on every call: the server then writes the field in that
+form whatever separators you send, and refuses a case whose value holds anything that isn't a requirement ID
+(a URL, a link, an ID with an N or P marker), listing it in `failed`. `type_id`,
 `priority_id`, and `template_id` take **ids, not names**: resolve them with `testrail_get_case_types`,
 `testrail_get_priorities`, and `testrail_get_templates`.
 
@@ -247,6 +250,7 @@ The server enforces the safety rules itself, so a careless caller cannot get aro
 |---|---|
 | **Diff first** | Reads each case and sends only the fields that actually differ; a case with nothing to change is not written at all |
 | **Link protection** | Blocks an update that would remove an ID from `refs` — or from `requirement_field`, which every call must pass — unless that entry sets `allow_unlink` |
+| **Requirement format** | Writes `requirement_field` as plain IDs separated by a comma and a space, counts a value stored in any other form as a change, and blocks a value holding anything that isn't a requirement ID |
 | **Conflict check** | With `expected_updated_on` (the `updated_on` from the dry run), blocks a case someone edited since it was read |
 | **Read-back** | Compares every sent field with the case TestRail returns and lists any it silently dropped in `dropped_fields`; by default the rest of the batch is then not attempted |
 | **No moves** | Refuses `template_id` and `section_id` — switching a template or folder is done in TestRail |
