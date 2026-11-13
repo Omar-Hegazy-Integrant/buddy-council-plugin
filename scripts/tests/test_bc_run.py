@@ -1039,8 +1039,10 @@ class Findings(RunFolderTest):
         super().setUp()
         self.run = self.new_run(command="contradiction")
         reqs = [requirement(r["id"], r["title"], r["feature"], url=f"https://req.test/{r['id']}") for r in REQUIREMENTS]
-        cases = [*CASES, case(20, "Snooze a sounding alarm", "CWA-REQ-3", steps=SNOOZE_STEPS)]
-        cases[-1]["raw_fields"]["url"] = "https://tc.test/20"
+        snooze = case(20, "Snooze a sounding alarm", "CWA-REQ-3", steps=SNOOZE_STEPS)
+        snooze["raw_fields"]["url"] = "https://tc.test/20"
+        cases = [*CASES, snooze, case(21, "Snooze ends on time", "CWA-REQ-3", steps=[
+            {"content": "Silence the alarm", "expected": "The alarm stays quiet for 5 minutes"}])]
         self.write(self.run, "requirements.json", {"requirements": reqs})
         self.write(self.run, "test_cases.json", {"test_cases": cases})
         bc_run.cmd_link(str(self.run))
@@ -1079,7 +1081,7 @@ class Findings(RunFolderTest):
 
     def test_a_quote_copied_with_its_bundle_prefix_is_placed_and_a_long_one_is_sent_back(self):
         result = self.add(
-            {"severity": "high", "fix": "TC-20", "why": "x", "items": [
+            {"severity": "high", "fix": "decide", "why": "x", "items": [
                 {"id": "TC-20", "quote": "Expected: The alarm sounds again"}, {"id": "TC-20", "quote": "Preconditions: device paired"}]},
             {"severity": "high", "fix": "TC-20", "why": "x", "items": [
                 {"id": "CWA-REQ-3", "quote": "Silence alarms " * 40}, {"id": "TC-20", "quote": "1. Silence the alarm"}]},
@@ -1093,7 +1095,8 @@ class Findings(RunFolderTest):
     def test_kinds_gaps_and_a_finding_saved_again(self):
         self.add(
             {"severity": "medium", "fix": "TC-20", "why": "It silences the alarm, then expects it to sound.", "items": [
-                {"id": "TC-20", "quote": "Wait until … ends"}, {"id": "TC-20", "quote": "Silence the alarm"}]},
+                {"id": "TC-20", "quote": "Wait until … ends"}, {"id": "TC-20", "quote": "Silence the alarm"},
+                {"id": "CWA-REQ-3", "quote": "silence alarms for 5 minutes"}]},
             {"severity": "medium", "fix": "decide", "why": "Both describe the alarm differently.", "items": [
                 {"id": "CWA-REQ-1", "quote": "sound an audible alarm"}, {"id": "CWA-REQ-2", "quote": "show a visual alarm"}]},
         )
@@ -1102,12 +1105,30 @@ class Findings(RunFolderTest):
         found = bc_run.cmd_findings(str(self.run))
         self.assertEqual([(f["n"], f["severity"], f["kind"]) for f in found["findings"]], [
             (1, "critical", "requirement ↔ test case"),
-            (2, "medium", "test case contradicts itself"),
+            (2, "medium", "requirement ↔ test case"),
             (3, "medium", "requirement ↔ requirement")])
         first = bc_run.cmd_findings(str(self.run), numbers_text="1, 2")["findings"]
         self.assertEqual(first[0]["why"], "Saved again with a sharper reason.")
         self.assertEqual(first[1]["items"][0]["quote"], "Wait until … ends")
         self.assertEqual(first[1]["fix"]["where"], "step 2", "the fix points at the first quote of the item to change")
+
+    def test_a_test_case_is_the_side_to_fix_only_beside_the_requirement_words_it_breaks(self):
+        pair = {"severity": "high", "fix": "TC-20", "why": "Two test cases of one snooze expect different lengths.",
+                "items": [{"id": "TC-20", "quote": "stays quiet for 15 minutes"}, {"id": "TC-21", "quote": "stays quiet for 5 minutes"}]}
+        itself = {"severity": "medium", "fix": "TC-20", "why": "It silences the alarm, then expects it to sound.",
+                  "items": [{"id": "TC-20", "quote": "Wait until … ends"}, {"id": "TC-20", "quote": "Silence the alarm"}]}
+        result = self.add(pair, itself)
+        self.assertEqual(result["saved"], 0)
+        self.assertEqual({p for r in result["rejected"] for p in r["problems"]}, {
+            'fix: add the requirement words TC-20 breaks to items, or write "decide" when no requirement settles it'})
+        settles = {"id": "CWA-REQ-3", "quote": "silence alarms for 5 minutes"}
+        result = self.add(pair | {"items": [*pair["items"], settles]}, itself | {"fix": "decide"})
+        self.assertEqual((result["saved"], result["rejected"]), (2, []))
+        found = bc_run.cmd_findings(str(self.run))
+        self.assertEqual([(f["kind"], f["fix"]) for f in found["findings"]], [
+            ("requirement ↔ test case", "change TC-20, step 1, expected result."),
+            ("test case contradicts itself", "a person decides which side is right.")])
+        self.assertEqual(found["fix_test_cases"], [1])
 
     def test_the_report_links_both_sides_and_offers_only_checked_test_case_fixes(self):
         self.add(

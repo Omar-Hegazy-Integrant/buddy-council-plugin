@@ -125,13 +125,14 @@ Rules for this path:
 
 Input: the run folder and the numbers the user chose from the report's *Test cases to fix*. Read those findings
 with `python3 '<plugin root>/scripts/bc_run.py' findings --run '<run_dir>' --numbers '<n, n>'`: each one's `fix`
-names the case and the place to change, and its `items` quote, checked by code, the text the case conflicts with.
+names the case and the place to change, and its `items` quote, checked by code, the text the case conflicts with,
+the requirement's words among them.
 
 - **Only the numbers the report lists.** Code lists only conflicts whose fix is a test case. A finding whose fix
   is the requirement, or that needs a decision, gets no case change: requirements live in their own tool, and
   this plugin never writes them.
 - **Minimal edit.** Change only the conflicting precondition, step, or expected result — the place `fix` names —
-  so it agrees with the text quoted against it. Quote that text next to the before → after. Leave every other
+  so it agrees with the requirement's quoted words. Quote them next to the before → after. Leave every other
   step as it is.
 - **Never on this path:** links, title (unless the title itself states the contradicted value), type,
   priority, or estimate.

@@ -1,7 +1,6 @@
 # Detect Contradictions
 
-The rules for judging what `skills/contradiction/SKILL.md` compares, and for saving each finding so code can check
-it.
+What to compare inside a feature, how to judge it, and how to save each finding so code can check it.
 
 ## What you read
 
@@ -9,6 +8,18 @@ A feature's bundle lists every requirement as written — status, folder, descri
 linked docs — and, under each one, the test cases that link to it, steps and expected results included. Code
 resolved the links, so a requirement's `Test cases:` line is exact. Code also counted the requirements with no
 test case and the test cases with no requirement, and the report states those counts.
+
+## What to compare
+
+Make every comparison across everything the feature's parts hold:
+
+1. **Each requirement with its test cases.**
+2. **The requirements with each other.**
+3. **The test cases with each other.** Test cases for the same requirement expect the same result in the same
+   situation.
+4. **Each item with itself:** a step with its own expected result, a test case's title or preconditions with its
+   steps, a requirement's promise with its own details. A step that waits 5 minutes while its expected result says
+   10 is one; a requirement that promises three options and lists two is another.
 
 ## A finding
 
@@ -62,8 +73,15 @@ When unsure, take the lower level and say what is uncertain in `why`.
 
 The requirement is the specification, so a test case that contradicts a clear requirement is the side to fix.
 Name the requirement only on evidence that it is out of date, such as a newer requirement or in-flight board work
-that replaces it, and write `"decide"` when you can't tell. The fix offer rewrites exactly the test cases `fix`
-names, so name the side with care.
+that replaces it, and write `"decide"` when you can't tell.
+
+Between test cases, or inside one, the requirement they test decides. When its words show which side is right, the
+requirement is one of the places that disagree: add it to `items`, and fix the test case that breaks it. Save that
+once, even when several comparisons show it. When the requirement is too vague to say, write `"decide"`, and name
+it in `why`.
+
+The fix offer rewrites exactly the test cases `fix` names, to agree with the requirement's words, so name the side
+with care. Code saves a test case as `fix` only when a requirement is among the items.
 
 ## Saving
 

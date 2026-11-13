@@ -403,7 +403,7 @@ so it works whatever your PATH is — and records an `automation` block in that 
 
 A feature is a **Jama folder** — by default one of the folders your linked requirements sit in, inside the document `/bc:setup` anchored on your test suite, with deeper folders rolled into it. The scope covers everything under it; a sub-folder name narrows to just that part, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`. Test cases are found by their requirement links, whatever their TestRail folders are called.
 
-It reads the requirements, the test cases, and the in-flight tickets on your Jira dev board, code links them, and your assistant compares each requirement with its test cases, the requirements with each other, and the board tickets with the requirements. Each finding is named by what it compares — such as *requirement ↔ test case* — and rated by what could go wrong:
+It reads the requirements, the test cases, and the in-flight tickets on your Jira dev board, and code links them. Inside each feature, your assistant compares each requirement with its test cases, the requirements with each other, the test cases with each other, and each item with itself — *(made-up)* a step that waits 5 minutes while its own expected result says 10. It also compares the board tickets with the requirements. Each finding is named by what it compares — such as *requirement ↔ test case*, *test case ↔ test case*, or *test case contradicts itself* — and rated by what could go wrong:
 
 | Severity | Meaning |
 |----------|---------|
@@ -414,7 +414,7 @@ It reads the requirements, the test cases, and the in-flight tickets on your Jir
 
 Code checks every finding before you see it: each ID must be in the run, and each quote must be the item's own words. Code then writes the report — each finding with a link to every item, their exact words, why they conflict, and what to change. Requirements without test cases and test cases without requirements are one line of counts there; `/bc:coverage` lists and repairs them.
 
-When at least one finding says **the test case** is wrong, the report ends with a one-line offer to update those cases so they match the requirement — only the conflicting precondition, step, or expected result, never the requirement links. Answer `all`, `pick some`, or `no`; you see every before → after change before anything is written. Findings where the requirement looks wrong, or that need a decision, are never offered: requirements live in Jama, and the plugin never writes them.
+When at least one finding says **the test case** is wrong, the report ends with a one-line offer to update those cases so they match the requirement — only the conflicting precondition, step, or expected result, never the requirement links. Answer `all`, `pick some`, or `no`; you see every before → after change before anything is written. Two test cases that disagree, or one that contradicts itself, are offered only when their requirement shows which side is right, and the finding then quotes that requirement too; when the requirement is too vague to say, a person decides. Findings where a requirement looks wrong, disagrees with another, or contradicts itself are never offered: requirements live in Jama, and the plugin never writes them.
 
 ### Check Coverage
 

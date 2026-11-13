@@ -6,8 +6,8 @@ disable-model-invocation: true
 
 # /bc:contradiction — Detect Contradictions Between Requirements and Test Cases
 
-Find where requirements and the test cases that verify them disagree, and where in-flight board tickets
-disagree with the requirements.
+Find where requirements and test cases disagree — with each other, or inside one item — and where in-flight board
+tickets disagree with the requirements.
 
 **Plugin root:** two folders above this skill's base directory, which is `<plugin root>/skills/contradiction/`. Every file these instructions name — `howtos/…`, `scripts/…` — is a path from the plugin root, and so is every file those files name.
 
@@ -73,15 +73,15 @@ In the order of the summary's `features`, for each feature:
 
 1. Run `python3 '<plugin root>/scripts/bc_run.py' summary --run '<run_dir>' --feature '<feature>'`. Read every
    bundle part it lists, in order, one part per view, and each linked doc you have not read yet in this run.
-2. Compare each requirement with the test cases under it, and the feature's requirements with each other, by
-   `howtos/detect-contradictions.md`.
+2. Make every comparison in `howtos/detect-contradictions.md` → *What to compare*, and judge each by its rules.
 3. Compare each board ticket that touches this feature — its `linked_ids` name one of the feature's
    requirements, or its `feature` matches — with the feature's requirements. A ticket is proposed behavior, judged
    by the same rules.
 4. Save the feature's findings: `howtos/detect-contradictions.md` → *Saving*.
 5. Note each requirement as `{id, feature, title, key_constraint}`, its core constraint in one line, for step 6.
 
-**Done when** every feature in `features` has its findings saved and its one-line constraints noted.
+**Done when** every feature in `features` has had every comparison, its findings saved, and its one-line
+constraints noted.
 
 ### 6. Check across features
 
