@@ -60,7 +60,7 @@ The ticket has dependencies or timing expectations that conflict with requiremen
 - **Ticket description**: "Add patient search feature (no mention of audit logging)"
 - **Conflict**: The ticket proposes a patient data feature without addressing the prerequisite
 
-### 7. Breaking a Test Case — board tickets only
+### 7. Breaking a Test Case — `/bc:contradiction` only
 The ticket changes, removes, or replaces behavior a test case checks, so the test case fails once the ticket ships.
 
 **Example** *(made-up)*:
@@ -91,16 +91,16 @@ For each related requirement (starting with highest relevance scores):
    - Does the ticket add functionality to a restricted area?
    - Does the ticket use an incompatible implementation approach?
 
-   **A board ticket against each test case:** does a step or an expected result rely on behavior the ticket
-   changes, removes, or replaces?
+   **In `/bc:contradiction`, the ticket against each test case:** does a step or an expected result rely on
+   behavior the ticket changes, removes, or replaces?
 
 4. **Weight by relevance:**
    - Conflicts with high-relevance requirements (score >= 0.8) are CRITICAL
    - Conflicts with medium-relevance requirements (score 0.5-0.8) are HIGH
    - Conflicts with low-relevance requirements (score < 0.5) are MEDIUM
 
-   A board ticket's requirements come without scores: one the ticket links to counts as high relevance, and one
-   code found on its subject as medium — high when its words govern exactly what the ticket changes.
+   In `/bc:contradiction`, requirements come without scores: one the ticket links to counts as high relevance, and
+   one code found on its subject as medium — high when its words govern exactly what the ticket changes.
 
 ## What NOT to Flag as Contradictions
 
@@ -173,8 +173,8 @@ Save each conflict as a finding of the run — `howtos/detect-contradictions.md`
 | **HIGH** | Ticket conflicts with medium-relevance requirement (score 0.5-0.8), or removes required functionality |
 | **MEDIUM** | Ticket conflicts with low-relevance requirement (score < 0.5), or potential conflict that needs human judgment |
 
-A test case a board ticket breaks is **HIGH** when the ticket changes exactly what it checks, and **MEDIUM** when it
-may.
+In `/bc:contradiction`, a test case the ticket breaks is **HIGH** when the ticket changes exactly what it checks, and
+**MEDIUM** when it may.
 
 ## Edge Cases
 
@@ -187,13 +187,16 @@ If a requirement is vague or open to interpretation, and the ticket's approach i
 If the ticket description conflicts with PART of a requirement but aligns with another part:
 - Flag it as MEDIUM severity
 - Explain which parts conflict and which align
-- Let the user decide whether to proceed
+- Let the user decide whether to proceed — in `/bc:contradiction`, with `fix`: `"decide"`
 
 ### No High-Relevance Requirements
 If no related requirements have relevance score >= 0.5:
 - Skip contradiction detection (too speculative)
 - Return empty array
 - The calling agent should note: "No strongly related requirements found — proceeding without contradiction check"
+
+In `/bc:contradiction`, every requirement under a ticket counts as medium relevance or more, so compare the ticket
+with everything its slice lists, test cases included.
 
 ## Example
 

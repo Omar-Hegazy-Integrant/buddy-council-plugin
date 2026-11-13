@@ -26,6 +26,10 @@ _Avoid_: credential, secret
 The address of a page in a provider that the user pastes into setup, such as a Jama project, a TestRail suite, or a Jira board. It names the provider and the site.
 _Avoid_: URL (alone), board URL
 
+**Board ticket**:
+An issue on the team's dev board that isn't done yet: work in progress, checked against the requirements and test cases before it ships.
+_Avoid_: board item, card
+
 ### Running the plugin
 
 **Assistant**:

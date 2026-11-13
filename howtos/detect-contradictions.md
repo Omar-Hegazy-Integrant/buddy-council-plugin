@@ -95,12 +95,12 @@ Two wordings of the same behavior agree. Save each finding as JSON:
   `preconditions`, `step 3, expected result` — so give the words alone. In a Low finding, the test case needs no
   quote: say in `why` what it leaves out.
 - **A board ticket** — name it by its key, and code adds the title and link saved with it. The run doesn't hold its
-  text, so its quote is shown as not checked.
+  text, so its quote is shown as not checked. Its `severity` and `fix` follow
+  `howtos/detect-ticket-contradictions.md` → *Output Format*.
 - **`severity`** — from the table below.
 - **`why`** — one plain sentence on why they can't all be right.
 - **`fix`** — the ID of the item to change, or `"decide"` when a person must choose. When that item appears twice,
-  list the place to change first. A ticket's finding names its fix as `howtos/detect-ticket-contradictions.md` →
-  *Output Format* says.
+  list the place to change first.
 
 ## Severity
 
@@ -125,8 +125,7 @@ once, even when several comparisons show it. When the requirement is too vague t
 it in `why`.
 
 The fix offer rewrites exactly the test cases `fix` names, to agree with the requirement's words, so name the side
-with care. Code saves a test case as `fix` only when a requirement or a board ticket is among the items, and never
-offers a ticket's findings.
+with care. Code saves a test case as `fix` only when a requirement or a board ticket is among the items.
 
 ## Saving
 

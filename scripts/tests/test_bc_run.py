@@ -719,7 +719,7 @@ class Tickets(RunFolderTest):
     def test_a_ticket_is_compared_with_what_it_links_to_and_the_items_on_its_subject_in_a_slice_of_its_own(self):
         run = self.matched_run()
         answer = bc_run.cmd_tickets(str(run), json.dumps(TICKETS))
-        self.assertEqual(answer, {"saved": 3, "rejected": [], "alone": ["PROJ-9"], "slices": [5], "total": 5})
+        self.assertEqual(answer, {"saved": 3, "rejected": [], "alone": ["PROJ-9"], "not_in_run": {}, "slices": [5], "total": 5})
         listed = bc_run.cmd_slices(str(run), 5)
         self.assertEqual((listed["tickets"], listed["checked"], listed["needs_lines"]), (2, False, []))
         text = "".join(Path(p).read_text() for p in listed["parts"])
@@ -761,12 +761,38 @@ class Tickets(RunFolderTest):
         text = "".join(Path(p).read_text() for p in bc_run.cmd_slices(str(run), 2)["parts"])
         self.assertIn("Compare with: CWA-REQ-23", text)
 
-    def ticket_run(self):
-        """A run whose idle logout a ticket shortens: it breaks the requirement and both idle test cases."""
+    def idle_run(self):
+        """A run with two idle test cases, which a ticket that shortens the idle logout breaks."""
         warning = case(211, "Warning before idle logout", "CWA-REQ-21", section="Login", steps=[
             {"content": "Leave the app idle for 4 minutes", "expected": "A warning says you will be logged out in 1 minute"}])
-        run = self.matched_run(cases=[*ACROSS_CASES, warning],
-                               lines={**SUBJECT_LINES, "TC-211": "Session timeout: a warning comes 1 minute before logout."})
+        return self.matched_run(cases=[*ACROSS_CASES, warning],
+                                lines={**SUBJECT_LINES, "TC-211": "Session timeout: a warning comes 1 minute before logout."})
+
+    def test_an_item_that_counts_a_ticket_among_its_closest_is_compared_with_it_too(self):
+        run = self.idle_run()
+        with mock.patch.object(bc_run, "MATCHES_PER_ITEM", 1):
+            n = bc_run.cmd_tickets(str(run), json.dumps(TICKETS))["slices"][0]
+        text = "".join(Path(p).read_text() for p in bc_run.cmd_slices(str(run), n)["parts"])
+        self.assertIn("Compare with: CWA-REQ-21 (it links to it) · CWA-REQ-22, TC-210, TC-211 (on its subject)\n", text,
+                      "a ticket's own closest are capped, so a test case on its subject that counts it among its own "
+                      "closest is compared too")
+
+    def test_the_report_names_tickets_compared_with_nothing_and_links_outside_the_run(self):
+        run = self.matched_run()
+        linked = {**TICKETS[0], "linked_ids": ["CWA-REQ-21", "PROJ-1", "CWA-REQ-99", "TC-999"]}
+        answer = bc_run.cmd_tickets(str(run), json.dumps([linked, *TICKETS[1:]]))
+        self.assertEqual((answer["alone"], answer["not_in_run"]), (["PROJ-9"], {"PROJ-7": ["CWA-REQ-99", "TC-999"]}),
+                         "PROJ-1 is another ticket, not a requirement or test case")
+        text = "".join(Path(p).read_text() for p in bc_run.cmd_slices(str(run), answer["slices"][0])["parts"])
+        self.assertIn("Not in this run: CWA-REQ-99, TC-999\n", text)
+        bc_run.cmd_findings(str(run), add_text="[]", slice_number=answer["slices"][0])
+        report = Path(bc_run.cmd_report(str(run))["parts"][0]).read_text()
+        self.assertIn("**Not compared:** PROJ-9 — nothing in this run is on its subject.", report)
+        self.assertIn("**Not in this run:** CWA-REQ-99 and TC-999, linked from PROJ-7.", report)
+
+    def ticket_run(self):
+        """A run whose idle logout a ticket shortens: it breaks the requirement and both idle test cases."""
+        run = self.idle_run()
         n = bc_run.cmd_tickets(str(run), json.dumps(TICKETS))["slices"][0]
         shorter = {"id": "PROJ-7", "quote": "Log out after 2 minutes idle", "board": {"title": "ignored", "url": "https://x.test"}}
         self.breaks = {"severity": "high", "fix": ["TC-210", "tc-211"], "items": [

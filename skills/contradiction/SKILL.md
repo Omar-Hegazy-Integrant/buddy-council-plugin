@@ -140,8 +140,8 @@ on its subject. Read it now.
    `url`, `linked_ids`, and `line` — *(made-up)*
    `{"id": "PROJ-12", "title": "Remove the Help button", "url": "<link>", "linked_ids": ["CWA-REQ-90"], "line": "Help button: removed from the settings screen."}`.
    Code finds, for each ticket, the requirements it links to and the requirements and test cases on its subject,
-   and answers with the new `slices` that hold them; a ticket in `alone` has nothing to compare. When it answers
-   `rejected`, it saved nothing: fix those tickets and save the whole list again.
+   and answers with the new `slices` that hold them; a ticket in `alone` has nothing to compare. When `rejected`
+   isn't empty, nothing was saved: fix those tickets and save the whole list again.
 2. Check each new slice yourself, one at a time: `howtos/detect-contradictions.md` → *Checking a slice*. Only you
    hold the tickets' text, so no helper checks these.
 
@@ -173,8 +173,6 @@ you'll see every change before it's written. Want me to? (all / pick some / no)
 
 - The list holds only conflicts whose fix is a test case and whose quotes code checked. Requirements and board
   tickets stay as they are: this plugin changes neither.
-- A board ticket's findings are never on it: the ticket hasn't shipped and may still change, so the report lists
-  the test cases to update when it does.
 - `pick some` → the user chooses among those numbers.
 - On a yes, follow `howtos/update-test-cases.md` → *Path `contradictions`*, with the run folder and the numbers
   chosen. Write only what the user chose.
