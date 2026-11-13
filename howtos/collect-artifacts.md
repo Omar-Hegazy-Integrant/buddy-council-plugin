@@ -74,10 +74,10 @@ python3 '<plugin root>/scripts/bc_run.py' summary --run '<run_dir>'
    named.
 5. **`enrichment.failed` is not empty** → list the docs that could not be fetched (URL and error), and ask
    once whether to continue without them.
-6. **`enrichment.pending` is above zero** (the `mcp` enrichment strategy) → fetch those docs yourself: the
-   URLs are under `pending` in `<run_dir>/docs.json`; follow
-   `providers/github/fetch-mcp.md` for each, as the analysis reaches the requirements
-   that cite them, and print `Enrichment: fetched K of N GitHub-linked requirement docs`.
+6. **`enrichment.pending` is above zero** (the `mcp` enrichment strategy) → those docs are read through the
+   assistant's own GitHub connection, `providers/github/fetch-mcp.md`, by whoever reads the requirements that cite
+   them: each bundle names them under those requirements. When that is you, print
+   `Enrichment: fetched K of N GitHub-linked requirement docs` after the last.
 7. Relay every entry of `warnings`.
 
 ## Step 3: Read the run

@@ -80,9 +80,12 @@ User runs /bc:contradiction [scope]
   │    │
   │    Step 3a: Board issues — skills/fetch-board-issues/ (session's model)
   │    Step 4: Readiness gate from links.json counts
-  │    Step 5: One feature at a time — read its bundle parts, judge, board pass
-  │            └─ bc_run.py findings --add → findings/*.json   (code checks every ID and quote)
-  │    Step 6: Cross-feature pass from a compact index; re-read two bundles to confirm
+  │    Step 5: bc_run.py slices → the run in slices of about 90 KB   (code: no model)
+  │            ├─ one slice: the session checks it
+  │            └─ several: one helper per slice, side by side — the assistant's general-purpose agent,
+  │               one model below the top (Sonnet), normal effort; each reads its parts once, asks nothing,
+  │               and saves: bc_run.py findings --slice N --add → findings/*.json   (code checks every ID and quote)
+  │    Step 6: Board tickets against the requirements they name, or that bc_run.py search finds (session's model)
   │    Step 7: bc_run.py report → report-N.md, shown as written   (code: no model)
   │
   └─ Output: Markdown report grouped by severity, every item linked
@@ -105,8 +108,9 @@ skills/normalize-artifacts/ → clean text, normalize IDs, cross-link
 | `background.json` | Jama server (`save_to`, `background: true`) — lookups only | the rest of the Jama project: every item outside the requirements in scope, minus excluded item types and subtrees — context for answers, never counted |
 | `test_cases.json` | TestRail server (`save_to`) | every case in the suite, canonical — the link step scopes them |
 | `docs/`, `docs.json` | `bc_run.py enrich` | the GitHub docs requirements link to, verbatim, truncated at `max_doc_chars`, split into parts of at most 18 KB |
-| `links.json` | `bc_run.py link` | counts, untested (Deprecated/Deferred left out), orphans, stranded links, unknown linked IDs, per-feature rows with their bundles and docs; the `Fetch:`/`Enrichment:`/`Readiness:` lines; missing sources; and every mismatch between the run and `sources.json` |
-| `bundles/*.md` | `bc_run.py link` | per feature: each requirement verbatim with its custom fields, then the cases that link to it with theirs; parts of at most 18 KB |
+| `links.json` | `bc_run.py link` | counts, untested (Deprecated/Deferred left out), orphans, stranded links, unknown linked IDs, per-feature rows with their bundles and docs; for a contradiction run, the slices, each with its parts, docs, requirements, and test cases; the `Fetch:`/`Enrichment:`/`Readiness:` lines; missing sources; and every mismatch between the run and `sources.json` |
+| `bundles/*.md` | `bc_run.py link` | per feature: each requirement verbatim with its custom fields, then the cases that link to it with theirs; parts of at most 18 KB. In a contradiction run, a feature too big for one slice is cut between requirements, and each piece stands alone |
+| `findings/*.json` | `bc_run.py findings` | one file per save: the findings code checked, and the slice they came from — a save that leaves nothing rejected marks its slice checked, even with no findings |
 | `search/NN-<ask>-<p>.md` | `bc_run.py search` | a lookup's results: where the matches are, the top 25 requirements verbatim with what they matched, the test cases and docs that mention the ask, the top background items elsewhere in the project, the next 25 candidates, and the project's own wording for a second search |
 | `manifest.json` | `bc_run.py` | command, scope, timestamps, counts |
 
@@ -170,9 +174,11 @@ Secrets live in exactly one place; configuration is separate:
 
 ## Contradiction Detection
 
-The session's model compares requirements and test cases inside each feature, then requirements across features.
-`howtos/detect-contradictions.md` holds what it compares and how it judges; code checks every finding and names it
-by what it compares (ADR 0012).
+Code cuts the run into slices, each small enough for one reader. A run of one slice is checked by the session's
+model; a bigger one by one helper per slice, side by side. Each slice is checked on its own. The session's model
+asks the user every question, checks the board tickets, and shows the report. `howtos/detect-contradictions.md`
+holds how a slice is checked, what it compares, and how it judges; code checks every finding and names it by what it
+compares (ADR 0012).
 
 ## Available Agents
 
@@ -181,6 +187,7 @@ by what it compares (ADR 0012).
 | Contradiction | `/bc:contradiction` | Detect conflicts between artifacts |
 | Coverage | `/bc:coverage` | Find untested requirements and coverage gaps |
 | Data collector | `/bc:coverage`, `/bc:contradiction` | Low-cost sub-agent: fetch into a run folder, link in code, return counts |
+| Helper | `/bc:contradiction` | The assistant's own general-purpose agent: checks one slice of the run, saves its findings, asks the user nothing |
 | QA (via orchestration) | `/bc:ask` | Answer general questions about artifacts |
 | Scenario mapping | `/bc:ask` | Trace the user's own scenarios to requirements, check them against existing cases, write them into TestRail |
 

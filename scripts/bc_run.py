@@ -9,7 +9,9 @@ step to the analysis as files, so the data itself never passes through a model:
   test_cases.json    written by the TestRail server (``save_to``)
   docs/, docs.json   GitHub docs the requirements link to (``enrich``, the cli strategy)
   links.json         requirement <-> test case links, untested, orphans, stranded links (``link``)
-  bundles/*.md       one feature at a time, verbatim text, each part small enough for one read (``link``)
+  bundles/*.md       one feature at a time, verbatim text, each part small enough for one read (``link``); in a
+                     contradiction run, a feature too big for one slice is cut between requirements, and each piece
+                     stands alone
   findings/*.json    what /bc:contradiction found, each checked against the run (``findings``)
   report-N.md        the contradiction report, written from the findings, in parts (``report``)
   manifest.json      what was collected, when, and the counts
@@ -31,9 +33,14 @@ Subcommands, each printing one JSON object to stdout:
   recent --project DIR [--max-age-minutes N]           the newest complete, verified run of the whole scope
   doc    --url URL [--max-chars N]                     print one GitHub doc, read with the first sign-in that
                                                        works (for commands that enrich without a run folder)
-  findings --run DIR --add JSON                        check findings against the run: save each whose IDs and
-                                                       quotes are in it, send back the rest with the reason
+  findings --run DIR --add JSON [--slice N]            check findings against the run: save each whose IDs and
+                                                       quotes are in it, send back the rest with the reason; with
+                                                       --slice, a save that leaves nothing rejected marks the slice
+                                                       checked, --add '[]' included
   findings --run DIR [--numbers 'N, N']                the saved findings, numbered as in the report
+  slices --run DIR [--slice N]                         a contradiction run's slices, each small enough for one
+                                                       reader to check at once, and which are checked — or one
+                                                       slice's bundle parts and docs, as paths
   report --run DIR [--lines JSON] [--partial TEXT]     write the contradiction report from the saved findings,
                                                        in parts small enough for one read
 
@@ -85,6 +92,7 @@ import bc_keys  # noqa: E402
 KEEP_RUNS = 5
 MAX_RUN_AGE_SECONDS = 7 * 24 * 3600
 PART_BYTES = 18_000  # a bundle part fits one file read in both runtimes (Copilot truncates at 20 KB)
+SLICE_BYTES = 90_000  # what one reader checks at once: about five bundle parts, with the docs they cite
 MAX_DOC_CHARS = 50_000
 GH_TIMEOUT_SECONDS = 30
 GH_WORKERS = 6
@@ -774,12 +782,17 @@ def cmd_link(run_text: str) -> dict[str, Any]:
         old.unlink()
     cases_by_id = {str(c.get("id") or ""): c for c in in_scope}
     rows: list[dict[str, Any]] = []
+    slicing = manifest.get("command") == "contradiction"  # only its readers check a run a slice at a time
+    pieces: list[list[dict[str, Any]]] = []  # each feature's pieces: one, or several when it is too big for a slice
     groups = [(f, [r for r in by_id.values() if r["feature"] == f], [o for o in orphans if o["feature"] == f]) for f in features]
     leftover = [o for o in orphans if o["feature"] not in features]
     if leftover:
         groups.append((NO_FEATURE, [], leftover))
     for n, (feature, members, feature_orphans) in enumerate(groups, start=1):
-        files = write_bundle(run, n, len(groups), feature, members, cases_by_id, feature_orphans, docs_by_req, missing_by_req)
+        bundle = write_bundle(run, n, len(groups), feature, members, cases_by_id, feature_orphans, docs_by_req,
+                              missing_by_req, SLICE_BYTES if slicing else 0)
+        files = [part for piece in bundle for part in piece["parts"]]
+        pieces.append(bundle)
         active = [r for r in members if key(r.get("id")) not in retired]
         tested = sum(1 for r in active if r["linked_ids"])
         rows.append(
@@ -843,6 +856,8 @@ def cmd_link(run_text: str) -> dict[str, Any]:
         "lists_truncated": any(len(x) > MAX_LISTED for x in (untested, orphans, stranded, unknown)),
         "warnings": warnings,
     }
+    if slicing:
+        links["slices"] = slice_run(run, pieces)
     write_json(run / "links.json", links)
     update_manifest(run, linked_at=links["linked_at"], readiness=readiness, counts=counts, lines=lines, missing=missing, mismatches=mismatches)
     printed = [
@@ -936,7 +951,11 @@ def requirement_body(
         files = ", ".join(doc.get("files") or [])
         lines.append(f"Linked doc: {doc['url']} → {files}{' (truncated)' if doc.get('truncated') else ''}")
     for doc in missing_by_req.get(key(requirement.get("id")), []):
-        lines.append(f"Linked doc not in this run: {doc['url']} ({doc.get('error') or 'left for the main thread'})")
+        if doc.get("error"):
+            lines.append(f"Linked doc not in this run: {doc['url']} ({doc['error']})")
+        else:  # the mcp strategy: read by whoever reads this requirement, a helper included
+            lines.append(f"Linked doc not in this run: {doc['url']} — read it once through your GitHub connection: "
+                         "providers/github/fetch-mcp.md")
     return lines
 
 
@@ -944,8 +963,9 @@ def requirement_block(
     requirement: dict[str, Any],
     docs_by_req: dict[str, list[dict[str, Any]]],
     missing_by_req: dict[str, list[dict[str, Any]]],
+    continued: bool = False,
 ) -> str:
-    lines = [f"## {title_of(requirement)}"]
+    lines = [f"## {title_of(requirement)}{' (continued)' if continued else ''}"]
     lines += requirement_body(requirement, docs_by_req, missing_by_req)
     linked = requirement["linked_ids"]
     lines.append(f"Test cases: {', '.join(linked)}" if linked else "Test cases: none — UNTESTED")
@@ -980,20 +1000,93 @@ def case_block(case: dict[str, Any], extra: str = "") -> str:
     return "\n".join(lines).rstrip() + "\n\n"
 
 
+def text_bytes(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
 def pack_blocks(blocks: list[tuple[str, str]]) -> list[str]:
     """Blocks packed into parts of at most PART_BYTES; a part that starts mid-section opens with its restart header."""
     parts: list[str] = []
     current, size = "", 0
     for text, restart in blocks:
-        weight = len(text.encode("utf-8"))
+        weight = text_bytes(text)
         if current and size + weight > PART_BYTES:
             parts.append(current)
-            current, size = restart, len(restart.encode("utf-8"))
+            current, size = restart, text_bytes(restart)
         current += text
         size += weight
     if current or not parts:
         parts.append(current)
     return parts
+
+
+ORPHANS_HEADING = "## Orphan test cases — no requirement ID in the requirement field\n\n"
+
+
+def bundle_units(
+    members: list[dict[str, Any]],
+    cases_by_id: dict[str, dict[str, Any]],
+    feature_orphans: list[dict[str, Any]],
+    docs_by_req: dict[str, list[dict[str, Any]]],
+    missing_by_req: dict[str, list[dict[str, Any]]],
+    doc_size: dict[str, int],
+    cap: int,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """A feature as units no slice splits — each requirement with the cases that test it, then each orphan case — and
+    each linked case's text. With a cap, a requirement with more cases than a slice of cap bytes holds beside its text
+    and docs is shared out over several units, each with the requirement, so whoever reads a share can compare its
+    cases with it."""
+    case_text: dict[str, str] = {}
+    units: list[dict[str, Any]] = []
+    for requirement in members:
+        head = text_bytes(requirement_block(requirement, docs_by_req, missing_by_req))
+        linked = [cid for cid in requirement["linked_ids"] if cid in cases_by_id]
+        for cid in linked:
+            case_text.setdefault(cid, case_block(cases_by_id[cid]))
+        docs = feature_docs([requirement], docs_by_req)
+        sizes = [(text_bytes(case_text[cid]), []) for cid in linked]
+        room = max(cap - head - sum(doc_size.get(doc, 0) for doc in docs), cap // 3)  # a third, however big the docs
+        whole = not cap or sum(size for size, _ in sizes) <= room
+        shares = [list(range(len(linked)))] if whole else split_evenly(sizes, {}, room)
+        for k, share in enumerate(shares):
+            units.append({"requirement": requirement, "continued": k > 0, "cases": [linked[i] for i in share],
+                          "bytes": head, "docs": docs})
+    for orphan in feature_orphans:
+        case = cases_by_id.get(str(orphan["id"]))
+        if case is not None:
+            stranded = orphan.get("stranded_ids")
+            text = case_block(case, f"Requirement ID stranded in References: {', '.join(stranded)}" if stranded else "")
+            units.append({"orphan": str(orphan["id"]), "text": text, "bytes": text_bytes(text), "docs": []})
+    return units, case_text
+
+
+def piece_blocks(
+    units: list[dict[str, Any]],
+    case_text: dict[str, str],
+    docs_by_req: dict[str, list[dict[str, Any]]],
+    missing_by_req: dict[str, list[dict[str, Any]]],
+) -> list[tuple[str, str]]:
+    """One piece of a feature as blocks to pack: a case is written out once in it, and pointed to after that."""
+    blocks: list[tuple[str, str]] = []  # (text, header that restarts its section in a new part)
+    shown: dict[str, str] = {}
+    orphans_open = False
+    for unit in units:
+        if "orphan" in unit:
+            if not orphans_open:
+                blocks.append((ORPHANS_HEADING, ""))
+                orphans_open = True
+            blocks.append((unit["text"], "## Orphan test cases (continued)\n\n"))
+            continue
+        requirement = unit["requirement"]
+        blocks.append((requirement_block(requirement, docs_by_req, missing_by_req, unit["continued"]), ""))
+        restart = f"## {title_of(requirement)} (continued)\n\n"
+        for cid in unit["cases"]:
+            if cid in shown:
+                blocks.append((f"### {cid} — shown above, under {shown[cid]}\n\n", restart))
+            else:
+                shown[cid] = str(requirement.get("id"))
+                blocks.append((case_text[cid], restart))
+    return blocks
 
 
 def write_bundle(
@@ -1006,50 +1099,147 @@ def write_bundle(
     feature_orphans: list[dict[str, Any]],
     docs_by_req: dict[str, list[dict[str, Any]]],
     missing_by_req: dict[str, list[dict[str, Any]]],
-) -> list[str]:
-    """Each requirement followed by the cases that test it (a case shown once), then the feature's orphans."""
-    blocks: list[tuple[str, str]] = []  # (text, header that restarts its section in a new part)
-    shown: dict[str, str] = {}
-    for requirement in members:
-        blocks.append((requirement_block(requirement, docs_by_req, missing_by_req), ""))
-        restart = f"## {title_of(requirement)} (continued)\n\n"
-        for cid in requirement["linked_ids"]:
-            case = cases_by_id.get(cid)
-            if case is None:
-                continue
-            if cid in shown:
-                blocks.append((f"### {cid} — shown above, under {shown[cid]}\n\n", restart))
-            else:
-                shown[cid] = str(requirement.get("id"))
-                blocks.append((case_block(case), restart))
-    if feature_orphans:
-        blocks.append(("## Orphan test cases — no requirement ID in the requirement field\n\n", ""))
-        restart = "## Orphan test cases (continued)\n\n"
-        for orphan in feature_orphans:
-            case = cases_by_id.get(str(orphan["id"]))
-            if case is not None:
-                stranded = orphan.get("stranded_ids")
-                extra = f"Requirement ID stranded in References: {', '.join(stranded)}" if stranded else ""
-                blocks.append((case_block(case, extra), restart))
-
-    parts = pack_blocks(blocks)
+    cap: int = 0,
+) -> list[dict[str, Any]]:
+    """Each requirement followed by the cases that test it, then the feature's orphans. With a cap, a feature bigger
+    than cap bytes is cut between requirements into pieces that each stand alone; without one, it is one piece. Each
+    piece is packed into parts small enough for one read, numbered across the feature."""
+    doc_size = {doc: file_bytes(run, [doc]) for doc in feature_docs(members, docs_by_req)}
+    units, case_text = bundle_units(members, cases_by_id, feature_orphans, docs_by_req, missing_by_req, doc_size, cap)
+    # A doc, or a case linked to several requirements, is written out once in each piece that holds it.
+    sizes = {**doc_size, **{f"case:{cid}": text_bytes(text) for cid, text in case_text.items()}}
+    weights = [(u["bytes"], u["docs"] + [f"case:{cid}" for cid in u.get("cases", [])]) for u in units]
+    groups = (split_evenly(weights, sizes, cap) if cap else []) or [list(range(len(units)))]
+    pieces: list[tuple[list[str], dict[str, Any]]] = []  # each piece's part texts, and what it holds
+    for group in groups:
+        mine = [units[i] for i in group]
+        pieces.append((pack_blocks(piece_blocks(mine, case_text, docs_by_req, missing_by_req)), {
+            "features": [feature],
+            "docs": list(dict.fromkeys(doc for unit in mine for doc in unit["docs"])),
+            "requirements": list(dict.fromkeys(str(u["requirement"].get("id")) for u in mine if "requirement" in u)),
+            "test_cases": list(dict.fromkeys([c for u in mine for c in u.get("cases", [])]
+                                             + [u["orphan"] for u in mine if "orphan" in u])),
+        }))
+    count = sum(len(texts) for texts, _ in pieces)
     tested = sum(1 for r in members if r["linked_ids"])
     stem = f"{n:02d}-{re.sub(r'[^a-z0-9]+', '-', feature.lower()).strip('-')[:40] or 'feature'}"
-    docs = feature_docs(members, docs_by_req)
-    docs_line = f"Docs linked from this feature — read them with it: {', '.join(docs)}\n" if docs else ""
-    files = []
-    for p, body in enumerate(parts, start=1):
-        title = f"# Feature {n} of {total}: {feature}" + (f" — part {p} of {len(parts)}" if len(parts) > 1 else "")
-        header = (
-            f"{title}\n{len(members)} requirements · {tested} tested · {len(members) - tested} untested · "
-            f"{len(feature_orphans)} orphan test cases\n"
-            f"{docs_line}"
-            "Requirement and test case text below is verbatim from the source.\n\n"
-        )
-        name = f"bundles/{stem}-{p}.md"
-        write_private(run / name, (header + body).rstrip() + "\n")
-        files.append(name)
-    return files
+    p = 0
+    for texts, piece in pieces:
+        docs_line = f"Docs linked from this feature — read them with it: {', '.join(piece['docs'])}\n" if piece["docs"] else ""
+        piece["parts"] = []
+        for body in texts:
+            p += 1
+            title = f"# Feature {n} of {total}: {feature}" + (f" — part {p} of {count}" if count > 1 else "")
+            header = (
+                f"{title}\n{len(members)} requirements · {tested} tested · {len(members) - tested} untested · "
+                f"{len(feature_orphans)} orphan test cases\n"
+                f"{docs_line}"
+                "Requirement and test case text below is verbatim from the source.\n\n"
+            )
+            name = f"bundles/{stem}-{p}.md"
+            write_private(run / name, (header + body).rstrip() + "\n")
+            piece["parts"].append(name)
+    return [piece for _, piece in pieces]
+
+
+# ---------------------------------------------------------------------------
+# Slices — the run cut into parts one reader checks at once
+# ---------------------------------------------------------------------------
+
+
+def file_bytes(run: Path, names: list[str]) -> int:
+    return sum((run / name).stat().st_size for name in names if (run / name).is_file())
+
+
+Weight = tuple[int, list[str]]  # what a unit weighs: its own bytes, and the shared items it holds — docs, shared cases
+
+
+def group_bytes(weights: list[Weight], item_size: dict[str, int], group: list[int]) -> int:
+    """A group's bytes: its units' own, and each shared item once."""
+    items = {item for i in group for item in weights[i][1]}
+    return sum(weights[i][0] for i in group) + sum(item_size.get(item, 0) for item in items)
+
+
+def fill_groups(weights: list[Weight], item_size: dict[str, int], cap: int) -> list[list[int]]:
+    """Consecutive groups, each filled up to cap bytes: the fewest that fit. A unit bigger than cap sits alone."""
+    groups: list[list[int]] = []
+    size, seen = 0, set()
+    for i, (own, items) in enumerate(weights):
+        grow = own + sum(item_size.get(item, 0) for item in set(items) - seen)
+        if not groups or size + grow > cap:
+            groups.append([])
+            size, seen = 0, set()
+            grow = own + sum(item_size.get(item, 0) for item in set(items))
+        groups[-1].append(i)
+        size += grow
+        seen |= set(items)
+    return groups
+
+
+def split_evenly(weights: list[Weight], item_size: dict[str, int], cap: int) -> list[list[int]]:
+    """Consecutive groups of units, as few as fit in cap bytes each, cut as near an equal share as the units allow.
+    A shared item — a doc, or a case several units hold — counts once in each group that holds it."""
+    fewest = fill_groups(weights, item_size, cap)
+    count = len(fewest)
+    if count < 2:
+        return fewest
+    running, ends, seen = 0, [], set()  # the bytes up to the end of each unit, a shared item counted where it first is
+    for own, items in weights:
+        running += own + sum(item_size.get(item, 0) for item in set(items) - seen)
+        seen |= set(items)
+        ends.append(running)
+    cuts, start = [], 0
+    for share in range(1, count):
+        target = running * share / count
+        last = len(weights) - (count - share)  # leave a unit for each group still to come
+        cut = min(range(start + 1, last + 1), key=lambda c: abs(ends[c - 1] - target))
+        cuts.append(cut)
+        start = cut
+    groups = [list(range(a, b)) for a, b in zip([0, *cuts], [*cuts, len(weights)])]
+    if all(len(group) == 1 or group_bytes(weights, item_size, group) <= cap for group in groups):
+        return groups
+    low, high = 1, cap  # the smallest limit that needs no more groups: the biggest group as small as it can be
+    while low < high:
+        middle = (low + high) // 2
+        if len(fill_groups(weights, item_size, middle)) <= count:
+            high = middle
+        else:
+            low = middle + 1
+    return fill_groups(weights, item_size, low)
+
+
+def slice_run(run: Path, by_feature: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """The run's slices, in reading order, from each feature's pieces: features that fit one slice packed together up
+    to SLICE_BYTES, and each piece of a bigger feature on its own."""
+    doc_size = {doc: file_bytes(run, [doc]) for pieces in by_feature for piece in pieces for doc in piece["docs"]}
+    groups: list[list[dict[str, Any]]] = []
+    whole: list[dict[str, Any]] = []
+
+    def pack() -> None:
+        weights = [(file_bytes(run, piece["parts"]), piece["docs"]) for piece in whole]
+        groups.extend([whole[i] for i in group] for group in split_evenly(weights, doc_size, SLICE_BYTES))
+        whole.clear()
+
+    for pieces in by_feature:
+        if len(pieces) == 1:
+            whole.append(pieces[0])
+            continue
+        pack()
+        groups.extend([piece] for piece in pieces)
+    pack()
+    slices = []
+    for members in groups:
+        docs = list(dict.fromkeys(d for p in members for d in p["docs"]))
+        parts = [part for p in members for part in p["parts"]]
+        slices.append({
+            "features": list(dict.fromkeys(f for p in members for f in p["features"])),
+            "parts": parts,
+            "docs": docs,
+            "requirements": list(dict.fromkeys(r for p in members for r in p["requirements"])),
+            "test_cases": list(dict.fromkeys(c for p in members for c in p["test_cases"])),
+            "bytes": file_bytes(run, parts) + sum(doc_size.get(d, 0) for d in docs),
+        })
+    return slices
 
 
 # ---------------------------------------------------------------------------
@@ -1826,6 +2016,63 @@ def cmd_summary(run_text: str, feature: str = "") -> dict[str, Any]:
     }
 
 
+MAX_SLICE_FEATURES = 5  # feature names a slice's row shows; the rest are counted
+
+
+def checked_slices(run: Path) -> tuple[set[int], dict[int, int]]:
+    """The slices whose reader saved with nothing left rejected — `[]` included — and how many findings each saved."""
+    checked: set[int] = set()
+    found: dict[int, set[str]] = {}
+    folder = run / "findings"
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        data = read_json(path)
+        if isinstance(data, dict) and isinstance(data.get("slice"), int):
+            found.setdefault(data["slice"], set()).update(finding_key(f) for f in data.get("findings") or [])
+            if data.get("checked") is True:
+                checked.add(data["slice"])
+    return checked, {n: len(keys) for n, keys in found.items()}
+
+
+def run_slices(run: Path) -> list[dict[str, Any]]:
+    links = read_json(run / "links.json")
+    if not isinstance(links, dict):
+        raise RunError("links.json is missing — the link step did not run, so the collection did not finish.")
+    if not isinstance(links.get("slices"), list):
+        raise RunError("this run has no slices: only a contradiction run is cut into them, when it is linked.")
+    return links["slices"]
+
+
+def slice_at(slices: list[dict[str, Any]], number: int) -> dict[str, Any]:
+    if not 1 <= number <= len(slices):
+        raise RunError(f"no slice {number}: this run has {len(slices)}")
+    return slices[number - 1]
+
+
+def cmd_slices(run_text: str, number: int = 0) -> dict[str, Any]:
+    """The run's slices, each small enough for one reader to check at once, and whether each is checked — or one
+    slice's bundle parts and docs, as paths."""
+    run = run_folder(run_text)
+    slices = run_slices(run)
+    checked, counts = checked_slices(run)
+
+    def row(n: int, entry: dict[str, Any]) -> dict[str, Any]:
+        names = entry.get("features") or []
+        found = {"slice": n, "features": names[:MAX_SLICE_FEATURES]}
+        if len(names) > MAX_SLICE_FEATURES:
+            found["more_features"] = len(names) - MAX_SLICE_FEATURES
+        return {**found, "requirements": len(entry.get("requirements") or []), "test_cases": len(entry.get("test_cases") or []),
+                "parts": len(entry.get("parts") or []), "docs": len(entry.get("docs") or []),
+                "kb": round(int(entry.get("bytes") or 0) / 1000), "checked": n in checked, "findings": counts.get(n, 0)}
+
+    if number:
+        entry = slice_at(slices, number)
+        return {"run_dir": str(run), **row(number, entry), "of": len(slices),
+                "parts": [str(run / part) for part in entry.get("parts") or []],
+                "docs": [str(run / doc) for doc in entry.get("docs") or []]}
+    rows = [row(n, entry) for n, entry in enumerate(slices, start=1)]
+    return {"run_dir": str(run), "total": len(rows), "checked": sum(1 for r in rows if r["checked"]), "slices": rows}
+
+
 def cmd_recent(project_text: str, max_age_minutes: int = RECENT_MINUTES) -> dict[str, Any]:
     """The newest run of the whole scope, collected within max_age_minutes, complete, and still matching the config."""
     project = Path(project_text).expanduser().resolve()
@@ -2137,8 +2384,12 @@ def fixes_a_test_case(finding: dict[str, Any]) -> bool:
             and all(i.get("checked") for i in finding["items"]))
 
 
-def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "") -> dict[str, Any]:
+def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "", slice_number: int = 0) -> dict[str, Any]:
     run = run_folder(run_text)
+    if slice_number:
+        slice_at(run_slices(run), slice_number)
+        if not add_text.strip():
+            raise RunError("--slice comes with --add: the slice's findings, or [] when it has none.")
     if add_text.strip():
         try:
             batch = json.loads(add_text)
@@ -2146,11 +2397,11 @@ def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "") -> d
             raise RunError(f"--add isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
         if isinstance(batch, dict):
             batch = batch["findings"] if isinstance(batch.get("findings"), list) else [batch]
-        if not isinstance(batch, list) or not batch:
+        if not isinstance(batch, list) or not (batch or slice_number):
             raise RunError("--add takes a finding, or a list of them.")
+        if read_json(run / "requirements.json") is None:
+            raise RunError("requirements.json is missing — collect the run before saving findings.")
         requirements, cases = run_items(run)
-        if not requirements:
-            raise RunError("requirements.json is missing or empty — collect the run before saving findings.")
         saved: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
         for n, raw in enumerate(batch, start=1):
@@ -2161,11 +2412,18 @@ def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "") -> d
                 entries = raw.get("items") if isinstance(raw, dict) and isinstance(raw.get("items"), list) else []
                 rejected.append({"finding": n, "ids": [str(e.get("id")) for e in entries if isinstance(e, dict)],
                                  "problems": problems})
-        if saved:
+        record: dict[str, Any] = {"saved_at": utc_now(), "findings": saved}
+        if slice_number:
+            # A slice is checked once a save leaves nothing to fix or drop: [] when it holds no conflict.
+            record.update({"slice": slice_number, "checked": not rejected})
+        if saved or record.get("checked"):
             folder = run / "findings"
             folder.mkdir(mode=0o700, exist_ok=True)
-            write_json(folder / f"{time.time_ns():020d}-{os.getpid()}.json", {"saved_at": utc_now(), "findings": saved})
-        return {"saved": len(saved), "rejected": rejected, "total": len(saved_findings(run))}
+            write_json(folder / f"{time.time_ns():020d}-{os.getpid()}.json", record)
+        answer: dict[str, Any] = {"saved": len(saved), "rejected": rejected, "total": len(saved_findings(run))}
+        if slice_number:
+            answer["checked"] = slice_number in checked_slices(run)[0]
+        return answer
     findings = numbered(saved_findings(run))
     if numbers_text.strip():
         wanted = [int(n) for n in re.findall(r"\d+", numbers_text)]
@@ -2233,7 +2491,12 @@ def links_line(counts: dict[str, Any]) -> str:
     return f"**Links:** {' and '.join(parts)}. `/bc:coverage` lists and repairs them."
 
 
-def report_blocks(links: dict[str, Any], extra: list[str], partial: str, findings: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def and_list(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def report_blocks(links: dict[str, Any], extra: list[str], partial: str, findings: list[dict[str, Any]],
+                  unchecked: list[int]) -> list[tuple[str, str]]:
     scope = str((links.get("scope") or {}).get("input") or "").strip()
     title = f"# Contradictions — {scope}" if scope and scope.casefold() != "all" else "# Contradictions — the whole project"
     more = f"{title} (continued)\n\n"
@@ -2245,6 +2508,11 @@ def report_blocks(links: dict[str, Any], extra: list[str], partial: str, finding
     missing = [*(links.get("missing") or []), *([one_line(partial)] if one_line(partial) else [])]
     if missing:
         head += [f"**PARTIAL** — not read: {'; '.join(missing)}.", ""]
+    if unchecked:
+        one = len(unchecked) == 1
+        head += [f"**Not checked:** {'slice' if one else 'slices'} {and_list([str(n) for n in unchecked])} of "
+                 f"{len((links.get('slices') or []))}, so any conflicts in {'it' if one else 'them'} are missing from "
+                 "this report.", ""]
     counts = links.get("counts") or {}
     tally = ", ".join(f"{sum(1 for f in findings if f['severity'] == s)} {s}" for s in SEVERITIES)
     head += [
@@ -2284,7 +2552,9 @@ def cmd_report(run_text: str, lines_text: str = "", partial: str = "") -> dict[s
     if not isinstance(extra, list) or not all(isinstance(line, str) for line in extra):
         raise RunError("--lines takes a JSON list of lines.")
     findings = numbered(saved_findings(run))
-    parts = pack_blocks(report_blocks(links, extra, partial, findings))
+    checked = checked_slices(run)[0]
+    unchecked = [n for n in range(1, len(links.get("slices") or []) + 1) if n not in checked]
+    parts = pack_blocks(report_blocks(links, extra, partial, findings, unchecked))
     for old in run.glob("report-*.md"):
         old.unlink()
     paths = []
@@ -2295,6 +2565,7 @@ def cmd_report(run_text: str, lines_text: str = "", partial: str = "") -> dict[s
         "parts": paths,
         "findings": {s: sum(1 for f in findings if f["severity"] == s) for s in SEVERITIES},
         "fix_test_cases": [f["n"] for f in findings if fixes_a_test_case(f)],
+        "unchecked": unchecked,
     }
 
 
@@ -2460,6 +2731,11 @@ def main(argv: list[str] | None = None) -> int:
     findings.add_argument("--run", required=True)
     findings.add_argument("--add", default="", help="a finding or a list of them, JSON on one line; write every ' as \\u0027")
     findings.add_argument("--numbers", default="", help="print these findings in full, by their numbers in the report")
+    findings.add_argument("--slice", type=int, default=0, help="the slice these findings come from: a save that leaves "
+                                                               "nothing rejected, --add '[]' included, marks it checked")
+    slices = sub.add_parser("slices", help="the run's slices, each small enough for one reader, and which are checked")
+    slices.add_argument("--run", required=True)
+    slices.add_argument("--slice", type=int, default=0, help="one slice: its bundle parts and docs, as paths")
     report = sub.add_parser("report", help="write the contradiction report from the saved findings")
     report.add_argument("--run", required=True)
     report.add_argument("--lines", default="", help="more lines for its top, as a JSON list: the board's and the settings'")
@@ -2489,7 +2765,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "archive":
             result = cmd_archive(args.project, args.log)
         elif args.action == "findings":
-            result = cmd_findings(args.run, args.add, args.numbers)
+            result = cmd_findings(args.run, args.add, args.numbers, args.slice)
+        elif args.action == "slices":
+            result = cmd_slices(args.run, args.slice)
         elif args.action == "report":
             result = cmd_report(args.run, args.lines, args.partial)
         else:
