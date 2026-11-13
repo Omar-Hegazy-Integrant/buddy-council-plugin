@@ -65,7 +65,7 @@ Everything the requirements and test cases describe, all features together. A `/
 _Avoid_: system, project (alone)
 
 **Subject line**:
-One line a Slice's reader writes for each requirement and test case: what it is about, then what it says. *(made-up)* "Idle logout: the session ends after 5 minutes idle." Code pairs the items whose subject lines share a subject but no Slice.
+One line a Slice's reader writes for each requirement and test case: what it is about, then what it says. *(made-up)* "Session: ends after 5 minutes idle." Code pairs the items whose subject lines share a subject but no Slice.
 _Avoid_: summary, gist
 
 **Helper**:
