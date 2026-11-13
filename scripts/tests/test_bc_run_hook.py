@@ -120,6 +120,21 @@ class RunScriptApproval(unittest.TestCase):
         ]:
             self.assertNotAllowed(command)
 
+    def test_subject_lines_and_matching_are_approved_as_one_plain_command(self):
+        lines = '{"CWA-REQ-1": "Idle logout: the session ends after 5 minutes idle; it\\u0027s $(not run) | `nor this`"}'
+        for command in [
+            f"python3 {SCRIPT} subjects --run {RUN} --slice 2 --add '{lines}'",
+            f"python3 '{SCRIPT}' match --run '{RUN}'",
+        ]:
+            self.assertAllowed(command, "claude")
+            self.assertAllowed(command, "copilot")
+        for command in [
+            f"python3 {SCRIPT} subjects --run {RUN} --slice 2 --add '{{\"CWA-REQ-1\": \"it's\"}}'",
+            f"python3 {SCRIPT} match --run {RUN} --slice 2",
+            f"python3 {SCRIPT} match --run {RUN} && rm -rf ~/x",
+        ]:
+            self.assertNotAllowed(command)
+
     def test_a_symlinked_path_to_the_same_script_is_approved(self):
         with tempfile.TemporaryDirectory() as tmp:
             link = Path(tmp, "plugin")

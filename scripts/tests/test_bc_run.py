@@ -497,7 +497,34 @@ class Slices(RunFolderTest):
                  "requirement_ids": ["CWA-REQ-4"]}]
         files = {"docs/01-alarms-1.md": "a" * 3_000, "docs/02-vitals-1.md": "v" * 3_000}
         with mock.patch.object(bc_run, "SLICE_BYTES", 6_000):
-            return self.link(REQUIREMENTS, CASES, docs, files)
+            run = self.link(REQUIREMENTS, CASES, docs, files)
+        self.save_lines(run, 1, 2)
+        return run
+
+    def save_lines(self, run, *numbers):
+        for n in numbers:
+            ids = bc_run.cmd_slices(str(run), n)["needs_lines"]
+            bc_run.cmd_subjects(str(run), n, json.dumps({i: f"Subject of {i}: what it says." for i in ids}))
+
+    def test_a_slice_is_checked_once_its_reader_saved_a_subject_line_for_each_of_its_items(self):
+        self.assertEqual(bc_run.cmd_slices(str(self.link(REQUIREMENTS, CASES)), 1)["needs_lines"], [],
+                         "one slice of the whole product has nothing to be matched with")
+        with mock.patch.object(bc_run, "SLICE_BYTES", 1_000):
+            run = self.link(REQUIREMENTS, CASES)
+        ids = bc_run.cmd_slices(str(run), 1)["needs_lines"]
+        self.assertGreater(len(ids), 1)
+        self.assertFalse(bc_run.cmd_findings(str(run), add_text="[]", slice_number=1)["checked"], "its lines are to come")
+        answer = bc_run.cmd_subjects(str(run), 1, json.dumps({ids[0].lower(): "Alarm sound: an alarm sounds.", "TC-14": "x"}))
+        self.assertEqual((answer["saved"], [r["id"] for r in answer["rejected"]], answer["missing"], answer["checked"]),
+                         (1, ["TC-14"], ids[1:], False), "an ID from another slice is sent back")
+        answer = bc_run.cmd_subjects(str(run), 1, json.dumps({i: "Alarm sound: " + "loud " * 60 for i in ids[1:]}))
+        self.assertEqual((answer["saved"], answer["checked"]), (0, False), "a line is one line, not the item's text")
+        answer = bc_run.cmd_subjects(str(run), 1, json.dumps({i: f"Alarm {i}: it sounds." for i in ids[1:]}))
+        self.assertEqual((answer["saved"], answer["rejected"], answer["missing"], answer["checked"]),
+                         (len(ids) - 1, [], [], True))
+        self.assertEqual(bc_run.cmd_slices(str(run), 1)["needs_lines"], [])
+        with self.assertRaises(bc_run.RunError):
+            bc_run.cmd_subjects(str(run), 1, '["a list"]')
 
     def test_the_report_names_a_slice_no_one_checked(self):
         run = self.two_slices()
@@ -507,6 +534,8 @@ class Slices(RunFolderTest):
         self.assertIn("**Not checked:** slice 2 of 2, so any conflicts in it are missing from this report.",
                       Path(result["parts"][0]).read_text())
         bc_run.cmd_findings(str(run), add_text="[]", slice_number=2)
+        self.assertIn("never compared", Path(bc_run.cmd_report(str(run))["parts"][0]).read_text())
+        bc_run.cmd_match(str(run))
         result = bc_run.cmd_report(str(run))
         self.assertEqual(result["unchecked"], [])
         self.assertNotIn("Not checked", Path(result["parts"][0]).read_text())
@@ -516,6 +545,7 @@ class Slices(RunFolderTest):
             run = self.link(REQUIREMENTS, CASES)
         total = bc_run.cmd_slices(str(run))["total"]
         self.assertGreater(total, 2)
+        self.save_lines(run, *range(1, total + 1))
         found = {"severity": "high", "fix": "TC-10", "why": "It expects a sound where the requirement asks for a light.",
                  "items": [{"id": "CWA-REQ-2", "quote": "show a visual alarm"}, {"id": "TC-10", "quote": "It happens"}]}
         self.assertEqual(bc_run.cmd_findings(str(run), add_text=json.dumps([found]), slice_number=1)["saved"], 1)
@@ -542,6 +572,119 @@ class Slices(RunFolderTest):
         self.assertEqual(bc_run.cmd_slices(str(run))["total"], 1)
         self.assertTrue(bc_run.cmd_findings(str(run), add_text="[]", slice_number=1)["checked"])
         self.assertEqual(bc_run.cmd_report(str(run))["unchecked"], [])
+
+
+SUBJECT_LINES = {
+    "CWA-REQ-21": "Session timeout: the session ends after 5 minutes idle.",
+    "TC-210": "Session timeout: logout comes after 5 minutes idle.",
+    "CWA-REQ-22": "Session timeout during monitoring: the session stays open while monitoring.",
+    "TC-220": "Monitoring display: vitals refresh every 3 seconds.",
+    "CWA-REQ-23": "Alarm volume: alarms sound at 80 dB.",
+    "TC-230": "Alarm volume: an alarm is heard at 80 dB.",
+}
+ACROSS_REQUIREMENTS = [
+    requirement("CWA-REQ-21", "Idle logout", "Login", "The session shall end after 5 minutes idle.", url="https://req.test/21"),
+    requirement("CWA-REQ-22", "Session timeout while monitoring", "Monitoring",
+                "The session shall stay open while monitoring.", url="https://req.test/22"),
+    requirement("CWA-REQ-23", "Alarm volume", "Alarms", "Alarms shall sound at 80 dB."),
+]
+ACROSS_CASES = [
+    case(210, "Logout when idle", "CWA-REQ-21", section="Login",
+         steps=[{"content": "Leave the app idle for 5 minutes", "expected": "You are logged out"}]),
+    case(220, "Vitals refresh", "CWA-REQ-22", section="Monitoring"),
+    case(230, "Alarm loudness", "CWA-REQ-23", section="Alarms"),
+]
+
+
+class Across(RunFolderTest):
+    def check_slices(self, run, lines=SUBJECT_LINES):
+        for n in range(1, bc_run.cmd_slices(str(run))["total"] + 1):
+            ids = bc_run.cmd_slices(str(run), n)["needs_lines"]
+            bc_run.cmd_subjects(str(run), n, json.dumps({i: lines[i] for i in ids}))
+            self.assertTrue(bc_run.cmd_findings(str(run), add_text="[]", slice_number=n)["checked"])
+
+    def pairs(self, run, number):
+        first = len(json.loads((run / "links.json").read_text())["slices"]) + 1  # pair slices come after the run's own
+        made = json.loads((run / "pairs.json").read_text())["slices"][number - first]
+        return {tuple(sorted(pair)) for pair in made["pairs"]}
+
+    def link_three_features(self):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": ACROSS_REQUIREMENTS})
+        self.write(run, "test_cases.json", {"test_cases": ACROSS_CASES})
+        with mock.patch.object(bc_run, "SLICE_BYTES", 400):
+            bc_run.cmd_link(str(run))
+        self.assertEqual([row["features"] for row in bc_run.cmd_slices(str(run))["slices"]], [["Login"], ["Monitoring"], ["Alarms"]])
+        return run
+
+    def test_the_issue_s_own_example_pairs_though_one_line_names_its_subject_by_what_happens_to_it(self):
+        run = self.link_three_features()
+        self.check_slices(run, {**SUBJECT_LINES, "CWA-REQ-21": "Idle logout: the session ends after 5 minutes idle.",
+                                "TC-210": "Idle logout: logs out after 5 minutes idle.",
+                                "CWA-REQ-22": "Monitoring session: the session stays open while monitoring."})
+        self.assertEqual(bc_run.cmd_match(str(run))["pairs"], 1)
+        self.assertEqual(self.pairs(run, 4), {("CWA-REQ-21", "CWA-REQ-22")})
+
+    def test_items_on_the_same_subject_in_different_slices_are_paired_and_items_in_one_slice_are_not(self):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": ACROSS_REQUIREMENTS})
+        self.write(run, "test_cases.json", {"test_cases": ACROSS_CASES})
+        self.write(run, "docs.json", {"docs": [{"url": "https://github.com/o/r/blob/main/session.md",
+                                                "files": ["docs/01-session-1.md"], "requirement_ids": ["CWA-REQ-22"]}]})
+        (run / "docs").mkdir()
+        (run / "docs" / "01-session-1.md").write_text("Monitoring keeps the session open.")
+        with mock.patch.object(bc_run, "SLICE_BYTES", 400):
+            bc_run.cmd_link(str(run))
+        self.assertEqual([row["features"] for row in bc_run.cmd_slices(str(run))["slices"]], [["Login"], ["Monitoring"], ["Alarms"]])
+        with self.assertRaises(bc_run.RunError) as caught:
+            bc_run.cmd_match(str(run))
+        self.assertIn("slices 1, 2 and 3", str(caught.exception))
+        self.check_slices(run)
+        self.assertEqual(bc_run.cmd_match(str(run)), {"pairs": 2, "slices": [4], "total": 4})
+        self.assertEqual(self.pairs(run, 4), {("CWA-REQ-21", "CWA-REQ-22"), ("CWA-REQ-22", "TC-210")},
+                         "a requirement and its own test case share a slice, so that slice's check compares them")
+        listed = bc_run.cmd_slices(str(run), 4)
+        self.assertEqual((listed["pairs"], listed["checked"], listed["needs_lines"]), (2, False, []))
+        self.assertEqual([Path(d).name for d in listed["docs"]], ["01-session-1.md"], "a requirement's docs come with it")
+        text = "".join(Path(p).read_text() for p in listed["parts"])
+        for words in ("The session shall end after 5 minutes idle.", "The session shall stay open while monitoring.",
+                      "Leave the app idle for 5 minutes", SUBJECT_LINES["TC-210"]):
+            self.assertIn(words, text)
+        self.assertEqual(bc_run.cmd_match(str(run))["slices"], [4], "matching again changes nothing")
+        with self.assertRaises(bc_run.RunError):
+            bc_run.cmd_subjects(str(run), 1, json.dumps({"CWA-REQ-21": "Session: ends at once."}))
+        found = {"severity": "high", "fix": "decide", "why": "One feature ends an idle session that the other keeps open.",
+                 "items": [{"id": "CWA-REQ-21", "quote": "end after 5 minutes idle"},
+                           {"id": "CWA-REQ-22", "quote": "stay open while monitoring"}]}
+        self.assertTrue(bc_run.cmd_findings(str(run), add_text=json.dumps([found]), slice_number=4)["checked"])
+        report = Path(bc_run.cmd_report(str(run))["parts"][0]).read_text()
+        self.assertIn("[Idle logout](https://req.test/21)", report)
+        self.assertIn("[Session timeout while monitoring](https://req.test/22)", report)
+        self.assertIn("**Checked:** 3 requirements and 3 test cases, and 2 pairs of items on the same subject across "
+                      "the product.", report)
+
+    def test_a_run_on_one_feature_is_paired_with_the_rest_of_the_product_and_counts_only_its_own_items(self):
+        run = self.new_run(command="contradiction", scope="Login")
+        self.write(run, "requirements.json", {"requirements": ACROSS_REQUIREMENTS[:1], "scope": {"input": "Login", "kind": "feature"}})
+        self.write(run, "product.json", {"requirements": ACROSS_REQUIREMENTS})
+        self.write(run, "test_cases.json", {"test_cases": ACROSS_CASES})
+        bc_run.cmd_link(str(run))
+        unmatched = Path(bc_run.cmd_report(str(run))["parts"][0]).read_text()
+        self.assertIn("were never compared", unmatched)
+        self.check_slices(run)
+        self.assertEqual(bc_run.cmd_match(str(run)), {"pairs": 2, "slices": [2], "total": 2})
+        self.assertEqual(self.pairs(run, 2), {("CWA-REQ-21", "CWA-REQ-22"), ("CWA-REQ-22", "TC-210")},
+                         "only pairs with the feature: the rest of the product is never paired with itself")
+        found = {"severity": "high", "fix": "decide", "why": "One feature ends an idle session that the other keeps open.",
+                 "items": [{"id": "TC-210", "quote": "You are logged out"},
+                           {"id": "CWA-REQ-22", "quote": "stay open while monitoring"}]}
+        self.assertTrue(bc_run.cmd_findings(str(run), add_text=json.dumps([found]), slice_number=2)["checked"])
+        report = Path(bc_run.cmd_report(str(run))["parts"][0]).read_text()
+        self.assertIn("[Session timeout while monitoring](https://req.test/22) _(in Monitoring, outside the scope)_", report)
+        self.assertIn("**Checked:** 1 requirement and 1 test case, and 2 pairs", report)
+        self.assertNotIn("never compared", report)
+        self.assertIn("## CWA-REQ-22 — Session timeout while monitoring — in Monitoring, outside this run's scope",
+                      bc_run.cmd_show(str(run), "CWA-REQ-22"))
 
 
 JAMA_CONFIG = {
@@ -591,7 +734,7 @@ class Checks(RunFolderTest):
         super().setUp()
         (self.project / ".buddy-council" / "sources.json").write_text(json.dumps(JAMA_CONFIG))
 
-    def link(self, requirements_file, cases_file, docs=None, scope="", command="coverage", background=None):
+    def link(self, requirements_file, cases_file, docs=None, scope="", command="coverage", background=None, product=None):
         run = self.new_run(command=command, scope=scope)
         self.write(run, "requirements.json", requirements_file)
         if cases_file is not None:
@@ -600,7 +743,36 @@ class Checks(RunFolderTest):
             self.write(run, "docs.json", docs)
         if background is not None:
             self.write(run, "background.json", background)
+        if product is not None:
+            self.write(run, "product.json", product)
         return bc_run.cmd_link(str(run))
+
+    def test_a_contradiction_run_on_part_of_the_product_reads_the_whole_product_too(self):
+        self.assertEqual(Path(bc_run.cmd_new(str(self.project), "contradiction", "Vitals")["product"]).name, "product.json")
+        for command, scope in (("contradiction", ""), ("contradiction", "all"), ("coverage", "Vitals"), ("lookup", "Vitals")):
+            self.assertNotIn("product", bc_run.cmd_new(str(self.project), command, scope), (command, scope))
+
+    def test_the_rest_of_the_product_is_read_to_compare_with_and_never_counted(self):
+        vitals = jama_file([r for r in REQUIREMENTS if r["feature"] == "Vitals"], scope="Vitals")
+        result = self.link(vitals, testrail_file(CASES), scope="Vitals", command="contradiction", product=jama_file(REQUIREMENTS))
+        self.assertEqual((result["mismatches"], result["missing"]), ([], []))
+        self.assertEqual(result["lines"][1], "Fetch: the rest of the product → 3 requirements and 6 test cases outside the "
+                                             "scope, to compare it with, never counted")
+        self.assertEqual((result["counts"]["requirements"], result["counts"]["test_cases_in_scope"]), (2, 1))
+
+        result = self.link(vitals, testrail_file(CASES), scope="Vitals", command="contradiction")
+        self.assertEqual(result["missing"], ["the rest of the product"])
+        self.assertIn("Fetch: the rest of the product → FAILED — no file in the run", result["lines"])
+
+        wrong = jama_file(REQUIREMENTS, scope="Vitals", root_ids=[])
+        result = self.link(vitals, testrail_file(CASES), scope="Vitals", command="contradiction", product=wrong)
+        self.assertIn("the product's requirements were read for scope 'Vitals', but the whole product is read with "
+                      "scope all.", result["mismatches"])
+        self.assertIn("the product's requirements were read with root_ids=none, but the config says [7].", result["mismatches"])
+
+        whole = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), command="contradiction", product=wrong)
+        self.assertEqual((whole["mismatches"], whole["missing"]), ([], []), "a run of the whole product needs no more")
+        self.assertFalse([line for line in whole["lines"] if "rest of the product" in line])
 
     def test_a_run_that_matches_the_config_passes_and_reports_from_the_files(self):
         result = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), docs={"docs": [{"truncated": True}], "failed": [{"url": "u"}]})
@@ -1402,6 +1574,20 @@ class Cli(RunFolderTest):
             result = json.loads(out.getvalue())
             self.assertTrue(result["ok"] and check in result, argv)
         self.assertEqual(result["checked"], True)
+
+    def test_subject_lines_and_matching_print_json(self):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": ACROSS_REQUIREMENTS})
+        self.write(run, "test_cases.json", {"test_cases": ACROSS_CASES})
+        with mock.patch.object(bc_run, "SLICE_BYTES", 400):
+            bc_run.cmd_link(str(run))
+        lines = json.dumps({"CWA-REQ-21": SUBJECT_LINES["CWA-REQ-21"]})
+        for argv, check in ((["subjects", "--run", str(run), "--slice", "1", "--add", lines], "missing"),
+                            (["match", "--run", str(run)], "error")):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                bc_run.main(argv)
+            self.assertIn(check, json.loads(out.getvalue()), argv)
 
 
 if __name__ == "__main__":

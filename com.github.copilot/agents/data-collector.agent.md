@@ -39,8 +39,8 @@ The caller's prompt gives:
   No `cd`, `&&`, `;`, pipes, `$(...)`, or redirects. Never wait in the shell with `sleep`: a tool that answers
   `loading` is waited on by calling it again, and a shell wait only asks the user's permission.
 - Pass each tool only the arguments its step lists — and on a repeat call, the same ones.
-- Never open `requirements.json`, `background.json`, `test_cases.json`, `docs/`, or `bundles/` — they are
-  large, and they are for the caller.
+- Never open `requirements.json`, `background.json`, `product.json`, `test_cases.json`, `docs/`, or `bundles/` — they
+  are large, and they are for the caller.
 - When a call fails, retry it at most twice. Then record the failure and move on to the next step. Never
   substitute another tool, and never invent data.
 
@@ -62,7 +62,7 @@ The caller's prompt gives:
    ```
 
    It prints JSON with `run_dir`, `requirements`, and `test_cases` — the exact paths to use below — and, for a
-   lookup only, `background`.
+   lookup only, `background`; for a contradiction run on part of the product, `product`.
 
 4. **Requirements.**
    - Provider `jama`: call `jama_get_requirements` with `site` = `requirements.base_url`, `project_id`, `scope`,
@@ -74,6 +74,9 @@ The caller's prompt gives:
      same read and the same arguments. Never read the background in a call of its own.
      If it answers `"loading": true`, call it again right away with the same arguments — that call waits for the
      read already running. Keep calling until it answers with `saved_to` (a large project takes a minute or two).
+   - **When `new` printed a `product` path**, call `jama_get_requirements` once more after that, with the same
+     arguments except `scope` = `all` and `save_to` = the `product` path, and no `background_save_to`: it writes the
+     whole product, which the run's scope is compared with. It reads the tree the first call cached.
 
 5. **Test cases** — only when `test_cases.provider` is `testrail`; a project that uses none skips this step,
    and the link step says so. Call `testrail_get_canonical_cases` with `site` = `test_cases.base_url`,
@@ -107,7 +110,7 @@ Your final message is exactly one JSON object and nothing else:
 }
 ```
 
-- `failed` lists each step that could not be completed, as `{"source": "requirements" | "background" |
+- `failed` lists each step that could not be completed, as `{"source": "requirements" | "background" | "product" |
   "test cases" | "enrichment" | "link", "error": "<the error text, verbatim>"}`. Empty when everything worked.
 - `notes` holds anything else the caller should know, such as a tool that answered `loading` many times.
 - Do not restate counts, summaries, or lines: the link step writes them to `links.json`, and the caller reads
