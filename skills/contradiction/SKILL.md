@@ -20,6 +20,9 @@ The text the user typed after the command:
 - a feature name or folder path, such as `"Patient Monitoring"` → everything in that feature;
 - nothing → the whole project, feature by feature.
 
+A requirement or a feature is also compared with the rest of the product, on the subjects they share; the report
+counts only the scope.
+
 `/bc:ask` runs these steps too, with the scope taken from the user's question.
 
 ## Steps
@@ -97,14 +100,30 @@ python3 '<plugin root>/scripts/bc_run.py' slices --run '<run_dir>'
   `Check: <N> slices, read here one at a time — this assistant has no helpers`.
 
 Then list the slices again. Check each one still `checked: false` yourself — its helper stopped, or left a finding
-to fix — and print `Check: slice <n> read here — <what its helper answered>`. When a helper's answer lists
-`docs_not_read`, print `Enrichment: <how many> linked docs could not be read`, name each and why, and ask once
-whether to report without them.
+to fix or a subject line to save — and print `Check: slice <n> read here — <what its helper answered>`. When a
+helper's answer lists `docs_not_read`, print `Enrichment: <how many> linked docs could not be read`, name each and
+why, and ask once whether to report without them.
 
 **Done when** `slices` shows every slice `checked: true`, and every doc a helper couldn't read has the user's
 answer.
 
-### 6. Check the board tickets
+### 6. Compare across the product
+
+Items in different slices — and, in a run on a requirement or a feature, the scope and the rest of the product —
+are compared only when they are on the same subject. Code pairs them by the subject lines saved in step 5. Run, as
+its own command:
+
+```
+python3 '<plugin root>/scripts/bc_run.py' match --run '<run_dir>'
+```
+
+It answers how many `pairs` it found, and the new `slices` it cut them into. Print
+`Across: <pairs> pairs of items on the same subject`, or its `note` when it has one. Check the new slices as step 5
+does: one yourself; several with a helper each, given the same prompt.
+
+**Done when** `slices` shows every slice `checked: true`.
+
+### 7. Check the board tickets
 
 Skip this step when step 3 found no ticket. A ticket is proposed behavior, judged by the rules of
 `howtos/detect-contradictions.md`: read it now if you haven't. Compare each ticket with the requirements it touches:
@@ -119,7 +138,7 @@ ticket's findings in one command: `howtos/detect-contradictions.md` → *Saving*
 
 **Done when** every ticket has been compared, and its findings saved.
 
-### 7. Report
+### 8. Report
 
 Code writes the report from the saved findings. Run, as its own command:
 
@@ -134,9 +153,9 @@ written, in order.
 
 **Done when** every part is shown, unchanged.
 
-### 8. Offer to fix test cases
+### 9. Offer to fix test cases
 
-When `fix_test_cases` from step 7 isn't empty, end with one question:
+When `fix_test_cases` from step 8 isn't empty, end with one question:
 
 ```
 Findings 1, 4 and 7 are test cases that contradict their requirement. I can update those cases to match —
@@ -169,6 +188,6 @@ you'll see every change before it's written. Want me to? (all / pick some / no)
 
 ## What this command changes
 
-Nothing, unless the user says yes in step 8, and then only the conflicting text of the test cases they chose,
+Nothing, unless the user says yes in step 9, and then only the conflicting text of the test cases they chose,
 through `howtos/update-test-cases.md`. Requirements and a test case's requirement links stay as they are. New
 test cases come from `/bc:coverage`; general questions go to `/bc:ask`.

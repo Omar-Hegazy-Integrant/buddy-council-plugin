@@ -10,6 +10,7 @@ ever retyped by a model.
 <project>/.buddy-council/runs/<run-id>/
   requirements.json  test_cases.json   full canonical records (written by the Jama/TestRail servers)
   background.json                      lookups on Jama only: the rest of the project, context for answers
+  product.json                         contradiction runs on part of the product: the whole product, to compare it with
   docs/  docs.json                     GitHub docs the requirements link to (cli strategy)
   links.json                           counts, untested, orphans, stranded links, per-feature rows — computed by code
   bundles/NN-<feature>-<p>.md          each feature's requirements with their test cases, verbatim, in small parts
@@ -19,6 +20,10 @@ ever retyped by a model.
 `background.json` holds every Jama item outside the requirements in scope — system requirements, risks,
 standards, design — for `/bc:ask` lookups to search. It is never a requirement: no count, bundle, or report
 includes it.
+
+`product.json` holds every requirement in the product, read once more with the scope left out, when a contradiction
+run covers only a requirement or a feature; the test cases are read whole in every run. Code matches the scope with
+the rest of the product on the subjects they share. No count, bundle, or coverage number includes the rest.
 
 The newest 5 runs are kept, none longer than a week. The folder sits inside `.buddy-council/`, which
 `/bc:setup` keeps out of git.
@@ -66,7 +71,8 @@ python3 '<plugin root>/scripts/bc_run.py' summary --run '<run_dir>'
    `Collect: the run did not match the config — collecting again inline` and the mismatches, then collect
    inline once, into a new run folder. If the inline run still mismatches, STOP and show them.
 3. **Print every entry of `lines`, exactly** — the `Fetch:`, `Enrichment:`, and `Readiness:` lines, built by
-   code from the files themselves (a lookup on Jama adds a `Fetch: background` line). Print them as they are,
+   code from the files themselves (a lookup on Jama adds a `Fetch: background` line, and a contradiction run on part
+   of the product a `Fetch: the rest of the product` line). Print them as they are,
    each on its own line: never shorten or merge them.
 4. **`missing` is not empty** → a configured source could not be fetched; the collector's `failed` has the
    error. STOP: name each missing source and its error, and ask whether to continue with partial data or

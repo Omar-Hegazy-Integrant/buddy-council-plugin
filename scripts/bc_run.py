@@ -2207,6 +2207,8 @@ def cmd_slices(run_text: str, number: int = 0) -> dict[str, Any]:
         if entry.get("kind") != "pairs":
             links = read_json(run / "links.json") or {}
             answer["needs_lines"] = missing_lines(run, slices).get(number, []) if links.get("subject_lines") else []
+        else:
+            answer["needs_lines"] = []
         return answer
     rows = [row(n, entry) for n, entry in enumerate(slices, start=1)]
     return {"run_dir": str(run), "total": len(rows), "checked": sum(1 for r in rows if r["checked"]), "slices": rows}

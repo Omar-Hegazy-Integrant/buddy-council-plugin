@@ -12,6 +12,10 @@ requirement's `Test cases:` line is exact. A requirement with more test cases th
 again, marked `(continued)`, above each share of them. Code also counted the requirements with no test case and the
 test cases with no requirement, and the report states those counts.
 
+Once every slice is checked, code pairs the items on the same subject that no slice holds together — and, in a run on
+part of the product, its items with the rest of the product — by the subject lines their readers saved, and cuts the
+pairs into **slices of pairs**, checked the same way.
+
 ## Checking a slice
 
 Whoever checks a slice — a helper, or the session itself — does this once. Run each command exactly as shown, as
@@ -23,23 +27,29 @@ its own command, and read files with your view tool.
    python3 '<plugin root>/scripts/bc_run.py' slices --run '<run_dir>' --slice <n>
    ```
 
-   It answers with the slice's bundle `parts` and the `docs` they cite, as paths.
+   It answers with the slice's bundle `parts` and the `docs` they cite, as paths, and `needs_lines`: the items it
+   still needs a subject line for.
 2. Read each part and each doc once, in order, one per view. Together they are the whole slice.
 3. Make every comparison in *What to compare*, and judge each by the rules below.
 4. Save the slice's findings in one command, as *Saving* shows, with `--slice <n>`. When the slice holds no
    conflict, save `[]`.
-5. **A helper** ends with one line of JSON, and nothing else: `{"slice": <n>, "saved": <how many>}`. Add
+5. Save a subject line for each ID in `needs_lines`, as *Subject lines* shows. When it is empty, there is nothing
+   to save.
+6. **A helper** ends with one line of JSON, and nothing else: `{"slice": <n>, "saved": <how many>}`. Add
    `"docs_not_read": ["<link>: <why>"]` for each doc a part told you to read that you couldn't, and answer
    `{"slice": <n>, "error": "<what stopped you>"}` when you couldn't finish.
 
-**Done when** a save of the slice answered `"checked": true`, and a helper has sent its line.
+**Done when** the slice's last save answered `"checked": true`, and a helper has sent its line.
 
 A helper works from its slice alone — its parts and the docs they name — and leaves every question to the session
 that started it.
 
 ## What to compare
 
-Make every comparison across everything the slice holds:
+In a **slice of pairs**, compare the two items of each pair with each other, and nothing else: their slices already
+compared each with its own neighbors. A test case comes with the requirements it tests, to tell which side is right.
+
+In any other slice, make every comparison across everything it holds:
 
 1. **Each requirement with its test cases.**
 2. **The requirements with each other.**
@@ -130,3 +140,26 @@ last rejected finding, save `[]`.
 
 **Done when** every finding is saved and `rejected` is empty, or each finding still in it was dropped on
 purpose — and, with `--slice`, the answer says `"checked": true`.
+
+## Subject lines
+
+Code finds the items in other slices, or elsewhere in the product, that could conflict with this slice's by their
+subject lines: one line per item, its subject, a colon, then what it says about it, at most 200 characters.
+*(made-up)* `Idle logout: the session ends after 5 minutes idle.`
+
+- **The subject** — the screen, setting, or behavior the item is about, in the product's own words for it, so an item
+  on the same subject elsewhere names it alike.
+- **What it says** — the values, results, and states the item states, or for a test case expects, as behavior:
+  `Idle logout: logs the user out after 5 minutes idle.`
+
+Save them together, as their own command:
+
+```
+python3 '<plugin root>/scripts/bc_run.py' subjects --run '<run_dir>' --slice <n> --add '<json>'
+```
+
+`--add` is one JSON object on one line, each ID with its line, with every `'` written as `\u0027`:
+`{"CWA-REQ-85": "Vitals refresh: every 3 seconds.", "TC-1234": "Vitals refresh: every 10 seconds."}`. It answers
+`saved`, `rejected` with each problem, the IDs still `missing` a line, and `checked`.
+
+**Done when** `missing` is empty.
