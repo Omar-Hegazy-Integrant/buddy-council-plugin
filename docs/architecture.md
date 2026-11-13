@@ -29,7 +29,7 @@ buddy_council_plugin/
 │   ├── automation-tools/        # /bc:setup's automation part: bc_tools.py detect/ensure/… (stdlib, Python 3.9+);
 │   │                            #   pins.json (Node by version + SHA-256) and appium-mcp/package-lock.json
 │   ├── normalize-artifacts/     # Clean, normalize IDs, cross-link
-│   ├── detect-contradictions/   # Core analysis (7 contradiction types)
+│   ├── detect-contradictions/   # Core analysis: what to compare inside a feature, and how to judge it
 │   ├── analyze-coverage/        # Coverage gap detection and metrics
 │   ├── check-platform-parity/   # V&V phase 2: iOS ↔ Android counterparts
 │   ├── clone-to-vnv-board/      # V&V phase 3: sprint stories → V&V board
@@ -170,17 +170,9 @@ Secrets live in exactly one place; configuration is separate:
 
 ## Contradiction Detection
 
-The agent detects 7 types of issues:
-
-| Type | Severity | Description |
-|------|----------|-------------|
-| Direct conflicts | CRITICAL | Requirement says X, test validates opposite |
-| Behavioral conflicts | HIGH | Different expected behaviors for same trigger |
-| Test vs requirement | HIGH | Test steps contradict linked requirement |
-| Scope overlaps | MEDIUM | Overlapping requirements with incompatible constraints |
-| Cross-feature tensions | MEDIUM | Requirements in different features that conflict |
-| Temporal/state conflicts | MEDIUM | Conflicting state or timing expectations |
-| Missing alignment | LOW | Untested requirements or orphan test cases |
+The session's model compares requirements and test cases inside each feature, then requirements across features.
+`howtos/detect-contradictions.md` holds what it compares and how it judges; code checks every finding and names it
+by what it compares (ADR 0012).
 
 ## Available Agents
 

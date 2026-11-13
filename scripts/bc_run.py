@@ -2090,6 +2090,10 @@ def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any])
     if fix is None and not problems:
         ids = ", ".join(dict.fromkeys(i["id"] for i in items))
         problems.append(f'fix: the ID of the item to change ({ids}), or "decide" when a person must choose')
+    elif (fix or {}).get("type") == "test case" and not problems and not any(i["type"] == "requirement" for i in items):
+        # The fix offer rewrites the test case to agree with a requirement, so one must be among the items.
+        problems.append(f'fix: add the requirement words {fix["id"]} breaks to items, or write "decide" when no '
+                        'requirement settles it')
     if problems:
         return None, problems
     return {"severity": severity, "kind": kind_of(items), "items": items, "why": why, "fix": fix}, []
