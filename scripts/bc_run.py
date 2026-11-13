@@ -2723,7 +2723,7 @@ def outside_items(run: Path, requirements: dict[str, Any], cases: dict[str, Any]
 
 
 def check_item(entry: Any, severity: str, requirements: dict[str, Any], cases: dict[str, Any],
-               elsewhere: dict[str, str]) -> tuple[dict[str, Any] | None, str]:
+               elsewhere: dict[str, str], tickets: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
     """One side of a finding, looked up in the run with its quote found — or the reason it can't be."""
     if not isinstance(entry, dict) or not str(entry.get("id") or "").strip():
         return None, 'each item is {"id": …, "quote": …}'
@@ -2733,15 +2733,13 @@ def check_item(entry: Any, severity: str, requirements: dict[str, Any], cases: d
         return None, f"{rid}: quote its exact words"
     if len(quote) > MAX_QUOTE_CHARS:
         return None, f"{rid}: quote a phrase or a sentence, at most {MAX_QUOTE_CHARS} characters — not the whole text"
-    board = entry.get("board")
-    if board is not None:
-        if not isinstance(board, dict) or not one_line(board.get("title")):
-            return None, f'{rid}: a board ticket carries "board": {{"title": …, "url": …}}'
-        return {"id": rid, "type": BOARD, "title": one_line(board.get("title")), "url": str(board.get("url") or "").strip(),
-                "where": "", "quote": one_line(quote), "checked": False}, ""
     kind, item = find_item(rid, requirements, cases)
+    ticket = tickets.get(key(rid)) if item is None else None
+    if ticket is not None:  # its text is in the session's board read, not the run: its quote can't be checked
+        return {"id": ticket["id"], "type": BOARD, "title": ticket["title"], "url": ticket["url"], "where": "",
+                "quote": one_line(quote), "checked": False}, ""
     if item is None:
-        return None, f'{rid} is not in this run: check the ID. A board ticket carries "board": {{"title": …, "url": …}}'
+        return None, f"{rid} is not in this run: check the ID. A board ticket is in it once saved with `tickets`."
     found = {"id": str(item.get("id")), "type": kind, "title": one_line(item.get("title")),
              "url": str((item.get("raw_fields") or {}).get("url") or ""), "where": "", "quote": "", "checked": True}
     if quote:
@@ -2777,8 +2775,8 @@ def fix_of(value: Any, items: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"id": target["id"], "type": target["type"], "where": target["where"]}
 
 
-def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any],
-                  elsewhere: dict[str, str]) -> tuple[dict[str, Any] | None, list[str]]:
+def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any], elsewhere: dict[str, str],
+                  tickets: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
     if not isinstance(raw, dict):
         return None, ["a finding is a JSON object: items, severity, why, fix"]
     problems: list[str] = []
@@ -2790,7 +2788,7 @@ def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any],
         problems.append(f"items: 2 to {MAX_FINDING_ITEMS} — each side, or two places in an item that contradicts itself")
     items = []
     for entry in entries[:MAX_FINDING_ITEMS]:
-        item, problem = check_item(entry, severity, requirements, cases, elsewhere)
+        item, problem = check_item(entry, severity, requirements, cases, elsewhere, tickets)
         if item:
             items.append(item)
         else:
@@ -2798,7 +2796,18 @@ def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any],
     why = one_line(raw.get("why"))
     if not why or len(why) > MAX_WHY_CHARS:
         problems.append(f"why: one plain sentence on why they conflict, at most {MAX_WHY_CHARS} characters")
-    fix = fix_of(raw.get("fix"), items)
+    ships = list(dict.fromkeys(i["id"] for i in items if i["type"] == BOARD))
+    wanted = raw.get("fix")
+    named = [fix_of(value, items) for value in (wanted if isinstance(wanted, list) else [wanted])]
+    fix = named[0] if len(named) == 1 else None
+    if ships and named and all((found or {}).get("type") == "test case" for found in named):
+        # A ticket hasn't shipped: the test cases it will break are updated when it does, never offered as fixes now.
+        fix = {"update": list({found["id"]: {"id": found["id"], "where": found["where"]} for found in named}.values()),
+               "ships": ships}
+    elif isinstance(wanted, list) and not problems:
+        problems.append("fix: a list names only test cases among the items, the ones the ticket will break" if ships else
+                        "fix: one ID, or \"decide\" — a list of test cases is for a board ticket's finding")
+        fix = {}
     if fix is None and not problems:
         ids = ", ".join(dict.fromkeys(i["id"] for i in items))
         problems.append(f'fix: the ID of the item to change ({ids}), or "decide" when a person must choose')
@@ -2846,7 +2855,7 @@ def numbered(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def fixes_a_test_case(finding: dict[str, Any]) -> bool:
     """A conflict whose fix is a test case, every quote checked: what the fix offer covers."""
     return (finding["severity"] != "low" and (finding.get("fix") or {}).get("type") == "test case"
-            and all(i.get("checked") for i in finding["items"]))
+            and not on_board(finding) and all(i.get("checked") for i in finding["items"]))
 
 
 def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "", slice_number: int = 0) -> dict[str, Any]:
@@ -2868,10 +2877,11 @@ def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "", slic
             raise RunError("requirements.json is missing — collect the run before saving findings.")
         requirements, cases = run_items(run)
         elsewhere = outside_items(run, requirements, cases)
+        tickets = saved_tickets(run)
         saved: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
         for n, raw in enumerate(batch, start=1):
-            finding, problems = check_finding(raw, requirements, cases, elsewhere)
+            finding, problems = check_finding(raw, requirements, cases, elsewhere, tickets)
             if finding:
                 saved.append(finding)
             else:
@@ -2920,6 +2930,9 @@ def link_text(title: str, url: str) -> str:
 def fix_sentence(fix: dict[str, Any]) -> str:
     if fix.get("decide"):
         return "a person decides which side is right."
+    if fix.get("update"):
+        cases = [f"{c['id']} ({c['where']})" if c.get("where") else c["id"] for c in fix["update"]]
+        return f"update {and_list(cases)} when {and_list(fix['ships'])} {'ships' if len(fix['ships']) == 1 else 'ship'}."
     return f"change {fix['id']}{', ' + fix['where'] if fix.get('where') else ''}."
 
 
@@ -2941,7 +2954,7 @@ def finding_block(finding: dict[str, Any], severity_in_heading: bool = False) ->
         if item.get("quote"):
             text += f': "{item["quote"]}"'
             if not item.get("checked"):
-                text += " _(not checked: board tickets aren't saved in the run)_"
+                text += " _(not checked: the ticket's text isn't in the run)_"
         lines.append(f"- {text}")
     lines += [f"- **Why:** {finding['why']}", f"- **Fix:** {fix_sentence(finding['fix'])}"]
     return "\n".join(lines) + "\n\n"
@@ -2963,8 +2976,30 @@ def and_list(items: list[str]) -> str:
     return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
+def ships_blocks(findings: list[dict[str, Any]], more: str) -> list[tuple[str, str]]:
+    """For each ticket, the test cases its findings say to update when it ships."""
+    tickets: dict[str, dict[str, Any]] = {}
+    for finding in findings:
+        fix = finding.get("fix") or {}
+        for tid in fix.get("ships") or []:
+            item = next(i for i in finding["items"] if i["type"] == BOARD and i["id"] == tid)
+            entry = tickets.setdefault(key(tid), {"item": item, "cases": [], "findings": []})
+            entry["cases"] += [c["id"] for c in fix["update"] if c["id"] not in entry["cases"]]
+            entry["findings"].append(str(finding["n"]))
+    heading = "## Test cases to update when the tickets ship"
+    blocks = []
+    for n, entry in enumerate(tickets.values()):
+        item, numbers = entry["item"], entry["findings"]
+        line = (f"- **{item['id']}** {link_text(item['title'], item['url'])}: {and_list(entry['cases'])} — "
+                f"{'finding' if len(numbers) == 1 else 'findings'} {and_list(numbers)}.\n")
+        blocks.append(((f"{heading}\n\n" if n == 0 else "") + line, f"{more}{heading} (continued)\n\n"))
+    if blocks:
+        blocks[-1] = (blocks[-1][0] + "\n", blocks[-1][1])
+    return blocks
+
+
 def report_blocks(links: dict[str, Any], extra: list[str], partial: str, findings: list[dict[str, Any]],
-                  unchecked: list[int], total_slices: int, pairs: int | None) -> list[tuple[str, str]]:
+                  unchecked: list[int], total_slices: int, pairs: int | None, tickets: int) -> list[tuple[str, str]]:
     scope = str((links.get("scope") or {}).get("input") or "").strip()
     title = f"# Contradictions — {scope}" if scope and scope.casefold() != "all" else "# Contradictions — the whole project"
     more = f"{title} (continued)\n\n"
@@ -2986,21 +3021,25 @@ def report_blocks(links: dict[str, Any], extra: list[str], partial: str, finding
                  "conflicts between them are missing from this report.", ""]
     counts = links.get("counts") or {}
     tally = ", ".join(f"{sum(1 for f in findings if f['severity'] == s)} {s}" for s in SEVERITIES)
-    across = f", and {plural(pairs, 'pair')} of items on the same subject across the product" if pairs else ""
+    also = [*([f"{plural(pairs, 'pair')} of items on the same subject across the product"] if pairs else []),
+            *([plural(tickets, "board ticket")] if tickets else [])]
     head += [
         f"**Checked:** {plural(int(counts.get('requirements') or 0), 'requirement')} and "
-        f"{plural(int(counts.get('test_cases_in_scope') or 0), 'test case')}{across}.  ",
+        f"{plural(int(counts.get('test_cases_in_scope') or 0), 'test case')}"
+        f"{''.join(f', {x}' for x in also[:-1])}{f', and {also[-1]}' if also else ''}.  ",
         f"**Found:** {tally}.  " if findings else "**Found:** no contradictions.  ",
         links_line(counts),
     ]
     blocks = [("\n".join(head) + "\n\n", "")]
     sections = [(f"## {s.capitalize()} — {SEVERITY_MEANS[s]}", [f for f in findings if not on_board(f) and f["severity"] == s], False)
                 for s in SEVERITIES]
-    sections.append(("## Board tickets", [f for f in findings if on_board(f)], True))
+    sections.append(("## Board tickets — work in progress that conflicts with a requirement or a test case",
+                     [f for f in findings if on_board(f)], True))
     for heading, group, severity_in_heading in sections:
         for n, finding in enumerate(group):
             block = finding_block(finding, severity_in_heading)
             blocks.append(((f"{heading}\n\n" if n == 0 else "") + block, f"{more}{heading} (continued)\n\n"))
+    blocks += ships_blocks(findings, more)
     offered = [str(f["n"]) for f in findings if fixes_a_test_case(f)]
     if offered:
         verb = "names" if len(offered) == 1 else "name"
@@ -3029,7 +3068,8 @@ def cmd_report(run_text: str, lines_text: str = "", partial: str = "") -> dict[s
     unchecked = [n for n in range(1, len(slices) + 1) if n not in checked]
     matched = read_json(run / "pairs.json")
     parts = pack_blocks(report_blocks(links, extra, partial, findings, unchecked, len(slices),
-                                      int(matched.get("pairs") or 0) if isinstance(matched, dict) else None))
+                                      int(matched.get("pairs") or 0) if isinstance(matched, dict) else None,
+                                      len(saved_tickets(run))))
     for old in run.glob("report-*.md"):
         old.unlink()
     paths = []
