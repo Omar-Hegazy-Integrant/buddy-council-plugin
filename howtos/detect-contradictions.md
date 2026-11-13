@@ -7,7 +7,7 @@ What to compare in a slice of the run, how to judge it, and how to save each fin
 Code cut the run into **slices**, each small enough to check at once: a few whole features, or some of the
 requirements of a big one. A slice's bundle parts list each of its requirements as written — status, folder,
 description, rationale, custom fields, linked docs — and, under each one, the test cases that link to it, steps and
-expected results included, then the test cases that link to no requirement. Code resolved the links, so a
+expected results included. The test cases that link to no requirement come last. Code resolved the links, so a
 requirement's `Test cases:` line is exact. A requirement with more test cases than one slice holds is written out
 again, marked `(continued)`, above each share of them. Code also counted the requirements with no test case and the
 test cases with no requirement, and the report states those counts.
@@ -27,13 +27,15 @@ its own command, and read files with your view tool.
 2. Read each part and each doc once, in order, one per view. Together they are the whole slice.
 3. Make every comparison in *What to compare*, and judge each by the rules below.
 4. Save the slice's findings in one command, as *Saving* shows, with `--slice <n>`. When the slice holds no
-   conflict, save `[]`: the save is what records the slice as checked.
+   conflict, save `[]`.
+5. **A helper** ends with one line of JSON, and nothing else: `{"slice": <n>, "saved": <how many>}`. Add
+   `"docs_not_read": ["<link>: <why>"]` for each doc a part told you to read that you couldn't, and answer
+   `{"slice": <n>, "error": "<what stopped you>"}` when you couldn't finish.
 
-**Done when** every part and doc has been read once, every comparison made, and the slice saved.
+**Done when** a save of the slice answered `"checked": true`, and a helper has sent its line.
 
-A **helper** works from its slice alone — its parts and the docs they name — and leaves every question to the
-session that started it. Its last message is one line of JSON: `{"slice": <n>, "saved": <how many>}`, or
-`{"slice": <n>, "error": "<what stopped it>"}`.
+A helper works from its slice alone — its parts and the docs they name — and leaves every question to the session
+that started it.
 
 ## What to compare
 
@@ -122,7 +124,9 @@ python3 '<plugin root>/scripts/bc_run.py' findings --run '<run_dir>' --slice <n>
 one: every ID must be in the run, and every quote must be in its item, whatever its case, spacing, or quote
 marks. It answers `saved`, `total`, and `rejected`. A rejected finding comes back with its problems, and a quote
 that isn't in its item comes with the closest text code found there. Copy the exact words from the bundle and
-save it again, or drop it. A finding saved again with the same quotes replaces the first.
+save it again, or drop it. A finding saved again with the same quotes replaces the first. With `--slice`, it also
+answers `checked`: the slice counts as checked once a save of it leaves nothing rejected, so after dropping the
+last rejected finding, save `[]`.
 
 **Done when** every finding is saved and `rejected` is empty, or each finding still in it was dropped on
-purpose.
+purpose — and, with `--slice`, the answer says `"checked": true`.

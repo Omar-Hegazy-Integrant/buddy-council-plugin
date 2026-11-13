@@ -619,7 +619,7 @@ These commands read the most data, so they split the work by what it needs:
 
 The data travels as files, never as a model's retelling: the servers write it straight into a **run folder** in your project, `.buddy-council/runs/<run-id>/`, and your model reads the counts through `bc_run.py summary` and then each feature's bundle — for `/bc:contradiction`, each slice's — its requirements, verbatim, with their custom fields (platform, product, version), each followed by the test cases that link to it with theirs (applicable OS, product version, CtQ, priority) — plus the GitHub docs the feature links to. Helpers save their findings through `bc_run.py findings` too, so your session never retypes one. The low-cost model is never taken at its word: the link step checks the run against your `sources.json` and writes the `Fetch:`, `Enrichment:` and `Readiness:` lines itself, and a run that doesn't match the config is collected again by your session's model. If the sub-agent can't run, you'll see `Collect: ran inline — …` and your session's model does the same steps itself.
 
-To use a different model for the collector in Copilot CLI, pick one for `bc:data-collector` in `/subagents`. Board issues, and GitHub docs under the `mcp` enrichment strategy, are still fetched by your session's model.
+To use a different model for the collector in Copilot CLI, pick one for `bc:data-collector` in `/subagents`. Board issues are still fetched by your session's model. GitHub docs under the `mcp` enrichment strategy are read through your assistant's own GitHub connection by whoever reads the requirements that cite them: your session, or a helper.
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture documentation.
 

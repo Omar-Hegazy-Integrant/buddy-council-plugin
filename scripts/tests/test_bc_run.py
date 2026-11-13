@@ -449,8 +449,10 @@ class Slices(RunFolderTest):
                  for n in range(1, 6)]
         snooze = requirement("CWA-REQ-7", "Snooze alarms", "Alarms", "The system shall snooze a sounding alarm for 5 minutes.")
         cases = [case(300 + n, f"Snooze case {n}", "CWA-REQ-7", steps=steps) for n in range(1, 41)]
+        doc = {"url": "https://github.com/o/r/blob/main/snooze.md", "files": ["docs/01-snooze-1.md"],
+               "requirement_ids": ["CWA-REQ-7"]}
         with mock.patch.object(bc_run, "SLICE_BYTES", 6_000):
-            run = self.link([snooze], cases)
+            run = self.link([snooze], cases, [doc], {"docs/01-snooze-1.md": "s" * 2_500})
         texts = self.slice_texts(run)
         self.assertGreater(len(texts), 1)
         for slice_text in texts:
@@ -459,6 +461,25 @@ class Slices(RunFolderTest):
         written = [cid for t in texts for cid in re.findall(r"### (TC-\d+) — Snooze case", t)]
         self.assertEqual(sorted(written), sorted(f"TC-{300 + n}" for n in range(1, 41)), "every case once, none left out")
         self.assertIn("## CWA-REQ-7 — Snooze alarms (continued)\n", texts[1])
+        slices = json.loads((run / "links.json").read_text())["slices"]
+        self.assertEqual({tuple(piece["docs"]) for piece in slices}, {("docs/01-snooze-1.md",)})
+        self.assertLess(max(piece["bytes"] for piece in slices), 6_000 + 1_000, "each share leaves room for the doc")
+
+    def test_only_a_contradiction_run_is_cut_into_slices(self):
+        text = "The pump shall stop when occluded, and say so on the screen. " * 25
+        reqs = [requirement(f"CWA-REQ-{n}", f"Requirement {n}", "Pump", text) for n in range(1, 13)]
+        cases = [case(200, "Shared by the first and the last", "CWA-REQ-1, CWA-REQ-12", section="Pump")]
+        run = self.new_run(command="coverage")
+        self.write(run, "requirements.json", {"requirements": reqs})
+        self.write(run, "test_cases.json", {"test_cases": cases})
+        with mock.patch.object(bc_run, "SLICE_BYTES", 8_000):
+            bc_run.cmd_link(str(run))
+        bundle = "".join(p.read_text() for p in sorted((run / "bundles").glob("*.md")))
+        self.assertEqual(bundle.count("### TC-200 — Shared by the first and the last"), 1, "a coverage run's bundle is as before")
+        self.assertNotIn("(continued)\nStatus", bundle)
+        with self.assertRaises(bc_run.RunError) as caught:
+            bc_run.cmd_slices(str(run))
+        self.assertIn("only a contradiction run", str(caught.exception))
 
     def test_the_docs_a_slice_cites_count_toward_its_size_once_and_come_with_it(self):
         run = self.two_slices()
@@ -499,16 +520,28 @@ class Slices(RunFolderTest):
                  "items": [{"id": "CWA-REQ-2", "quote": "show a visual alarm"}, {"id": "TC-10", "quote": "It happens"}]}
         self.assertEqual(bc_run.cmd_findings(str(run), add_text=json.dumps([found]), slice_number=1)["saved"], 1)
         self.assertEqual(bc_run.cmd_findings(str(run), add_text="[]", slice_number=2),
-                         {"saved": 0, "rejected": [], "total": 1})
+                         {"saved": 0, "rejected": [], "total": 1, "checked": True})
+        misquoted = found | {"items": [{"id": "CWA-REQ-4", "quote": "display heart rate"}, {"id": "TC-14", "quote": "nowhere"}],
+                             "fix": "TC-14"}
+        answer = bc_run.cmd_findings(str(run), add_text=json.dumps([misquoted]), slice_number=3)
+        self.assertEqual((answer["saved"], len(answer["rejected"]), answer["checked"]), (0, 1, False),
+                         "a slice with a finding still to fix or drop isn't checked, so its reader stopping shows")
         listed = bc_run.cmd_slices(str(run))
         self.assertEqual([(row["checked"], row["findings"]) for row in listed["slices"]],
                          [(True, 1), (True, 0)] + [(False, 0)] * (total - 2))
         self.assertEqual(listed["checked"], 2)
+        self.assertTrue(bc_run.cmd_findings(str(run), add_text="[]", slice_number=3)["checked"], "dropped on purpose")
         with self.assertRaises(bc_run.RunError):
             bc_run.cmd_findings(str(run), add_text="[]")
         with self.assertRaises(bc_run.RunError) as caught:
             bc_run.cmd_findings(str(run), add_text="[]", slice_number=total + 1)
         self.assertIn(f"this run has {total}", str(caught.exception))
+
+    def test_a_run_with_no_requirements_still_saves_its_slice_as_checked(self):
+        run = self.link([], [case(13, "Alarm orphan, no refs")])
+        self.assertEqual(bc_run.cmd_slices(str(run))["total"], 1)
+        self.assertTrue(bc_run.cmd_findings(str(run), add_text="[]", slice_number=1)["checked"])
+        self.assertEqual(bc_run.cmd_report(str(run))["unchecked"], [])
 
 
 JAMA_CONFIG = {

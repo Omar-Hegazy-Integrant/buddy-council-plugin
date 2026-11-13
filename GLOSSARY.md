@@ -61,7 +61,7 @@ A share of the requirements and test cases a command checks, small enough for on
 _Avoid_: chunk, batch
 
 **Helper**:
-A fresh AI session the assistant starts to check one Slice for `/bc:contradiction`, side by side with the helpers for the other Slices.
+A fresh AI session that checks one Slice for `/bc:contradiction` and saves its Findings.
 _Avoid_: worker, agent (alone)
 
 ### Stories

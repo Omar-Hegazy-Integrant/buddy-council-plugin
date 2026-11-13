@@ -69,7 +69,7 @@ test case: carry on.
 
 ### 5. Check each slice
 
-Code cut the run into **slices**, each small enough to check at once. List them, as its own command:
+List the run's **slices**, as its own command:
 
 ```
 python3 '<plugin root>/scripts/bc_run.py' slices --run '<run_dir>'
@@ -78,8 +78,8 @@ python3 '<plugin root>/scripts/bc_run.py' slices --run '<run_dir>'
 - **One slice** → check it yourself: `howtos/detect-contradictions.md` → *Checking a slice*.
 - **Several** → start one **helper** per slice, all in one message, so they run side by side. A helper is your
   assistant's own general-purpose sub-agent, on the model one step below the top, at normal effort:
-  - **Claude Code** — your sub-agent tool takes `subagent_type`: pass `subagent_type: "general-purpose"` and
-    **`model: "sonnet"`**.
+  - **Claude Code** — your sub-agent tool takes `subagent_type`: pass `subagent_type: "general-purpose"`,
+    **`model: "sonnet"`**, and `effort: "medium"` when the tool takes an `effort`.
   - **Copilot CLI** — your sub-agent tool takes `agent_type`: pass `agent_type: "general-purpose"`, **`model`: the
     newest Claude Sonnet it lists**, and `reasoning_effort: "medium"`. When it lists no Sonnet, pass no `model`.
   - **Any other assistant whose sub-agent tool starts a general-purpose agent** — the same, with whichever of
@@ -96,10 +96,13 @@ python3 '<plugin root>/scripts/bc_run.py' slices --run '<run_dir>'
 - **No sub-agent tool** (Codex, Cursor) → check every slice yourself, one at a time, in order. Print
   `Check: <N> slices, read here one at a time — this assistant has no helpers`.
 
-Then list the slices again. Check each one still `checked: false` yourself — its helper stopped or never saved —
-and print `Check: slice <n> read here — <what its helper answered>`.
+Then list the slices again. Check each one still `checked: false` yourself — its helper stopped, or left a finding
+to fix — and print `Check: slice <n> read here — <what its helper answered>`. When a helper's answer lists
+`docs_not_read`, print `Enrichment: <how many> linked docs could not be read`, name each and why, and ask once
+whether to report without them.
 
-**Done when** `slices` shows every slice `checked: true`.
+**Done when** `slices` shows every slice `checked: true`, and every doc a helper couldn't read has the user's
+answer.
 
 ### 6. Check the board tickets
 
@@ -112,7 +115,7 @@ Skip this step when step 3 found no ticket. A ticket is proposed behavior, judge
 
 Read the requirements you haven't read in this session with
 `python3 '<plugin root>/scripts/bc_run.py' show --run '<run_dir>' --ids '<IDs>'`, up to 20 IDs a call. Save every
-ticket's findings in one command, without `--slice`: `howtos/detect-contradictions.md` → *Saving*.
+ticket's findings in one command: `howtos/detect-contradictions.md` → *Saving*.
 
 **Done when** every ticket has been compared, and its findings saved.
 
