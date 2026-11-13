@@ -889,7 +889,7 @@ def cmd_link(run_text: str) -> dict[str, Any]:
         links["subject_lines"] = len(links["slices"]) > 1 or bool(rest and any(rest))
         if rest is not None:
             links["outside"] = {"requirements": rest[0], "test_cases": rest[1]}
-        clear_pairs(run)
+        clear_later_slices(run)
     write_json(run / "links.json", links)
     update_manifest(run, linked_at=links["linked_at"], readiness=readiness, counts=counts, lines=lines, missing=missing, mismatches=mismatches)
     printed = [
@@ -2126,7 +2126,7 @@ def missing_lines(run: Path, slices: list[dict[str, Any]]) -> dict[int, list[str
     """For each slice of requirements and test cases, its items with no subject line yet."""
     saved = saved_lines(run)
     return {n: [rid for rid in slice_items(entry) if key(rid) not in saved]
-            for n, entry in enumerate(slices, start=1) if entry.get("kind") != "pairs"}
+            for n, entry in enumerate(slices, start=1) if not entry.get("kind")}
 
 
 def as_case_key(text: Any) -> str:
@@ -2177,9 +2177,10 @@ def cmd_subjects(run_text: str, number: int, add_text: str) -> dict[str, Any]:
 
 
 def all_slices(run: Path, links: dict[str, Any]) -> list[dict[str, Any]]:
-    """The run's slices: those `link` cut, then the slices of pairs `match` made, numbered on from them."""
-    pairs = read_json(run / "pairs.json")
-    return [*(links.get("slices") or []), *((pairs.get("slices") or []) if isinstance(pairs, dict) else [])]
+    """The run's slices: those `link` cut, then the slices of pairs `match` made and the slices of board tickets
+    `tickets` made, numbered on from them."""
+    later = [read_json(run / name) for name in ("pairs.json", "tickets.json")]
+    return [*(links.get("slices") or []), *(entry for made in later if isinstance(made, dict) for entry in made.get("slices") or [])]
 
 
 def run_slices(run: Path) -> list[dict[str, Any]]:
@@ -2212,14 +2213,14 @@ def cmd_slices(run_text: str, number: int = 0) -> dict[str, Any]:
         return {**found, "requirements": len(entry.get("requirements") or []), "test_cases": len(entry.get("test_cases") or []),
                 "parts": len(entry.get("parts") or []), "docs": len(entry.get("docs") or []),
                 "kb": round(int(entry.get("bytes") or 0) / 1000), "checked": n in checked, "findings": counts.get(n, 0),
-                **({"pairs": len(entry.get("pairs") or [])} if entry.get("kind") == "pairs" else {})}
+                **({entry["kind"]: len(entry.get(entry["kind"]) or [])} if entry.get("kind") else {})}
 
     if number:
         entry = slice_at(slices, number)
         answer = {"run_dir": str(run), **row(number, entry), "of": len(slices),
                   "parts": [str(run / part) for part in entry.get("parts") or []],
                   "docs": [str(run / doc) for doc in entry.get("docs") or []]}
-        if entry.get("kind") != "pairs":
+        if not entry.get("kind"):
             links = read_json(run / "links.json") or {}
             answer["needs_lines"] = missing_lines(run, slices).get(number, []) if links.get("subject_lines") else []
         else:
@@ -2280,11 +2281,57 @@ def closest(vectors: list[dict[str, float]], queries: list[int], allowed: Any) -
     return found
 
 
-def clear_pairs(run: Path) -> None:
-    """What `match` made goes with the slices it was made from."""
-    (run / "pairs.json").unlink(missing_ok=True)
-    for old in (run / "pairs").glob("*.md") if (run / "pairs").is_dir() else []:
-        old.unlink()
+def clear_later_slices(run: Path) -> None:
+    """What `match` and `tickets` made goes with the slices it was made from."""
+    for kind in ("pairs", "tickets"):
+        (run / f"{kind}.json").unlink(missing_ok=True)
+        for old in (run / kind).glob("*.md") if (run / kind).is_dir() else []:
+            old.unlink()
+
+
+def own_words_vector(item: dict[str, Any]) -> dict[str, float]:
+    """An item no reader wrote a subject line for, by its own words: its title names the subject."""
+    expected = [step.get("expected") for step in (item.get("raw_fields") or {}).get("steps") or [] if isinstance(step, dict)]
+    return subject_vector(item.get("title"), flat_text([item.get("description"), *expected]))
+
+
+def write_unit_slices(run: Path, units: list[dict[str, Any]], texts: dict[str, str], first: int, kind: str, title: str,
+                      intro: str, requirements: dict[str, Any], cases: dict[str, Any]) -> list[tuple[list[int], dict[str, Any]]]:
+    """Units — each a heading, then the items it shows — cut into slices of their own, numbered on from `first`, each
+    written to `<kind>/` in parts small enough for one read, an item shown once a slice. Each slice's units and entry."""
+    sizes = {**{doc: file_bytes(run, [doc]) for unit in units for doc in unit["docs"]},
+             **{rid: text_bytes(text) for rid, text in texts.items()}}
+    weights = [(text_bytes(u["head"]), u["show"] + u["docs"]) for u in units]
+    groups = split_evenly(weights, sizes, SLICE_BYTES) if units else []
+    made = []
+    (run / kind).mkdir(mode=0o700, exist_ok=True)
+    for number, group in enumerate(groups, start=first):
+        blocks: list[tuple[str, str]] = []
+        shown: dict[str, str] = {}
+        for unit in (units[i] for i in group):
+            blocks.append((unit["head"], ""))
+            for rid in unit["show"]:
+                if rid in shown:
+                    blocks.append((f"### {rid} — shown above, {shown[rid]}\n\n", unit["restart"]))
+                else:
+                    shown[rid] = unit["label"]
+                    blocks.append((texts[rid], unit["restart"]))
+        bodies = pack_blocks(blocks)
+        names = []
+        for p, body in enumerate(bodies, start=1):
+            heading = f"# Slice {number}: {title}" + (f" — part {p} of {len(bodies)}" if len(bodies) > 1 else "")
+            names.append(f"{kind}/{number:02d}-{p}.md")
+            write_private(run / names[-1], f"{heading}\n{intro}{body}".rstrip() + "\n")
+        members = list(dict.fromkeys(rid for i in group for rid in units[i]["members"]))
+        made.append((group, {
+            "kind": kind,
+            "features": list(dict.fromkeys(item_feature(rid, requirements, cases) for rid in members)),
+            "parts": names, "docs": list(dict.fromkeys(doc for i in group for doc in units[i]["docs"])),
+            "requirements": [rid for rid in members if find_item(rid, requirements, cases)[0] == "requirement"],
+            "test_cases": [rid for rid in members if find_item(rid, requirements, cases)[0] == "test case"],
+            "bytes": file_bytes(run, names),
+        }))
+    return made
 
 
 def item_text(rid: str, requirements: dict[str, Any], cases: dict[str, Any], docs_by_req: dict[str, list[dict[str, Any]]],
@@ -2337,10 +2384,8 @@ def cmd_match(run_text: str) -> dict[str, Any]:
     if links.get("outside"):  # the rest of the product, matched by its own words: its titles name the subject
         for item in [*requirements.values(), *cases.values()]:
             if str(item.get("id") or "") and key(item.get("id")) not in where:
-                expected = [step.get("expected") for step in (item.get("raw_fields") or {}).get("steps") or []
-                            if isinstance(step, dict)]
                 items.append(str(item["id"]))
-                vectors.append(subject_vector(item.get("title"), flat_text([item.get("description"), *expected])))
+                vectors.append(own_words_vector(item))
 
     def allowed(i: int, j: int) -> bool:
         return j >= in_scope or not where[key(items[i])] & where[key(items[j])]
@@ -2367,44 +2412,116 @@ def cmd_match(run_text: str) -> dict[str, Any]:
         for rid in ids + context:
             texts.setdefault(rid, item_text(rid, requirements, cases, docs_by_req, missing_by_req))
         docs = feature_docs([requirements[key(rid)] for rid in ids + context if key(rid) in requirements], docs_by_req)
-        units.append({"n": n, "ids": ids, "context": context, "docs": docs, "head": head + "\n"})
-    sizes = {**{doc: file_bytes(run, [doc]) for unit in units for doc in unit["docs"]},
-             **{rid: text_bytes(text) for rid, text in texts.items()}}
-    weights = [(text_bytes(u["head"]), u["ids"] + u["context"] + u["docs"]) for u in units]
-    groups = split_evenly(weights, sizes, SLICE_BYTES) if units else []
+        units.append({"head": head + "\n", "show": ids + context, "members": ids, "docs": docs,
+                      "label": f"in pair {n}", "restart": f"## Pair {n} (continued)\n\n"})
     made = []
-    (run / "pairs").mkdir(mode=0o700, exist_ok=True)
-    for number, group in enumerate(groups, start=len(feature_slices) + 1):
-        blocks: list[tuple[str, str]] = []
-        shown: dict[str, int] = {}
-        for unit in (units[i] for i in group):
-            restart = f"## Pair {unit['n']} (continued)\n\n"
-            blocks.append((unit["head"], ""))
-            for rid in unit["ids"] + unit["context"]:
-                if rid in shown:
-                    blocks.append((f"### {rid} — shown above, in pair {shown[rid]}\n\n", restart))
-                else:
-                    shown[rid] = unit["n"]
-                    blocks.append((texts[rid], restart))
-        bodies = pack_blocks(blocks)
-        names = []
-        for p, body in enumerate(bodies, start=1):
-            title = f"# Slice {number}: items on the same subject, in pairs" + (f" — part {p} of {len(bodies)}" if len(bodies) > 1 else "")
-            names.append(f"pairs/{number:02d}-{p}.md")
-            write_private(run / names[-1], f"{title}\n{PAIRS_INTRO}{body}".rstrip() + "\n")
-        members = list(dict.fromkeys(rid for i in group for rid in units[i]["ids"]))
-        made.append({
-            "kind": "pairs",
-            "features": list(dict.fromkeys(item_feature(rid, requirements, cases) for rid in members)),
-            "parts": names, "docs": list(dict.fromkeys(doc for i in group for doc in units[i]["docs"])),
-            "requirements": [rid for rid in members if find_item(rid, requirements, cases)[0] == "requirement"],
-            "test_cases": [rid for rid in members if find_item(rid, requirements, cases)[0] == "test case"],
-            "pairs": [units[i]["ids"] for i in group],
-            "bytes": file_bytes(run, names),
-        })
+    for group, entry in write_unit_slices(run, units, texts, len(feature_slices) + 1, "pairs",
+                                          "items on the same subject, in pairs", PAIRS_INTRO, requirements, cases):
+        entry["pairs"] = [units[i]["members"] for i in group]
+        made.append(entry)
     record = {"matched_at": utc_now(), "pairs": len(units), "slices": made}
     write_json(run / "pairs.json", record)
     return pairs_answer(len(feature_slices), record)
+
+
+TICKETS_INTRO = (
+    "Each ticket is work in progress on the board; its own text is in your board read, not here. Compare each ticket with "
+    "the requirements and test cases under it, and nothing else: the ones it links to, and the ones on its subject.\n"
+    "Requirement and test case text below is verbatim from the source.\n\n"
+)
+
+
+def saved_tickets(run: Path) -> dict[str, dict[str, Any]]:
+    """The board tickets saved in the run, by key."""
+    data = read_json(run / "tickets.json")
+    found = data.get("tickets") if isinstance(data, dict) else None
+    return {key(t.get("id")): t for t in found or [] if isinstance(t, dict)}
+
+
+def check_ticket(raw: Any) -> tuple[dict[str, Any] | None, str]:
+    """One board ticket as the session saves it — key, title, link, linked IDs, subject line — or what is wrong with it."""
+    if not isinstance(raw, dict):
+        return None, 'each ticket is {"id": …, "title": …, "url": …, "linked_ids": […], "line": …}'
+    tid, title = one_line(raw.get("id")), one_line(raw.get("title"))
+    line = one_line(raw.get("line")) if isinstance(raw.get("line"), str) else ""
+    if not tid or not title:
+        return None, "id and title: the ticket's key and title, as the board shows them"
+    if not line or len(line) > MAX_LINE_CHARS:
+        return None, f"line: one line of at most {MAX_LINE_CHARS} characters: its subject, a colon, then what it will change"
+    url = str(raw.get("url") or "").strip()
+    linked = raw.get("linked_ids")
+    return {"id": tid, "title": title, "url": url if url.startswith(("https://", "http://")) else "",
+            "linked_ids": tokens(linked) if isinstance(linked, (list, str)) else [], "line": line}, ""
+
+
+def cmd_tickets(run_text: str, add_text: str) -> dict[str, Any]:
+    """Save the board tickets the session read, each with its subject line; find for each the requirements it links to
+    and the requirements and test cases on its subject; and cut them into slices of their own, which the session checks:
+    only it holds the tickets' text."""
+    run = run_folder(run_text)
+    run_slices(run)
+    links = read_json(run / "links.json")
+    if (run / "tickets.json").is_file():
+        raise RunError("the tickets are saved already, and their slices cut: collect a new run to change them.")
+    if links.get("subject_lines") and not (run / "pairs.json").is_file():
+        raise RunError("run match first: the tickets' slices are numbered after the slices of pairs.")
+    try:
+        batch = json.loads(add_text)
+    except ValueError as exc:
+        raise RunError(f"--add isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
+    batch = [batch] if isinstance(batch, dict) else batch
+    if not isinstance(batch, list) or not batch:
+        raise RunError("--add takes the board tickets, as a JSON list: with no ticket, there is nothing to save.")
+    tickets: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for n, raw in enumerate(batch, start=1):
+        ticket, problem = check_ticket(raw)
+        if ticket and any(key(t["id"]) == key(ticket["id"]) for t in tickets):
+            ticket, problem = None, f"{ticket['id']} is listed twice"
+        if ticket:
+            tickets.append(ticket)
+        else:
+            rejected.append({"ticket": n, "id": str(raw.get("id") if isinstance(raw, dict) else ""), "problem": problem})
+    if rejected:  # all or nothing: the slices are cut once, from every ticket
+        return {"saved": 0, "rejected": rejected}
+    requirements, cases = run_items(run)
+    lines = saved_lines(run)
+    items = [*requirements.values(), *cases.values()]
+    kinds = ["requirement"] * len(requirements) + ["test case"] * len(cases)
+    vectors = [line_vector(lines[key(i.get("id"))]) if key(i.get("id")) in lines else own_words_vector(i) for i in items]
+    vectors += [line_vector(t["line"]) for t in tickets]
+    queries = list(range(len(items), len(vectors)))
+    alike = {kind: closest(vectors, queries, lambda i, j, kind=kind: j < len(items) and kinds[j] == kind)
+             for kind in ("requirement", "test case")}
+    docs_by_req, missing_by_req = doc_index(read_json(run / "docs.json") or {})
+    units, texts, alone = [], {}, []
+    for q, ticket in zip(queries, tickets):
+        linked = list(dict.fromkeys(str(found["id"]) for found in (find_item(rid, requirements, cases)[1] for rid in ticket["linked_ids"])
+                                    if found is not None))
+        near = [str(items[j]["id"]) for kind in ("requirement", "test case") for j in alike[kind][q]]
+        near = [rid for rid in near if rid not in linked]
+        ticket["compare"] = linked + near
+        if not ticket["compare"]:
+            alone.append(ticket["id"])
+            continue
+        said = [f"{', '.join(linked)} (it links to {'it' if len(linked) == 1 else 'them'})" if linked else "",
+                f"{', '.join(near)} (on its subject)" if near else ""]
+        head = (f"## {ticket['id']} — {ticket['title']}\n" + (f"Link: {ticket['url']}\n" if ticket["url"] else "")
+                + f"Subject line: \"{ticket['line']}\"\nCompare with: {' · '.join(s for s in said if s)}\n\n")
+        for rid in ticket["compare"]:
+            texts.setdefault(rid, item_text(rid, requirements, cases, docs_by_req, missing_by_req))
+        docs = feature_docs([requirements[key(rid)] for rid in ticket["compare"] if key(rid) in requirements], docs_by_req)
+        units.append({"ticket": ticket["id"], "head": head, "show": ticket["compare"], "members": ticket["compare"],
+                      "docs": docs, "label": f"with {ticket['id']}", "restart": f"## {ticket['id']} (continued)\n\n"})
+    first = len(all_slices(run, links)) + 1
+    made = []
+    for group, entry in write_unit_slices(run, units, texts, first, "tickets", "board tickets, each with what it is "
+                                          "compared with", TICKETS_INTRO, requirements, cases):
+        entry["tickets"] = [units[i]["ticket"] for i in group]
+        made.append(entry)
+    write_json(run / "tickets.json", {"saved_at": utc_now(), "tickets": tickets, "alone": alone, "slices": made})
+    return {"saved": len(tickets), "rejected": [], "alone": alone,
+            "slices": list(range(first, first + len(made))), "total": first - 1 + len(made)}
 
 
 def cmd_recent(project_text: str, max_age_minutes: int = RECENT_MINUTES) -> dict[str, Any]:
