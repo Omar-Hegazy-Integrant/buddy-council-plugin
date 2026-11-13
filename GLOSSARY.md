@@ -26,6 +26,10 @@ _Avoid_: credential, secret
 The address of a page in a provider that the user pastes into setup, such as a Jama project, a TestRail suite, or a Jira board. It names the provider and the site.
 _Avoid_: URL (alone), board URL
 
+**Board ticket**:
+An issue on the team's dev board that isn't done yet: work in progress, checked against the requirements and test cases before it ships.
+_Avoid_: board item, card
+
 ### Running the plugin
 
 **Assistant**:
@@ -57,7 +61,7 @@ One problem `/bc:contradiction` reports, such as a test case that expects a diff
 _Avoid_: issue, conflict (alone)
 
 **Slice**:
-A share of the requirements and test cases a command checks, small enough for one reader to check at once: a few whole features, or some of the requirements of a big one, each with its test cases — or pairs of items on the same subject from different parts of the Product.
+A share of the requirements and test cases a command checks, small enough for one reader to check at once: a few whole features, or some of the requirements of a big one, each with its test cases — or pairs of items on the same subject from different parts of the Product, or board tickets, each with the requirements and test cases on its subject.
 _Avoid_: chunk, batch
 
 **Product**:
@@ -65,7 +69,7 @@ Everything the requirements and test cases describe, all features together. A `/
 _Avoid_: system, project (alone)
 
 **Subject line**:
-One line a Slice's reader writes for each requirement and test case: what it is about, then what it says. *(made-up)* "Session: ends after 5 minutes idle." Code pairs the items whose subject lines share a subject but no Slice.
+One line written for each requirement, test case, and board ticket: what it is about, then what it says. *(made-up)* "Session: ends after 5 minutes idle." Code pairs the items whose subject lines share a subject but no Slice, and finds what shares each board ticket's subject.
 _Avoid_: summary, gist
 
 **Helper**:

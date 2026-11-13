@@ -15,6 +15,8 @@ step to the analysis as files, so the data itself never passes through a model:
                      stands alone
   lines/*.json       each slice reader's subject lines: what each item is about, and what it says (``subjects``)
   pairs.json, pairs/ items on the same subject in different slices, or outside the scope, in slices of pairs (``match``)
+  tickets.json,      the board tickets the session read, each with its subject line — never their text — and
+  tickets/           slices of tickets, each with the requirements and test cases it is compared with (``tickets``)
   findings/*.json    what /bc:contradiction found, each checked against the run (``findings``)
   report-N.md        the contradiction report, written from the findings, in parts (``report``)
   manifest.json      what was collected, when, and the counts
@@ -50,6 +52,9 @@ Subcommands, each printing one JSON object to stdout:
   match  --run DIR                                     pair the items on the same subject in different slices — or,
                                                        in a run on part of the product, with the rest of it — and
                                                        cut the pairs into slices of their own
+  tickets --run DIR --add JSON                         save the board tickets, each with its subject line; find for
+                                                       each the requirements it links to and the requirements and
+                                                       test cases on its subject; cut them into slices of their own
   report --run DIR [--lines JSON] [--partial TEXT]     write the contradiction report from the saved findings,
                                                        in parts small enough for one read
 
@@ -157,6 +162,14 @@ def read_json(path: Path) -> Any:
         return None
     except ValueError as exc:
         raise RunError(f"{path.name} is not valid JSON ({exc}) — re-run the collect step.") from None
+
+
+def json_argument(text: str, flag: str) -> Any:
+    """A JSON argument, which the bash hook approves only as one single-quoted line."""
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise RunError(f"{flag} isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
 
 
 def run_folder(text: str) -> Path:
@@ -889,7 +902,7 @@ def cmd_link(run_text: str) -> dict[str, Any]:
         links["subject_lines"] = len(links["slices"]) > 1 or bool(rest and any(rest))
         if rest is not None:
             links["outside"] = {"requirements": rest[0], "test_cases": rest[1]}
-        clear_pairs(run)
+        clear_later_slices(run)
     write_json(run / "links.json", links)
     update_manifest(run, linked_at=links["linked_at"], readiness=readiness, counts=counts, lines=lines, missing=missing, mismatches=mismatches)
     printed = [
@@ -2126,7 +2139,7 @@ def missing_lines(run: Path, slices: list[dict[str, Any]]) -> dict[int, list[str
     """For each slice of requirements and test cases, its items with no subject line yet."""
     saved = saved_lines(run)
     return {n: [rid for rid in slice_items(entry) if key(rid) not in saved]
-            for n, entry in enumerate(slices, start=1) if entry.get("kind") != "pairs"}
+            for n, entry in enumerate(slices, start=1) if not entry.get("kind")}
 
 
 def as_case_key(text: Any) -> str:
@@ -2146,12 +2159,12 @@ def cmd_subjects(run_text: str, number: int, add_text: str) -> dict[str, Any]:
         raise RunError("this run needs no subject lines: it is one slice, with nothing outside it to compare it with.")
     if entry.get("kind") == "pairs":
         raise RunError(f"slice {number} holds pairs: their items' lines were saved with the slices they come from.")
+    if entry.get("kind") == "tickets":
+        raise RunError(f"slice {number} holds board tickets: their lines were saved with `tickets`, and their items' "
+                       "with the slices they come from.")
     if (run / "pairs.json").is_file():
         raise RunError("this run is matched already, from the lines saved before: collect a new run to change them.")
-    try:
-        batch = json.loads(add_text)
-    except ValueError as exc:
-        raise RunError(f"--add isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
+    batch = json_argument(add_text, "--add")
     if not isinstance(batch, dict):
         raise RunError('--add takes one JSON object: {"<ID>": "<subject>: <what it says>", …}')
     items = {key(rid): rid for rid in slice_items(entry)}
@@ -2177,9 +2190,10 @@ def cmd_subjects(run_text: str, number: int, add_text: str) -> dict[str, Any]:
 
 
 def all_slices(run: Path, links: dict[str, Any]) -> list[dict[str, Any]]:
-    """The run's slices: those `link` cut, then the slices of pairs `match` made, numbered on from them."""
-    pairs = read_json(run / "pairs.json")
-    return [*(links.get("slices") or []), *((pairs.get("slices") or []) if isinstance(pairs, dict) else [])]
+    """The run's slices: those `link` cut, then the slices of pairs `match` made and the slices of board tickets
+    `tickets` made, numbered on from them."""
+    later = [read_json(run / f"{kind}.json") for kind in LATER_SLICES]
+    return [*(links.get("slices") or []), *(entry for made in later if isinstance(made, dict) for entry in made.get("slices") or [])]
 
 
 def run_slices(run: Path) -> list[dict[str, Any]]:
@@ -2212,14 +2226,14 @@ def cmd_slices(run_text: str, number: int = 0) -> dict[str, Any]:
         return {**found, "requirements": len(entry.get("requirements") or []), "test_cases": len(entry.get("test_cases") or []),
                 "parts": len(entry.get("parts") or []), "docs": len(entry.get("docs") or []),
                 "kb": round(int(entry.get("bytes") or 0) / 1000), "checked": n in checked, "findings": counts.get(n, 0),
-                **({"pairs": len(entry.get("pairs") or [])} if entry.get("kind") == "pairs" else {})}
+                **({entry["kind"]: len(entry.get(entry["kind"]) or [])} if entry.get("kind") else {})}
 
     if number:
         entry = slice_at(slices, number)
         answer = {"run_dir": str(run), **row(number, entry), "of": len(slices),
                   "parts": [str(run / part) for part in entry.get("parts") or []],
                   "docs": [str(run / doc) for doc in entry.get("docs") or []]}
-        if entry.get("kind") != "pairs":
+        if not entry.get("kind"):
             links = read_json(run / "links.json") or {}
             answer["needs_lines"] = missing_lines(run, slices).get(number, []) if links.get("subject_lines") else []
         else:
@@ -2254,10 +2268,10 @@ def line_vector(line: str) -> dict[str, float]:
     return subject_vector(subject, said) if colon else subject_vector("", line)
 
 
-def closest(vectors: list[dict[str, float]], queries: list[int], allowed: Any) -> dict[int, list[int]]:
-    """For each query, the items most like it, at most MATCHES_PER_ITEM above SAME_SUBJECT: the cosine of their words,
-    each weighted by how rare it is, where a word either item names as its subject counts as a subject word for both.
-    A word more than half the items use names no subject."""
+def subject_likeness(vectors: list[dict[str, float]], queries: list[int]) -> dict[int, dict[int, float]]:
+    """For each query, how alike it is to each item it shares a word with, from 0 to 1: the cosine of their words, each
+    weighted by how rare it is, where a word either item names as its subject counts as a subject word for both. A word
+    more than half the items use names no subject. The same for both items of a pair, whichever is the query."""
     total = len(vectors)
     seen = Counter(term for vector in vectors for term in vector)
     rarity = {term: math.log(total / n) for term, n in seen.items() if n <= COMMON * total}
@@ -2267,24 +2281,86 @@ def closest(vectors: list[dict[str, float]], queries: list[int], allowed: Any) -
     for i, vector in enumerate(kept):
         for term, weight in vector.items():
             postings.setdefault(term, []).append((i, weight))
-    found: dict[int, list[int]] = {}
+    found: dict[int, dict[int, float]] = {}
     for i in queries:
         shared: dict[int, float] = {}
         for term, weight in kept[i].items():
             for j, other in postings[term]:
                 if j != i:
                     shared[j] = shared.get(j, 0.0) + (max(weight, other) * rarity[term]) ** 2
-        scores = {j: min(1.0, s / (norms[i] * norms[j])) for j, s in shared.items()}
-        alike = sorted((j for j, s in scores.items() if s >= SAME_SUBJECT and allowed(i, j)), key=lambda j: (-scores[j], j))
-        found[i] = alike[:MATCHES_PER_ITEM]
+        found[i] = {j: min(1.0, s / (norms[i] * norms[j])) for j, s in shared.items()}
     return found
 
 
-def clear_pairs(run: Path) -> None:
-    """What `match` made goes with the slices it was made from."""
-    (run / "pairs.json").unlink(missing_ok=True)
-    for old in (run / "pairs").glob("*.md") if (run / "pairs").is_dir() else []:
-        old.unlink()
+def closest(vectors: list[dict[str, float]], queries: list[int], allowed: Any) -> dict[int, list[int]]:
+    """For each query, the items most like it, at most MATCHES_PER_ITEM above SAME_SUBJECT."""
+    found = subject_likeness(vectors, queries)
+    return {i: sorted((j for j, s in scores.items() if s >= SAME_SUBJECT and allowed(i, j)), key=lambda j: (-scores[j], j))
+            [:MATCHES_PER_ITEM] for i, scores in found.items()}
+
+
+LATER_SLICES = ("pairs", "tickets")  # the kinds of slice cut after the run's own, in this order, each by its command
+
+
+def clear_later_slices(run: Path) -> None:
+    """What `match` and `tickets` made goes with the slices it was made from."""
+    for kind in LATER_SLICES:
+        (run / f"{kind}.json").unlink(missing_ok=True)
+        for old in (run / kind).glob("*.md") if (run / kind).is_dir() else []:
+            old.unlink()
+
+
+def own_words_vector(item: dict[str, Any]) -> dict[str, float]:
+    """An item no reader wrote a subject line for, by its own words: its title names the subject."""
+    expected = [step.get("expected") for step in (item.get("raw_fields") or {}).get("steps") or [] if isinstance(step, dict)]
+    return subject_vector(item.get("title"), flat_text([item.get("description"), *expected]))
+
+
+def write_unit_slices(run: Path, units: list[dict[str, Any]], first: int, kind: str, title: str, intro: str,
+                      requirements: dict[str, Any], cases: dict[str, Any]) -> list[dict[str, Any]]:
+    """Units cut into slices of their own, numbered on from `first`, each written to `<kind>/` in parts small enough for
+    one read, with an item shown once a slice. Each unit holds `head`, its heading; `items`, the IDs shown under it,
+    verbatim, with the docs their requirements cite; `members`, the ones its slice counts as its own; `listed`, what its
+    slice's entry lists for it under `kind`; `seen_as`, how a repeat refers back to it; and `restart`, the heading a part
+    opens with when the unit runs on into it."""
+    docs_by_req, missing_by_req = doc_index(read_json(run / "docs.json") or {})
+    texts = {rid: item_text(rid, requirements, cases, docs_by_req, missing_by_req) for u in units for rid in u["items"]}
+    for unit in units:
+        unit["docs"] = feature_docs([requirements[key(rid)] for rid in unit["items"] if key(rid) in requirements], docs_by_req)
+    sizes = {**{doc: file_bytes(run, [doc]) for unit in units for doc in unit["docs"]},
+             **{rid: text_bytes(text) for rid, text in texts.items()}}
+    weights = [(text_bytes(u["head"]), u["items"] + u["docs"]) for u in units]
+    groups = split_evenly(weights, sizes, SLICE_BYTES) if units else []
+    made = []
+    (run / kind).mkdir(mode=0o700, exist_ok=True)
+    for number, group in enumerate(groups, start=first):
+        blocks: list[tuple[str, str]] = []
+        shown: dict[str, str] = {}
+        for unit in (units[i] for i in group):
+            blocks.append((unit["head"], ""))
+            for rid in unit["items"]:
+                if rid in shown:
+                    blocks.append((f"### {rid} — shown above, {shown[rid]}\n\n", unit["restart"]))
+                else:
+                    shown[rid] = unit["seen_as"]
+                    blocks.append((texts[rid], unit["restart"]))
+        bodies = pack_blocks(blocks)
+        names = []
+        for p, body in enumerate(bodies, start=1):
+            heading = f"# Slice {number}: {title}" + (f" — part {p} of {len(bodies)}" if len(bodies) > 1 else "")
+            names.append(f"{kind}/{number:02d}-{p}.md")
+            write_private(run / names[-1], f"{heading}\n{intro}{body}".rstrip() + "\n")
+        members = list(dict.fromkeys(rid for i in group for rid in units[i]["members"]))
+        made.append({
+            "kind": kind,
+            "features": list(dict.fromkeys(item_feature(rid, requirements, cases) for rid in members)),
+            "parts": names, "docs": list(dict.fromkeys(doc for i in group for doc in units[i]["docs"])),
+            "requirements": [rid for rid in members if find_item(rid, requirements, cases)[0] == "requirement"],
+            "test_cases": [rid for rid in members if find_item(rid, requirements, cases)[0] == "test case"],
+            kind: [units[i]["listed"] for i in group],
+            "bytes": file_bytes(run, names),
+        })
+    return made
 
 
 def item_text(rid: str, requirements: dict[str, Any], cases: dict[str, Any], docs_by_req: dict[str, list[dict[str, Any]]],
@@ -2337,18 +2413,15 @@ def cmd_match(run_text: str) -> dict[str, Any]:
     if links.get("outside"):  # the rest of the product, matched by its own words: its titles name the subject
         for item in [*requirements.values(), *cases.values()]:
             if str(item.get("id") or "") and key(item.get("id")) not in where:
-                expected = [step.get("expected") for step in (item.get("raw_fields") or {}).get("steps") or []
-                            if isinstance(step, dict)]
                 items.append(str(item["id"]))
-                vectors.append(subject_vector(item.get("title"), flat_text([item.get("description"), *expected])))
+                vectors.append(own_words_vector(item))
 
     def allowed(i: int, j: int) -> bool:
         return j >= in_scope or not where[key(items[i])] & where[key(items[j])]
 
     best = closest(vectors, list(range(in_scope)), allowed)
     matched = sorted({(min(i, j), max(i, j)) for i, alike in best.items() for j in alike})
-    docs_by_req, missing_by_req = doc_index(read_json(run / "docs.json") or {})
-    units, texts = [], {}
+    units = []
     for n, (i, j) in enumerate(matched, start=1):
         ids = [items[i], items[j]]
         context: list[str] = []
@@ -2364,47 +2437,127 @@ def cmd_match(run_text: str) -> dict[str, Any]:
             head += f"Subject lines: {' · '.join(said)}\n"
         if context:
             head += f"Also here, to tell which side is right: {', '.join(context)} — what the pair's test cases test.\n"
-        for rid in ids + context:
-            texts.setdefault(rid, item_text(rid, requirements, cases, docs_by_req, missing_by_req))
-        docs = feature_docs([requirements[key(rid)] for rid in ids + context if key(rid) in requirements], docs_by_req)
-        units.append({"n": n, "ids": ids, "context": context, "docs": docs, "head": head + "\n"})
-    sizes = {**{doc: file_bytes(run, [doc]) for unit in units for doc in unit["docs"]},
-             **{rid: text_bytes(text) for rid, text in texts.items()}}
-    weights = [(text_bytes(u["head"]), u["ids"] + u["context"] + u["docs"]) for u in units]
-    groups = split_evenly(weights, sizes, SLICE_BYTES) if units else []
-    made = []
-    (run / "pairs").mkdir(mode=0o700, exist_ok=True)
-    for number, group in enumerate(groups, start=len(feature_slices) + 1):
-        blocks: list[tuple[str, str]] = []
-        shown: dict[str, int] = {}
-        for unit in (units[i] for i in group):
-            restart = f"## Pair {unit['n']} (continued)\n\n"
-            blocks.append((unit["head"], ""))
-            for rid in unit["ids"] + unit["context"]:
-                if rid in shown:
-                    blocks.append((f"### {rid} — shown above, in pair {shown[rid]}\n\n", restart))
-                else:
-                    shown[rid] = unit["n"]
-                    blocks.append((texts[rid], restart))
-        bodies = pack_blocks(blocks)
-        names = []
-        for p, body in enumerate(bodies, start=1):
-            title = f"# Slice {number}: items on the same subject, in pairs" + (f" — part {p} of {len(bodies)}" if len(bodies) > 1 else "")
-            names.append(f"pairs/{number:02d}-{p}.md")
-            write_private(run / names[-1], f"{title}\n{PAIRS_INTRO}{body}".rstrip() + "\n")
-        members = list(dict.fromkeys(rid for i in group for rid in units[i]["ids"]))
-        made.append({
-            "kind": "pairs",
-            "features": list(dict.fromkeys(item_feature(rid, requirements, cases) for rid in members)),
-            "parts": names, "docs": list(dict.fromkeys(doc for i in group for doc in units[i]["docs"])),
-            "requirements": [rid for rid in members if find_item(rid, requirements, cases)[0] == "requirement"],
-            "test_cases": [rid for rid in members if find_item(rid, requirements, cases)[0] == "test case"],
-            "pairs": [units[i]["ids"] for i in group],
-            "bytes": file_bytes(run, names),
-        })
+        units.append({"head": head + "\n", "items": ids + context, "members": ids, "listed": ids,
+                      "seen_as": f"in pair {n}", "restart": f"## Pair {n} (continued)\n\n"})
+    made = write_unit_slices(run, units, len(feature_slices) + 1, "pairs", "items on the same subject, in pairs",
+                             PAIRS_INTRO, requirements, cases)
     record = {"matched_at": utc_now(), "pairs": len(units), "slices": made}
     write_json(run / "pairs.json", record)
     return pairs_answer(len(feature_slices), record)
+
+
+TICKETS_INTRO = (
+    "Each ticket is work in progress on the board; its own text is in your board read, not here. Compare each ticket with "
+    "the requirements and test cases under it, and nothing else: the ones it links to, and the ones on its subject.\n"
+    "Requirement and test case text below is verbatim from the source.\n\n"
+)
+
+
+def saved_tickets(run: Path) -> dict[str, dict[str, Any]]:
+    """The board tickets saved in the run, by key."""
+    data = read_json(run / "tickets.json")
+    found = data.get("tickets") if isinstance(data, dict) else None
+    return {key(t.get("id")): t for t in found or [] if isinstance(t, dict)}
+
+
+def check_ticket(raw: Any) -> tuple[dict[str, Any] | None, str]:
+    """One board ticket as the session saves it — key, title, link, linked IDs, subject line — or what is wrong with it."""
+    if not isinstance(raw, dict):
+        return None, 'each ticket is {"id": …, "title": …, "url": …, "linked_ids": […], "line": …}'
+    tid, title = one_line(raw.get("id")), one_line(raw.get("title"))
+    line = one_line(raw.get("line")) if isinstance(raw.get("line"), str) else ""
+    if not tid or not title:
+        return None, "id and title: the ticket's key and title, as the board shows them"
+    if not line or len(line) > MAX_LINE_CHARS:
+        return None, f"line: one line of at most {MAX_LINE_CHARS} characters: its subject, a colon, then what it will change"
+    url = str(raw.get("url") or "").strip()
+    linked = raw.get("linked_ids")
+    return {"id": tid, "title": title, "url": url if url.startswith(("https://", "http://")) else "",
+            "linked_ids": tokens(linked) if isinstance(linked, (list, str)) else [], "line": line}, ""
+
+
+def id_prefix(rid: Any) -> str:
+    """An ID without its number — `CWA-REQ-` of CWA-REQ-85 — which tells a requirement's ID from another ticket's key."""
+    return re.sub(r"\d+$", "", key(rid))
+
+
+def cmd_tickets(run_text: str, add_text: str) -> dict[str, Any]:
+    """Save the board tickets the session read, each with its subject line; find for each the requirements it links to
+    and the requirements and test cases on its subject; and cut them into slices of their own, which the session checks:
+    only it holds the tickets' text."""
+    run = run_folder(run_text)
+    run_slices(run)
+    links = read_json(run / "links.json")
+    if (run / "tickets.json").is_file():
+        raise RunError("the tickets are saved already, and their slices cut: collect a new run to change them.")
+    if links.get("subject_lines") and not (run / "pairs.json").is_file():
+        raise RunError("run match first: the tickets' slices are numbered after the slices of pairs.")
+    batch = json_argument(add_text, "--add")
+    batch = [batch] if isinstance(batch, dict) else batch
+    if not isinstance(batch, list) or not batch:
+        raise RunError("--add takes the board tickets, as a JSON list: with no ticket, there is nothing to save.")
+    tickets: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for n, raw in enumerate(batch, start=1):
+        ticket, problem = check_ticket(raw)
+        if ticket and any(key(t["id"]) == key(ticket["id"]) for t in tickets):
+            ticket, problem = None, f"{ticket['id']} is listed twice"
+        if ticket:
+            tickets.append(ticket)
+        else:
+            rejected.append({"ticket": n, "id": one_line(raw.get("id")) if isinstance(raw, dict) else "", "problem": problem})
+    if rejected:  # all or nothing: the slices are cut once, from every ticket
+        return {"saved": 0, "rejected": rejected}
+    requirements, cases = run_items(run)
+    lines = saved_lines(run)
+    items = [*requirements.values(), *cases.values()]
+    kinds = ["requirement"] * len(requirements) + ["test case"] * len(cases)
+    vectors = [line_vector(lines[key(i.get("id"))]) if key(i.get("id")) in lines else own_words_vector(i) for i in items]
+    vectors += [line_vector(t["line"]) for t in tickets]
+    queries = list(range(len(items), len(vectors)))
+    scores = subject_likeness(vectors, queries)
+    # Matched from both sides, as `match` pairs items: a ticket's closest few of each kind, and each item whose own
+    # closest few tickets include it — so a ticket that many test cases check is compared with all of them.
+    near: dict[int, set[int]] = {q: set() for q in queries}
+    for q in queries:
+        for kind in ("requirement", "test case"):
+            alike = sorted((j for j, x in scores[q].items() if j < len(items) and kinds[j] == kind and x >= SAME_SUBJECT),
+                           key=lambda j: (-scores[q][j], j))
+            near[q].update(alike[:MATCHES_PER_ITEM])
+    by_item: dict[int, list[int]] = {}
+    for q in queries:
+        for j, x in scores[q].items():
+            if j < len(items) and x >= SAME_SUBJECT:
+                by_item.setdefault(j, []).append(q)
+    for j, found in by_item.items():
+        for q in sorted(found, key=lambda q: (-scores[q][j], q))[:MATCHES_PER_ITEM]:
+            near[q].add(j)
+    known = {id_prefix(rid) for rid in [*requirements, *cases]}
+    units, alone, not_in_run = [], [], {}
+    for q, ticket in zip(queries, tickets):
+        found = [find_item(rid, requirements, cases)[1] for rid in ticket["linked_ids"]]
+        linked = list(dict.fromkeys(str(item["id"]) for item in found if item is not None))
+        missing = [rid for rid, item in zip(ticket["linked_ids"], found) if item is None and id_prefix(rid) in known]
+        if missing:
+            not_in_run[ticket["id"]] = missing
+        on_subject = [str(items[j]["id"]) for j in sorted(near[q]) if str(items[j]["id"]) not in linked]
+        ticket.update({"compare": linked + on_subject, "not_in_run": missing})
+        if not ticket["compare"]:
+            alone.append(ticket["id"])
+            continue
+        said = [f"{', '.join(linked)} (it links to {'it' if len(linked) == 1 else 'them'})" if linked else "",
+                f"{', '.join(on_subject)} (on its subject)" if on_subject else ""]
+        head = (f"## {ticket['id']} — {ticket['title']}\n" + (f"Link: {ticket['url']}\n" if ticket["url"] else "")
+                + f"Subject line: \"{ticket['line']}\"\nCompare with: {' · '.join(x for x in said if x)}\n"
+                + (f"Not in this run: {', '.join(missing)}\n" if missing else "") + "\n")
+        units.append({"head": head, "items": ticket["compare"], "members": ticket["compare"], "listed": ticket["id"],
+                      "seen_as": f"with {ticket['id']}", "restart": f"## {ticket['id']} (continued)\n\n"})
+    first = len(all_slices(run, links)) + 1
+    made = write_unit_slices(run, units, first, "tickets", "board tickets, each with what it is compared with",
+                             TICKETS_INTRO, requirements, cases)
+    write_json(run / "tickets.json", {"saved_at": utc_now(), "tickets": tickets, "alone": alone, "slices": made})
+    return {"saved": len(tickets), "rejected": [], "alone": alone, "not_in_run": not_in_run,
+            "slices": list(range(first, first + len(made))), "total": first - 1 + len(made)}
 
 
 def cmd_recent(project_text: str, max_age_minutes: int = RECENT_MINUTES) -> dict[str, Any]:
@@ -2606,7 +2759,7 @@ def outside_items(run: Path, requirements: dict[str, Any], cases: dict[str, Any]
 
 
 def check_item(entry: Any, severity: str, requirements: dict[str, Any], cases: dict[str, Any],
-               elsewhere: dict[str, str]) -> tuple[dict[str, Any] | None, str]:
+               elsewhere: dict[str, str], tickets: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
     """One side of a finding, looked up in the run with its quote found — or the reason it can't be."""
     if not isinstance(entry, dict) or not str(entry.get("id") or "").strip():
         return None, 'each item is {"id": …, "quote": …}'
@@ -2616,15 +2769,13 @@ def check_item(entry: Any, severity: str, requirements: dict[str, Any], cases: d
         return None, f"{rid}: quote its exact words"
     if len(quote) > MAX_QUOTE_CHARS:
         return None, f"{rid}: quote a phrase or a sentence, at most {MAX_QUOTE_CHARS} characters — not the whole text"
-    board = entry.get("board")
-    if board is not None:
-        if not isinstance(board, dict) or not one_line(board.get("title")):
-            return None, f'{rid}: a board ticket carries "board": {{"title": …, "url": …}}'
-        return {"id": rid, "type": BOARD, "title": one_line(board.get("title")), "url": str(board.get("url") or "").strip(),
-                "where": "", "quote": one_line(quote), "checked": False}, ""
     kind, item = find_item(rid, requirements, cases)
+    ticket = tickets.get(key(rid)) if item is None else None
+    if ticket is not None:  # its text is in the session's board read, not the run: its quote can't be checked
+        return {"id": ticket["id"], "type": BOARD, "title": ticket["title"], "url": ticket["url"], "where": "",
+                "quote": one_line(quote), "checked": False}, ""
     if item is None:
-        return None, f'{rid} is not in this run: check the ID. A board ticket carries "board": {{"title": …, "url": …}}'
+        return None, f"{rid} is not in this run: check the ID. A board ticket is in it once saved with `tickets`."
     found = {"id": str(item.get("id")), "type": kind, "title": one_line(item.get("title")),
              "url": str((item.get("raw_fields") or {}).get("url") or ""), "where": "", "quote": "", "checked": True}
     if quote:
@@ -2660,8 +2811,8 @@ def fix_of(value: Any, items: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"id": target["id"], "type": target["type"], "where": target["where"]}
 
 
-def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any],
-                  elsewhere: dict[str, str]) -> tuple[dict[str, Any] | None, list[str]]:
+def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any], elsewhere: dict[str, str],
+                  tickets: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
     if not isinstance(raw, dict):
         return None, ["a finding is a JSON object: items, severity, why, fix"]
     problems: list[str] = []
@@ -2673,7 +2824,7 @@ def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any],
         problems.append(f"items: 2 to {MAX_FINDING_ITEMS} — each side, or two places in an item that contradicts itself")
     items = []
     for entry in entries[:MAX_FINDING_ITEMS]:
-        item, problem = check_item(entry, severity, requirements, cases, elsewhere)
+        item, problem = check_item(entry, severity, requirements, cases, elsewhere, tickets)
         if item:
             items.append(item)
         else:
@@ -2681,7 +2832,18 @@ def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any],
     why = one_line(raw.get("why"))
     if not why or len(why) > MAX_WHY_CHARS:
         problems.append(f"why: one plain sentence on why they conflict, at most {MAX_WHY_CHARS} characters")
-    fix = fix_of(raw.get("fix"), items)
+    tickets_in = list(dict.fromkeys(i["id"] for i in items if i["type"] == BOARD))
+    wanted = raw.get("fix")
+    named = [fix_of(value, items) for value in (wanted if isinstance(wanted, list) else [wanted])]
+    fix = named[0] if len(named) == 1 else None
+    if tickets_in and named and all((found or {}).get("type") == "test case" for found in named):
+        # A ticket hasn't shipped: the test cases it will break are updated when it does, never offered as fixes now.
+        fix = {"update": list({found["id"]: {"id": found["id"], "where": found["where"]} for found in named}.values()),
+               "when_ships": tickets_in}
+    elif isinstance(wanted, list) and not problems:
+        problems.append("fix: a list names only test cases among the items, the ones the ticket will break" if tickets_in else
+                        "fix: one ID, or \"decide\" — a list of test cases is for a board ticket's finding")
+        fix = {}
     if fix is None and not problems:
         ids = ", ".join(dict.fromkeys(i["id"] for i in items))
         problems.append(f'fix: the ID of the item to change ({ids}), or "decide" when a person must choose')
@@ -2729,7 +2891,7 @@ def numbered(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def fixes_a_test_case(finding: dict[str, Any]) -> bool:
     """A conflict whose fix is a test case, every quote checked: what the fix offer covers."""
     return (finding["severity"] != "low" and (finding.get("fix") or {}).get("type") == "test case"
-            and all(i.get("checked") for i in finding["items"]))
+            and not on_board(finding) and all(i.get("checked") for i in finding["items"]))
 
 
 def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "", slice_number: int = 0) -> dict[str, Any]:
@@ -2739,10 +2901,7 @@ def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "", slic
         if not add_text.strip():
             raise RunError("--slice comes with --add: the slice's findings, or [] when it has none.")
     if add_text.strip():
-        try:
-            batch = json.loads(add_text)
-        except ValueError as exc:
-            raise RunError(f"--add isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
+        batch = json_argument(add_text, "--add")
         if isinstance(batch, dict):
             batch = batch["findings"] if isinstance(batch.get("findings"), list) else [batch]
         if not isinstance(batch, list) or not (batch or slice_number):
@@ -2751,10 +2910,11 @@ def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "", slic
             raise RunError("requirements.json is missing — collect the run before saving findings.")
         requirements, cases = run_items(run)
         elsewhere = outside_items(run, requirements, cases)
+        tickets = saved_tickets(run)
         saved: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
         for n, raw in enumerate(batch, start=1):
-            finding, problems = check_finding(raw, requirements, cases, elsewhere)
+            finding, problems = check_finding(raw, requirements, cases, elsewhere, tickets)
             if finding:
                 saved.append(finding)
             else:
@@ -2803,6 +2963,10 @@ def link_text(title: str, url: str) -> str:
 def fix_sentence(fix: dict[str, Any]) -> str:
     if fix.get("decide"):
         return "a person decides which side is right."
+    if fix.get("update"):
+        cases = [f"{c['id']} ({c['where']})" if c.get("where") else c["id"] for c in fix["update"]]
+        tickets = fix["when_ships"]
+        return f"update {and_list(cases)} when {and_list(tickets)} {'ships' if len(tickets) == 1 else 'ship'}."
     return f"change {fix['id']}{', ' + fix['where'] if fix.get('where') else ''}."
 
 
@@ -2824,7 +2988,7 @@ def finding_block(finding: dict[str, Any], severity_in_heading: bool = False) ->
         if item.get("quote"):
             text += f': "{item["quote"]}"'
             if not item.get("checked"):
-                text += " _(not checked: board tickets aren't saved in the run)_"
+                text += " _(not checked: the ticket's text isn't in the run)_"
         lines.append(f"- {text}")
     lines += [f"- **Why:** {finding['why']}", f"- **Fix:** {fix_sentence(finding['fix'])}"]
     return "\n".join(lines) + "\n\n"
@@ -2846,8 +3010,49 @@ def and_list(items: list[str]) -> str:
     return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
+def when_shipped_blocks(findings: list[dict[str, Any]], more: str) -> list[tuple[str, str]]:
+    """For each ticket, the test cases its findings say to update when it ships."""
+    tickets: dict[str, dict[str, Any]] = {}
+    for finding in findings:
+        fix = finding.get("fix") or {}
+        for tid in fix.get("when_ships") or []:
+            item = next(i for i in finding["items"] if i["type"] == BOARD and i["id"] == tid)
+            entry = tickets.setdefault(key(tid), {"item": item, "cases": [], "findings": []})
+            entry["cases"] += [c["id"] for c in fix["update"] if c["id"] not in entry["cases"]]
+            entry["findings"].append(str(finding["n"]))
+    heading = "## Test cases to update when the tickets ship"
+    blocks = []
+    for n, entry in enumerate(tickets.values()):
+        item, numbers = entry["item"], entry["findings"]
+        line = (f"- **{item['id']}** {link_text(item['title'], item['url'])}: {and_list(entry['cases'])} — "
+                f"{'finding' if len(numbers) == 1 else 'findings'} {and_list(numbers)}.\n")
+        blocks.append(((f"{heading}\n\n" if n == 0 else "") + line, f"{more}{heading} (continued)\n\n"))
+    if blocks:
+        blocks[-1] = (blocks[-1][0] + "\n", blocks[-1][1])
+    return blocks
+
+
+MAX_LISTED_TICKETS = 20  # tickets a report line names; the rest are counted
+
+
+def tickets_lines(saved: dict[str, Any]) -> list[str]:
+    """What the report says about the tickets code compared with nothing, and the IDs they link to outside the run."""
+    alone = list(saved.get("alone") or [])
+    outside = [(t["id"], t["not_in_run"]) for t in saved.get("tickets") or [] if t.get("not_in_run")]
+    found = []
+    if alone:
+        names = alone[:MAX_LISTED_TICKETS] + ([f"{len(alone) - MAX_LISTED_TICKETS} more"] if len(alone) > MAX_LISTED_TICKETS else [])
+        found.append(f"**Not compared:** {and_list(names)} — nothing in this run is on "
+                     f"{'its subject' if len(alone) == 1 else 'their subjects'}.")
+    if outside:
+        found.append("**Not in this run:** " + "; ".join(f"{and_list(ids)}, linked from {tid}"
+                                                        for tid, ids in outside[:MAX_LISTED_TICKETS]) + ".")
+    return found
+
+
 def report_blocks(links: dict[str, Any], extra: list[str], partial: str, findings: list[dict[str, Any]],
-                  unchecked: list[int], total_slices: int, pairs: int | None) -> list[tuple[str, str]]:
+                  unchecked: list[int], total_slices: int, pairs: int | None,
+                  tickets: dict[str, Any]) -> list[tuple[str, str]]:
     scope = str((links.get("scope") or {}).get("input") or "").strip()
     title = f"# Contradictions — {scope}" if scope and scope.casefold() != "all" else "# Contradictions — the whole project"
     more = f"{title} (continued)\n\n"
@@ -2869,21 +3074,28 @@ def report_blocks(links: dict[str, Any], extra: list[str], partial: str, finding
                  "conflicts between them are missing from this report.", ""]
     counts = links.get("counts") or {}
     tally = ", ".join(f"{sum(1 for f in findings if f['severity'] == s)} {s}" for s in SEVERITIES)
-    across = f", and {plural(pairs, 'pair')} of items on the same subject across the product" if pairs else ""
+    saved = len(tickets.get("tickets") or [])
+    also = [*([f"{plural(pairs, 'pair')} of items on the same subject across the product"] if pairs else []),
+            *([plural(saved, "board ticket")] if saved else [])]
     head += [
         f"**Checked:** {plural(int(counts.get('requirements') or 0), 'requirement')} and "
-        f"{plural(int(counts.get('test_cases_in_scope') or 0), 'test case')}{across}.  ",
+        f"{plural(int(counts.get('test_cases_in_scope') or 0), 'test case')}"
+        f"{''.join(f', {x}' for x in also[:-1])}{f', and {also[-1]}' if also else ''}.  ",
         f"**Found:** {tally}.  " if findings else "**Found:** no contradictions.  ",
         links_line(counts),
     ]
+    for line in tickets_lines(tickets):
+        head += ["", line]
     blocks = [("\n".join(head) + "\n\n", "")]
     sections = [(f"## {s.capitalize()} — {SEVERITY_MEANS[s]}", [f for f in findings if not on_board(f) and f["severity"] == s], False)
                 for s in SEVERITIES]
-    sections.append(("## Board tickets", [f for f in findings if on_board(f)], True))
+    sections.append(("## Board tickets — work in progress that conflicts with a requirement or a test case",
+                     [f for f in findings if on_board(f)], True))
     for heading, group, severity_in_heading in sections:
         for n, finding in enumerate(group):
             block = finding_block(finding, severity_in_heading)
             blocks.append(((f"{heading}\n\n" if n == 0 else "") + block, f"{more}{heading} (continued)\n\n"))
+    blocks += when_shipped_blocks(findings, more)
     offered = [str(f["n"]) for f in findings if fixes_a_test_case(f)]
     if offered:
         verb = "names" if len(offered) == 1 else "name"
@@ -2900,10 +3112,7 @@ def cmd_report(run_text: str, lines_text: str = "", partial: str = "") -> dict[s
         raise RunError("links.json is missing — the link step did not run, so there is no run to report on.")
     extra: Any = []
     if lines_text.strip():
-        try:
-            extra = json.loads(lines_text)
-        except ValueError as exc:
-            raise RunError(f"--lines isn't JSON ({exc}). Pass a list on one line, with every ' written as \\u0027.") from None
+        extra = json_argument(lines_text, "--lines")
     if not isinstance(extra, list) or not all(isinstance(line, str) for line in extra):
         raise RunError("--lines takes a JSON list of lines.")
     findings = numbered(saved_findings(run))
@@ -2912,7 +3121,8 @@ def cmd_report(run_text: str, lines_text: str = "", partial: str = "") -> dict[s
     unchecked = [n for n in range(1, len(slices) + 1) if n not in checked]
     matched = read_json(run / "pairs.json")
     parts = pack_blocks(report_blocks(links, extra, partial, findings, unchecked, len(slices),
-                                      int(matched.get("pairs") or 0) if isinstance(matched, dict) else None))
+                                      int(matched.get("pairs") or 0) if isinstance(matched, dict) else None,
+                                      read_json(run / "tickets.json") or {}))
     for old in run.glob("report-*.md"):
         old.unlink()
     paths = []
@@ -2951,10 +3161,7 @@ def project_folder(project_text: str) -> Path:
 
 
 def parse_patch(text: str) -> dict[str, Any]:
-    try:
-        patch = json.loads(text)
-    except ValueError as exc:
-        raise RunError(f"--patch isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
+    patch = json_argument(text, "--patch")
     if not isinstance(patch, dict):
         raise RunError("--patch takes a JSON object.")
     return patch
@@ -3101,6 +3308,10 @@ def main(argv: list[str] | None = None) -> int:
                                                        "write every ' as \\u0027")
     matcher = sub.add_parser("match", help="pair the items on the same subject in different slices, or outside the scope")
     matcher.add_argument("--run", required=True)
+    tickets = sub.add_parser("tickets", help="save the board tickets, match each with what is on its subject, cut their slices")
+    tickets.add_argument("--run", required=True)
+    tickets.add_argument("--add", required=True, help='[{"id", "title", "url", "linked_ids", "line"}, …] as JSON on one line; '
+                                                      "write every ' as \\u0027")
     report = sub.add_parser("report", help="write the contradiction report from the saved findings")
     report.add_argument("--run", required=True)
     report.add_argument("--lines", default="", help="more lines for its top, as a JSON list: the board's and the settings'")
@@ -3137,6 +3348,8 @@ def main(argv: list[str] | None = None) -> int:
             result = cmd_subjects(args.run, args.slice, args.add)
         elif args.action == "match":
             result = cmd_match(args.run)
+        elif args.action == "tickets":
+            result = cmd_tickets(args.run, args.add)
         elif args.action == "report":
             result = cmd_report(args.run, args.lines, args.partial)
         else:

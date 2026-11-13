@@ -687,6 +687,165 @@ class Across(RunFolderTest):
                       bc_run.cmd_show(str(run), "CWA-REQ-22"))
 
 
+TICKETS = [
+    {"id": "PROJ-7", "title": "Shorter idle logout", "url": "https://jira.test/browse/PROJ-7",
+     "linked_ids": ["CWA-REQ-21", "PROJ-1"], "line": "Session timeout: the session ends after 2 minutes idle."},
+    {"id": "PROJ-8", "title": "Quieter alarms at night", "url": "https://jira.test/browse/PROJ-8", "linked_ids": [],
+     "line": "Alarm volume: alarms sound at 60 dB at night."},
+    {"id": "PROJ-9", "title": "Export reports as CSV", "url": "https://jira.test/browse/PROJ-9",
+     "line": "Report export: reports download as CSV files."},
+]
+
+
+class Tickets(RunFolderTest):
+    def checked_run(self, cases=ACROSS_CASES, lines=SUBJECT_LINES):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": ACROSS_REQUIREMENTS})
+        self.write(run, "test_cases.json", {"test_cases": cases})
+        with mock.patch.object(bc_run, "SLICE_BYTES", 400):
+            bc_run.cmd_link(str(run))
+        for n in range(1, bc_run.cmd_slices(str(run))["total"] + 1):
+            ids = bc_run.cmd_slices(str(run), n)["needs_lines"]
+            bc_run.cmd_subjects(str(run), n, json.dumps({i: lines[i] for i in ids}))
+            bc_run.cmd_findings(str(run), add_text="[]", slice_number=n)
+        return run
+
+    def matched_run(self, **run):
+        run = self.checked_run(**run)
+        for n in bc_run.cmd_match(str(run))["slices"]:
+            bc_run.cmd_findings(str(run), add_text="[]", slice_number=n)
+        return run
+
+    def test_a_ticket_is_compared_with_what_it_links_to_and_the_items_on_its_subject_in_a_slice_of_its_own(self):
+        run = self.matched_run()
+        answer = bc_run.cmd_tickets(str(run), json.dumps(TICKETS))
+        self.assertEqual(answer, {"saved": 3, "rejected": [], "alone": ["PROJ-9"], "not_in_run": {}, "slices": [5], "total": 5})
+        listed = bc_run.cmd_slices(str(run), 5)
+        self.assertEqual((listed["tickets"], listed["checked"], listed["needs_lines"]), (2, False, []))
+        text = "".join(Path(p).read_text() for p in listed["parts"])
+        self.assertIn("## PROJ-7 — Shorter idle logout\nLink: https://jira.test/browse/PROJ-7\n"
+                      "Subject line: \"Session timeout: the session ends after 2 minutes idle.\"\n"
+                      "Compare with: CWA-REQ-21 (it links to it) · CWA-REQ-22, TC-210 (on its subject)\n", text)
+        self.assertIn("Compare with: CWA-REQ-23, TC-230 (on its subject)\n", text)
+        for words in ("The session shall end after 5 minutes idle.", "The session shall stay open while monitoring.",
+                      "Leave the app idle for 5 minutes", "Alarms shall sound at 80 dB."):
+            self.assertIn(words, text)
+        self.assertNotIn("PROJ-9", text, "a ticket with nothing on its subject has nothing to compare")
+
+    def test_tickets_are_saved_once_after_the_run_is_matched_and_all_or_nothing(self):
+        run = self.checked_run()
+        with self.assertRaises(bc_run.RunError) as caught:
+            bc_run.cmd_tickets(str(run), json.dumps(TICKETS))
+        self.assertIn("run match first", str(caught.exception))
+        bc_run.cmd_match(str(run))
+        answer = bc_run.cmd_tickets(str(run), json.dumps([
+            TICKETS[0], {"id": "PROJ-8", "title": "Quieter alarms at night"}, TICKETS[0],
+            {**TICKETS[2], "line": "Report export: " + "CSV " * 60}]))
+        self.assertEqual(answer["saved"], 0)
+        self.assertEqual([(r["ticket"], r["id"]) for r in answer["rejected"]], [(2, "PROJ-8"), (3, "PROJ-7"), (4, "PROJ-9")])
+        self.assertIn("PROJ-7 is listed twice", answer["rejected"][1]["problem"])
+        self.assertFalse((run / "tickets.json").exists(), "nothing is saved while a ticket is sent back")
+        self.assertEqual(bc_run.cmd_tickets(str(run), json.dumps(TICKETS))["saved"], 3)
+        with self.assertRaises(bc_run.RunError) as caught:
+            bc_run.cmd_tickets(str(run), json.dumps(TICKETS))
+        self.assertIn("saved already", str(caught.exception))
+
+    def test_in_a_run_of_one_slice_a_ticket_is_matched_by_the_items_own_words(self):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": ACROSS_REQUIREMENTS})
+        self.write(run, "test_cases.json", {"test_cases": ACROSS_CASES})
+        bc_run.cmd_link(str(run))
+        self.assertEqual(bc_run.cmd_match(str(run))["pairs"], 0, "one slice: nobody wrote subject lines")
+        answer = bc_run.cmd_tickets(str(run), json.dumps(TICKETS[1:]))
+        self.assertEqual((answer["slices"], answer["alone"]), ([2], ["PROJ-9"]))
+        text = "".join(Path(p).read_text() for p in bc_run.cmd_slices(str(run), 2)["parts"])
+        self.assertIn("Compare with: CWA-REQ-23", text)
+
+    def idle_run(self):
+        """A run with two idle test cases, which a ticket that shortens the idle logout breaks."""
+        warning = case(211, "Warning before idle logout", "CWA-REQ-21", section="Login", steps=[
+            {"content": "Leave the app idle for 4 minutes", "expected": "A warning says you will be logged out in 1 minute"}])
+        return self.matched_run(cases=[*ACROSS_CASES, warning],
+                                lines={**SUBJECT_LINES, "TC-211": "Session timeout: a warning comes 1 minute before logout."})
+
+    def test_an_item_that_counts_a_ticket_among_its_closest_is_compared_with_it_too(self):
+        run = self.idle_run()
+        with mock.patch.object(bc_run, "MATCHES_PER_ITEM", 1):
+            n = bc_run.cmd_tickets(str(run), json.dumps(TICKETS))["slices"][0]
+        text = "".join(Path(p).read_text() for p in bc_run.cmd_slices(str(run), n)["parts"])
+        self.assertIn("Compare with: CWA-REQ-21 (it links to it) · CWA-REQ-22, TC-210, TC-211 (on its subject)\n", text,
+                      "a ticket's own closest are capped, so a test case on its subject that counts it among its own "
+                      "closest is compared too")
+
+    def test_the_report_names_tickets_compared_with_nothing_and_links_outside_the_run(self):
+        run = self.matched_run()
+        linked = {**TICKETS[0], "linked_ids": ["CWA-REQ-21", "PROJ-1", "CWA-REQ-99", "TC-999"]}
+        answer = bc_run.cmd_tickets(str(run), json.dumps([linked, *TICKETS[1:]]))
+        self.assertEqual((answer["alone"], answer["not_in_run"]), (["PROJ-9"], {"PROJ-7": ["CWA-REQ-99", "TC-999"]}),
+                         "PROJ-1 is another ticket, not a requirement or test case")
+        text = "".join(Path(p).read_text() for p in bc_run.cmd_slices(str(run), answer["slices"][0])["parts"])
+        self.assertIn("Not in this run: CWA-REQ-99, TC-999\n", text)
+        bc_run.cmd_findings(str(run), add_text="[]", slice_number=answer["slices"][0])
+        report = Path(bc_run.cmd_report(str(run))["parts"][0]).read_text()
+        self.assertIn("**Not compared:** PROJ-9 — nothing in this run is on its subject.", report)
+        self.assertIn("**Not in this run:** CWA-REQ-99 and TC-999, linked from PROJ-7.", report)
+
+    def ticket_run(self):
+        """A run whose idle logout a ticket shortens: it breaks the requirement and both idle test cases."""
+        run = self.idle_run()
+        n = bc_run.cmd_tickets(str(run), json.dumps(TICKETS))["slices"][0]
+        shorter = {"id": "PROJ-7", "quote": "Log out after 2 minutes idle", "board": {"title": "ignored", "url": "https://x.test"}}
+        self.breaks = {"severity": "high", "fix": ["TC-210", "tc-211"], "items": [
+            shorter, {"id": "TC-210", "quote": "Leave the app idle for 5 minutes"},
+            {"id": "TC-211", "quote": "Leave the app idle for 4 minutes"}],
+            "why": "Both test cases wait longer than the 2 minutes after which the ticket logs out."}
+        self.contradicts = {"severity": "critical", "fix": "proj-7", "why": "The ticket logs out 3 minutes sooner.",
+                            "items": [shorter, {"id": "CWA-REQ-21", "quote": "end after 5 minutes idle"}]}
+        self.one_case = {**self.breaks, "fix": "TC-210", "items": self.breaks["items"][:2]}
+        return run, n
+
+    def test_a_ticket_s_finding_is_never_offered_and_names_the_test_cases_to_update_when_it_ships(self):
+        run, n = self.ticket_run()
+        unsaved = {**self.contradicts, "items": [{**self.contradicts["items"][0], "id": "PROJ-99"}, self.contradicts["items"][1]]}
+        not_a_ticket = {**self.contradicts, "fix": ["TC-210"], "items": [self.contradicts["items"][1], self.breaks["items"][1]]}
+        result = bc_run.cmd_findings(str(run), slice_number=n, add_text=json.dumps(
+            [self.breaks, self.contradicts, self.one_case, unsaved, not_a_ticket]))
+        self.assertEqual((result["saved"], result["checked"]), (3, False))
+        problems = {r["finding"]: " ".join(r["problems"]) for r in result["rejected"]}
+        self.assertIn("PROJ-99 is not in this run", problems[4])
+        self.assertIn("a list of test cases is for a board ticket's finding", problems[5])
+        found = bc_run.cmd_findings(str(run))
+        self.assertEqual([(f["kind"], f["fix"]) for f in found["findings"]], [
+            ("board ticket ↔ requirement", "change PROJ-7."),
+            ("board ticket ↔ test case", "update TC-210 (step 1) and TC-211 (step 1) when PROJ-7 ships."),
+            ("board ticket ↔ test case", "update TC-210 (step 1) when PROJ-7 ships.")])
+        self.assertEqual(found["fix_test_cases"], [], "the ticket hasn't shipped and may still change")
+        ticket = bc_run.cmd_findings(str(run), numbers_text="1")["findings"][0]["items"][0]
+        self.assertEqual((ticket["title"], ticket["url"], ticket["checked"]),
+                         ("Shorter idle logout", "https://jira.test/browse/PROJ-7", False))
+        self.assertTrue(bc_run.cmd_findings(str(run), add_text="[]", slice_number=n)["checked"])
+
+    def test_the_report_gives_tickets_their_own_section_and_names_the_test_cases_to_update_when_each_ships(self):
+        run, n = self.ticket_run()
+        unchecked = Path(bc_run.cmd_report(str(run))["parts"][0]).read_text()
+        self.assertIn(f"**Not checked:** slice {n} of {n}", unchecked)
+        bc_run.cmd_findings(str(run), slice_number=n, add_text=json.dumps([self.breaks, self.contradicts, self.one_case]))
+        result = bc_run.cmd_report(str(run))
+        self.assertEqual(result["fix_test_cases"], [])
+        report = Path(result["parts"][0]).read_text()
+        self.assertRegex(report, r"\*\*Checked:\*\* 3 requirements and 4 test cases, \d+ pairs? of items on the same "
+                                 r"subject across the product, and 3 board tickets\.")
+        self.assertIn("## Board tickets — work in progress that conflicts with a requirement or a test case\n\n"
+                      "### 1. Critical: board ticket ↔ requirement\n"
+                      "- **PROJ-7** [Shorter idle logout](https://jira.test/browse/PROJ-7): \"Log out after 2 minutes idle\" "
+                      "_(not checked: the ticket's text isn't in the run)_\n", report)
+        self.assertIn("- **Fix:** update TC-210 (step 1) and TC-211 (step 1) when PROJ-7 ships.", report)
+        self.assertIn("## Test cases to update when the tickets ship\n\n"
+                      "- **PROJ-7** [Shorter idle logout](https://jira.test/browse/PROJ-7): TC-210 and TC-211 — "
+                      "findings 2 and 3.\n", report)
+        self.assertNotIn("Not checked", report)
+        self.assertNotIn("## Test cases to fix", report)
+
 JAMA_CONFIG = {
     "requirements": {
         "provider": "jama", "project_id": 42, "item_type_filter": ["Software Requirement"],
@@ -1472,12 +1631,14 @@ class Findings(RunFolderTest):
         self.assertEqual(found["fix_test_cases"], [1])
 
     def test_the_report_links_both_sides_and_offers_only_checked_test_case_fixes(self):
+        bc_run.cmd_tickets(str(self.run), json.dumps([{"id": "PROJ-7", "title": "Shorter snooze", "url": "https://jira.test/PROJ-7",
+                                                       "linked_ids": ["CWA-REQ-3"], "line": "Snooze: lasts 1 minute."}]))
         self.add(
             self.snooze(),
             self.snooze(severity="low", why="A weak test.") | {"items": [
                 {"id": "CWA-REQ-4", "quote": "display heart rate"}, {"id": "TC-14"}], "fix": "TC-14"},
             {"severity": "high", "fix": "PROJ-7", "why": "The ticket shortens the snooze.", "items": [
-                {"id": "PROJ-7", "quote": "Snooze for 1 minute", "board": {"title": "Shorter snooze", "url": "https://jira.test/PROJ-7"}},
+                {"id": "PROJ-7", "quote": "Snooze for 1 minute"},
                 {"id": "CWA-REQ-3", "quote": "silence alarms for 5 minutes"}]},
         )
         result = bc_run.cmd_report(str(self.run), lines_text='["Fetch: board issues \u2192 4 fetched from board 9"]')
@@ -1494,8 +1655,8 @@ class Findings(RunFolderTest):
                       "\"The alarm stays quiet for 15 minutes\"", report)
         self.assertIn("- **Fix:** change TC-20, step 1, expected result.", report)
         self.assertLess(report.index("### 1. Requirement ↔ test case"), report.index("### 2. Requirement ↔ test case"))
-        self.assertIn("## Board tickets\n\n### 3. High: board ticket ↔ requirement", report)
-        self.assertIn("\"Snooze for 1 minute\" _(not checked: board tickets aren't saved in the run)_", report)
+        self.assertIn("conflicts with a requirement or a test case\n\n### 3. High: board ticket ↔ requirement", report)
+        self.assertIn("- **PROJ-7** [Shorter snooze](https://jira.test/PROJ-7): \"Snooze for 1 minute\"", report)
         self.assertIn("1 finding names a test case to change: 1.", report)
 
     def test_a_long_report_comes_in_parts_small_enough_for_one_read(self):
@@ -1555,10 +1716,12 @@ class Cli(RunFolderTest):
         bc_run.cmd_link(str(run))
         finding = {"severity": "high", "fix": "TC-10", "why": "It expects a sound the requirement doesn\u0027t ask for.",
                    "items": [{"id": "CWA-REQ-2", "quote": "show a visual alarm"}, {"id": "TC-10", "quote": "It happens"}]}
-        for argv in (["findings", "--run", str(run), "--add", json.dumps(finding)], ["report", "--run", str(run)]):
+        ticket = {"id": "PROJ-7", "title": "Louder visual alarm", "line": "Visual alarm: flashes brighter."}
+        for argv in (["tickets", "--run", str(run), "--add", json.dumps([ticket])],
+                     ["findings", "--run", str(run), "--add", json.dumps(finding)], ["report", "--run", str(run)]):
             out = io.StringIO()
             with redirect_stdout(out):
-                self.assertEqual(bc_run.main(argv), 0)
+                self.assertEqual(bc_run.main(argv), 0, argv)
             self.assertTrue(json.loads(out.getvalue())["ok"])
         self.assertEqual(json.loads(out.getvalue())["fix_test_cases"], [1])
 

@@ -20,8 +20,8 @@
 # change the exit code.
 #
 # The plugin's own scripts, and what each subcommand may do unprompted:
-#   - scripts/bc_run.py (new, enrich, link, search, show, summary, recent, doc, findings, slices, subjects, match, report,
-#     progress, note, archive). It reads and writes only inside <project>/.buddy-council/ — run folders and the onboarding
+#   - scripts/bc_run.py (new, enrich, link, search, show, summary, recent, doc, findings, slices, subjects, match, tickets,
+#     report, progress, note, archive). It reads and writes only inside <project>/.buddy-council/ — run folders and the onboarding
 #     and V&V progress logs — and its one network use is read-only GitHub GETs (gh, or HTTPS with a token only for the
 #     host it belongs to).
 #   - scripts/bc_setup.py (status, links, save, migrate, cleanup, github). It saves a project's settings after
@@ -69,7 +69,7 @@ SCRIPTS = {
         "summary": {"--run", "--feature"},
         "recent": {"--project", "--max-age-minutes"}, "doc": {"--url", "--max-chars"},
         "findings": {"--run", "--add", "--numbers", "--slice"}, "slices": {"--run", "--slice"},
-        "subjects": {"--run", "--slice", "--add"}, "match": {"--run"},
+        "subjects": {"--run", "--slice", "--add"}, "match": {"--run"}, "tickets": {"--run", "--add"},
         "report": {"--run", "--lines", "--partial"},
         "progress": {"--project", "--log", "--patch"},
         "note": {"--project", "--title", "--text"}, "archive": {"--project", "--log"}}),

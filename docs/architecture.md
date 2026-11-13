@@ -1,6 +1,6 @@
 # Buddy-Council Plugin Architecture
 
-> **Out of date.** This document predates several commands and the Copilot CLI support. The current reference is the [Plugin Architecture board](https://lucid.app/lucidspark/9ed93500-df15-4b68-9fff-84a1f2e23afc/edit?page=h0VJK6ky~xWh), checked against version 0.26.0 on 5 Nov 2026.
+> **Out of date.** This document predates several commands and the Copilot CLI support. The current reference is the [Plugin Architecture board](https://lucid.app/lucidspark/9ed93500-df15-4b68-9fff-84a1f2e23afc/edit?page=h0VJK6ky~xWh); its "Start here" frame says which version it was last checked against.
 
 ## Overview
 
@@ -89,7 +89,9 @@ User runs /bc:contradiction [scope]
   │    Step 6: bc_run.py match → pairs items on the same subject in different slices — and, on a requirement or
   │            feature, with the rest of the product (product.json) — into slices of pairs   (code: no model);
   │            checked like step 5
-  │    Step 7: Board tickets against the requirements they name, or that bc_run.py search finds (session's model)
+  │    Step 7: bc_run.py tickets → each board ticket, by the subject line the session writes, with the requirements
+  │            it links to and the requirements and test cases on its subject, in slices of tickets   (code: no model);
+  │            the session checks them by howtos/detect-ticket-contradictions.md, the rules /bc:validate uses
   │    Step 8: bc_run.py report → report-N.md, shown as written   (code: no model)
   │
   └─ Output: Markdown report grouped by severity, every item linked
@@ -118,6 +120,7 @@ skills/normalize-artifacts/ → clean text, normalize IDs, cross-link
 | `findings/*.json` | `bc_run.py findings` | one file per save: the findings code checked, and the slice they came from — a save that leaves nothing rejected marks its slice checked, even with no findings, once its items have their subject lines when the run needs them |
 | `lines/*.json` | `bc_run.py subjects` | one file per save: a slice reader's subject lines, one per item — what it is about, then what it says. When the run is matched across slices, a slice is checked only once each of its items has one |
 | `pairs.json`, `pairs/*.md` | `bc_run.py match` | the items on the same subject that no slice holds together — or, on a requirement or a feature, the scope's items with the rest of the product — in slices of pairs, numbered on from the run's own slices; each part holds both items of each pair verbatim, and a test case's requirements with it |
+| `tickets.json`, `tickets/*.md` | `bc_run.py tickets` | the board tickets the session read — key, title, link, linked IDs, and subject line, never their text — and slices of tickets, numbered on from the slices of pairs; each part holds a ticket's heading and, verbatim, the requirements it links to and the requirements and test cases on its subject |
 | `search/NN-<ask>-<p>.md` | `bc_run.py search` | a lookup's results: where the matches are, the top 25 requirements verbatim with what they matched, the test cases and docs that mention the ask, the top background items elsewhere in the project, the next 25 candidates, and the project's own wording for a second search |
 | `manifest.json` | `bc_run.py` | command, scope, timestamps, counts |
 
@@ -185,8 +188,10 @@ Code cuts the run into slices, each small enough for one reader. A run of one sl
 model; a bigger one by one helper per slice, side by side. Each slice is checked on its own, and its reader saves one
 subject line per item. Code then pairs the items on the same subject that no slice holds together — and, in a run on
 a requirement or a feature, the scope's items with the rest of the product — and only those pairs get a full read,
-in slices of pairs checked the same way. The session's model
-asks the user every question, checks the board tickets, and shows the report. `howtos/detect-contradictions.md`
+in slices of pairs checked the same way. Last, code matches each board ticket the same way, by a subject line the
+session writes, with the requirements it links to and the requirements and test cases on its subject. The session's
+model checks those slices of tickets itself, by `howtos/detect-ticket-contradictions.md`, the rules `/bc:validate`
+uses. It also asks the user every question and shows the report. `howtos/detect-contradictions.md`
 holds how a slice is checked, what it compares, and how it judges; code checks every finding and names it by what it
 compares (ADR 0012).
 

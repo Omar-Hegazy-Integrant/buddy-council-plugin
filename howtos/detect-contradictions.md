@@ -14,7 +14,9 @@ test cases with no requirement, and the report states those counts.
 
 Once every slice is checked, code pairs the items on the same subject that no slice holds together — and, in a run on
 part of the product, its items with the rest of the product — by the subject lines their readers saved, and cuts the
-pairs into **slices of pairs**, checked the same way.
+pairs into **slices of pairs**, checked the same way. Last, code cuts the board's tickets into **slices of tickets**,
+each ticket with the requirements it links to and the requirements and test cases on its subject. The session checks
+those itself: only it holds the tickets' text.
 
 ## Checking a slice
 
@@ -48,6 +50,9 @@ that started it.
 
 In a **slice of pairs**, compare the two items of each pair with each other, and nothing else: their slices already
 compared each with its own neighbors. A test case comes with the requirements it tests, to tell which side is right.
+
+In a **slice of tickets**, compare each ticket — its text is in your board read — with the requirements and test
+cases under it, and nothing else, by the rules of `howtos/detect-ticket-contradictions.md`.
 
 In any other slice, make every comparison across everything it holds:
 
@@ -89,8 +94,9 @@ Two wordings of the same behavior agree. Save each finding as JSON:
   to find the place. Mark words you leave out with `…`. Code finds the quote in its item and names the place —
   `preconditions`, `step 3, expected result` — so give the words alone. In a Low finding, the test case needs no
   quote: say in `why` what it leaves out.
-- **A board ticket** isn't in the run: give it `"board": {"title": "<its title>", "url": "<its link>"}`, from
-  `raw_fields.url`. Its quote is shown as not checked.
+- **A board ticket** — name it by its key, and code adds the title and link saved with it. The run doesn't hold its
+  text, so its quote is shown as not checked. Its `severity` and `fix` follow
+  `howtos/detect-ticket-contradictions.md` → *Output Format*.
 - **`severity`** — from the table below.
 - **`why`** — one plain sentence on why they can't all be right.
 - **`fix`** — the ID of the item to change, or `"decide"` when a person must choose. When that item appears twice,
@@ -119,7 +125,7 @@ once, even when several comparisons show it. When the requirement is too vague t
 it in `why`.
 
 The fix offer rewrites exactly the test cases `fix` names, to agree with the requirement's words, so name the side
-with care. Code saves a test case as `fix` only when a requirement is among the items.
+with care. Code saves a test case as `fix` only when a requirement or a board ticket is among the items.
 
 ## Saving
 
@@ -129,14 +135,14 @@ Save a slice's findings together, as their own command:
 python3 '<plugin root>/scripts/bc_run.py' findings --run '<run_dir>' --slice <n> --add '<json>'
 ```
 
-`--slice` names the slice they come from; leave it out for findings from no slice, such as the board tickets'.
-`--add` takes one finding or a list, as JSON on one line, with every `'` written as `\u0027`. Code checks each
-one: every ID must be in the run, and every quote must be in its item, whatever its case, spacing, or quote
-marks. It answers `saved`, `total`, and `rejected`. A rejected finding comes back with its problems, and a quote
-that isn't in its item comes with the closest text code found there. Copy the exact words from the bundle and
-save it again, or drop it. A finding saved again with the same quotes replaces the first. With `--slice`, it also
-answers `checked`: the slice counts as checked once a save of it leaves nothing rejected — so after dropping the
-last rejected finding, save `[]` — and each ID in its `needs_lines` has a subject line.
+`--slice` names the slice they come from. `--add` takes one finding or a list, as JSON on one line, with every `'`
+written as `\u0027`. Code checks each one: every ID must be in the run, and every quote must be in its item,
+whatever its case, spacing, or quote marks. It answers `saved`, `total`, and `rejected`. A rejected finding comes
+back with its problems, and a quote that isn't in its item comes with the closest text code found there. Copy the
+exact words from the bundle and save it again, or drop it. A finding saved again with the same quotes replaces the
+first. With `--slice`, it also answers `checked`: the slice counts as checked once a save of it leaves nothing
+rejected — so after dropping the last rejected finding, save `[]` — and each ID in its `needs_lines` has a subject
+line.
 
 **Done when** every finding is saved and `rejected` is empty, or each finding still in it was dropped on
 purpose — and, with `--slice`, the answer says `"checked": true`.
@@ -149,7 +155,8 @@ subject lines: one line per item, its subject, a colon, then what it says about 
 - **The subject** — the thing the item is about: the screen, setting, data, or state, in the product's own word for
   it. Name the thing rather than what happens to it — `Session`, not `Idle logout` — so an item on the same thing in
   another feature names it alike.
-- **What it says** — the values, results, and states the item states, or for a test case expects, as behavior.
+- **What it says** — the values, results, and states the item states, or for a test case expects, as behavior. For
+  a board ticket, what it will change them to.
 
 *(made-up)* Login's `Session: ends after 5 minutes idle.` and Monitoring's `Session: stays open while monitoring.`
 share a subject, so code pairs them.

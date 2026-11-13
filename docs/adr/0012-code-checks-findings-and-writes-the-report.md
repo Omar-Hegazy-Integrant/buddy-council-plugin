@@ -9,6 +9,6 @@
 
 ## Consequences
 
-- A board ticket isn't in the run, so code shows its quote as not checked, and never offers a board finding as a test case fix.
+- A board ticket isn't in the run, so code shows its quote as not checked, and never offers a board finding as a test case fix. *(0.34.0: the run now holds each ticket's key, title, link, and subject line, so code can match it with the items on its subject — still never its text, which only the session read. A quote retyped into the run would make the check a model's word again.)*
 - The report is a file in the run, in parts of at most 18 KB, and the assistant shows each part as written.
 - Several helpers can save findings at once: each save is a file of its own.
