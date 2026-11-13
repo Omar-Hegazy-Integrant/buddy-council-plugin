@@ -85,8 +85,12 @@ User runs /bc:contradiction [scope]
   │            └─ several: one helper per slice, side by side — the assistant's general-purpose agent,
   │               one model below the top (Sonnet), normal effort; each reads its parts once, asks nothing,
   │               and saves: bc_run.py findings --slice N --add → findings/*.json   (code checks every ID and quote)
-  │    Step 6: Board tickets against the requirements they name, or that bc_run.py search finds (session's model)
-  │    Step 7: bc_run.py report → report-N.md, shown as written   (code: no model)
+  │               and one subject line per item: bc_run.py subjects --slice N --add → lines/*.json
+  │    Step 6: bc_run.py match → pairs items on the same subject in different slices — and, on a requirement or
+  │            feature, with the rest of the product (product.json) — into slices of pairs   (code: no model);
+  │            checked like step 5
+  │    Step 7: Board tickets against the requirements they name, or that bc_run.py search finds (session's model)
+  │    Step 8: bc_run.py report → report-N.md, shown as written   (code: no model)
   │
   └─ Output: Markdown report grouped by severity, every item linked
 ```
@@ -106,11 +110,14 @@ skills/normalize-artifacts/ → clean text, normalize IDs, cross-link
 |---|---|---|
 | `requirements.json` | Jama server (`save_to`) or Excel parser | canonical requirements in scope |
 | `background.json` | Jama server (`save_to`, `background: true`) — lookups only | the rest of the Jama project: every item outside the requirements in scope, minus excluded item types and subtrees — context for answers, never counted |
+| `product.json` | Jama server (`save_to`, scope `all`) — contradiction runs on a requirement or a feature only | every requirement in the product, to compare the scope with — matched, never counted |
 | `test_cases.json` | TestRail server (`save_to`) | every case in the suite, canonical — the link step scopes them |
 | `docs/`, `docs.json` | `bc_run.py enrich` | the GitHub docs requirements link to, verbatim, truncated at `max_doc_chars`, split into parts of at most 18 KB |
-| `links.json` | `bc_run.py link` | counts, untested (Deprecated/Deferred left out), orphans, stranded links, unknown linked IDs, per-feature rows with their bundles and docs; for a contradiction run, the slices, each with its parts, docs, requirements, and test cases; the `Fetch:`/`Enrichment:`/`Readiness:` lines; missing sources; and every mismatch between the run and `sources.json` |
+| `links.json` | `bc_run.py link` | counts, untested (Deprecated/Deferred left out), orphans, stranded links, unknown linked IDs, per-feature rows with their bundles and docs; for a contradiction run, the slices, each with its parts, docs, requirements, and test cases, whether their readers save subject lines, and, on a requirement or a feature, how much of the product is outside the scope; the `Fetch:`/`Enrichment:`/`Readiness:` lines; missing sources; and every mismatch between the run and `sources.json` |
 | `bundles/*.md` | `bc_run.py link` | per feature: each requirement verbatim with its custom fields, then the cases that link to it with theirs; parts of at most 18 KB. In a contradiction run, a feature too big for one slice is cut between requirements, and each piece stands alone |
 | `findings/*.json` | `bc_run.py findings` | one file per save: the findings code checked, and the slice they came from — a save that leaves nothing rejected marks its slice checked, even with no findings |
+| `lines/*.json` | `bc_run.py subjects` | one file per save: a slice reader's subject lines, one per item — what it is about, then what it says. When the run is matched across slices, a slice is checked only once each of its items has one |
+| `pairs.json`, `pairs/*.md` | `bc_run.py match` | the items on the same subject that no slice holds together — or, on a requirement or a feature, the scope's items with the rest of the product — in slices of pairs, numbered on from the run's own slices; each part holds both items of each pair verbatim, and a test case's requirements with it |
 | `search/NN-<ask>-<p>.md` | `bc_run.py search` | a lookup's results: where the matches are, the top 25 requirements verbatim with what they matched, the test cases and docs that mention the ask, the top background items elsewhere in the project, the next 25 candidates, and the project's own wording for a second search |
 | `manifest.json` | `bc_run.py` | command, scope, timestamps, counts |
 
@@ -175,7 +182,10 @@ Secrets live in exactly one place; configuration is separate:
 ## Contradiction Detection
 
 Code cuts the run into slices, each small enough for one reader. A run of one slice is checked by the session's
-model; a bigger one by one helper per slice, side by side. Each slice is checked on its own. The session's model
+model; a bigger one by one helper per slice, side by side. Each slice is checked on its own, and its reader saves one
+subject line per item. Code then pairs the items on the same subject that no slice holds together — and, in a run on
+a requirement or a feature, the scope's items with the rest of the product — and only those pairs get a full read,
+in slices of pairs checked the same way. The session's model
 asks the user every question, checks the board tickets, and shows the report. `howtos/detect-contradictions.md`
 holds how a slice is checked, what it compares, and how it judges; code checks every finding and names it by what it
 compares (ADR 0012).
