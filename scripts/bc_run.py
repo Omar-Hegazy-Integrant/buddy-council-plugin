@@ -6,12 +6,15 @@ step to the analysis as files, so the data itself never passes through a model:
 
   requirements.json  written by the Jama server (``save_to``)
   background.json    lookups on Jama only: the rest of the project, context for answers (``save_to``)
+  product.json       contradiction runs on part of the product: the whole product, to compare it with (``save_to``)
   test_cases.json    written by the TestRail server (``save_to``)
   docs/, docs.json   GitHub docs the requirements link to (``enrich``, the cli strategy)
   links.json         requirement <-> test case links, untested, orphans, stranded links (``link``)
   bundles/*.md       one feature at a time, verbatim text, each part small enough for one read (``link``); in a
                      contradiction run, a feature too big for one slice is cut between requirements, and each piece
                      stands alone
+  lines/*.json       each slice reader's subject lines: what each item is about, and what it says (``subjects``)
+  pairs.json, pairs/ items on the same subject in different slices, or outside the scope, in slices of pairs (``match``)
   findings/*.json    what /bc:contradiction found, each checked against the run (``findings``)
   report-N.md        the contradiction report, written from the findings, in parts (``report``)
   manifest.json      what was collected, when, and the counts
@@ -40,7 +43,13 @@ Subcommands, each printing one JSON object to stdout:
   findings --run DIR [--numbers 'N, N']                the saved findings, numbered as in the report
   slices --run DIR [--slice N]                         a contradiction run's slices, each small enough for one
                                                        reader to check at once, and which are checked — or one
-                                                       slice's bundle parts and docs, as paths
+                                                       slice's bundle parts and docs, as paths, and the items it
+                                                       still needs a subject line for
+  subjects --run DIR --slice N --add JSON              save a slice reader's subject lines, one per item; a slice
+                                                       matched with others is checked once each item has one
+  match  --run DIR                                     pair the items on the same subject in different slices — or,
+                                                       in a run on part of the product, with the rest of it — and
+                                                       cut the pairs into slices of their own
   report --run DIR [--lines JSON] [--partial TEXT]     write the contradiction report from the saved findings,
                                                        in parts small enough for one read
 
@@ -3062,6 +3071,13 @@ def main(argv: list[str] | None = None) -> int:
     slices = sub.add_parser("slices", help="the run's slices, each small enough for one reader, and which are checked")
     slices.add_argument("--run", required=True)
     slices.add_argument("--slice", type=int, default=0, help="one slice: its bundle parts and docs, as paths")
+    subjects = sub.add_parser("subjects", help="save a slice reader's subject lines: what each item is about, and what it says")
+    subjects.add_argument("--run", required=True)
+    subjects.add_argument("--slice", type=int, required=True, help="the slice the lines come from")
+    subjects.add_argument("--add", required=True, help='{"<ID>": "<subject>: <what it says>", …} as JSON on one line; '
+                                                       "write every ' as \\u0027")
+    matcher = sub.add_parser("match", help="pair the items on the same subject in different slices, or outside the scope")
+    matcher.add_argument("--run", required=True)
     report = sub.add_parser("report", help="write the contradiction report from the saved findings")
     report.add_argument("--run", required=True)
     report.add_argument("--lines", default="", help="more lines for its top, as a JSON list: the board's and the settings'")
@@ -3094,6 +3110,10 @@ def main(argv: list[str] | None = None) -> int:
             result = cmd_findings(args.run, args.add, args.numbers, args.slice)
         elif args.action == "slices":
             result = cmd_slices(args.run, args.slice)
+        elif args.action == "subjects":
+            result = cmd_subjects(args.run, args.slice, args.add)
+        elif args.action == "match":
+            result = cmd_match(args.run)
         elif args.action == "report":
             result = cmd_report(args.run, args.lines, args.partial)
         else:

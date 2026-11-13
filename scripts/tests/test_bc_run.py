@@ -1547,6 +1547,20 @@ class Cli(RunFolderTest):
             self.assertTrue(result["ok"] and check in result, argv)
         self.assertEqual(result["checked"], True)
 
+    def test_subject_lines_and_matching_print_json(self):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": ACROSS_REQUIREMENTS})
+        self.write(run, "test_cases.json", {"test_cases": ACROSS_CASES})
+        with mock.patch.object(bc_run, "SLICE_BYTES", 400):
+            bc_run.cmd_link(str(run))
+        lines = json.dumps({"CWA-REQ-21": SUBJECT_LINES["CWA-REQ-21"]})
+        for argv, check in ((["subjects", "--run", str(run), "--slice", "1", "--add", lines], "missing"),
+                            (["match", "--run", str(run)], "error")):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                bc_run.main(argv)
+            self.assertIn(check, json.loads(out.getvalue()), argv)
+
 
 if __name__ == "__main__":
     unittest.main()
