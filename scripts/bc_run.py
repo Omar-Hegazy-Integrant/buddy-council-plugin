@@ -684,6 +684,20 @@ def folder_match(case: dict[str, Any], folder_names: dict[str, str]) -> str | No
     return folder_names[best] if best else None
 
 
+def doc_index(docs_data: dict[str, Any]) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+    """The docs each requirement links to, by its key: those in the run, and those that are not — failed, or left to
+    the reader's own GitHub connection."""
+    docs_by_req: dict[str, list[dict[str, Any]]] = {}
+    for doc in docs_data.get("docs") or []:
+        for rid in doc.get("requirement_ids") or []:
+            docs_by_req.setdefault(key(rid), []).append(doc)
+    missing_by_req: dict[str, list[dict[str, Any]]] = {}
+    for doc in (docs_data.get("failed") or []) + (docs_data.get("pending") or []):
+        for rid in doc.get("requirement_ids") or []:
+            missing_by_req.setdefault(key(rid), []).append(doc)
+    return docs_by_req, missing_by_req
+
+
 def cmd_link(run_text: str) -> dict[str, Any]:
     run = run_folder(run_text)
     manifest = read_json(run / "manifest.json") or {}
@@ -770,14 +784,7 @@ def cmd_link(run_text: str) -> dict[str, Any]:
                 row["stranded"] = True
             untested.append(row)
 
-    docs_by_req: dict[str, list[dict[str, Any]]] = {}
-    for doc in docs_data.get("docs") or []:
-        for rid in doc.get("requirement_ids") or []:
-            docs_by_req.setdefault(key(rid), []).append(doc)
-    missing_by_req: dict[str, list[dict[str, Any]]] = {}
-    for doc in (docs_data.get("failed") or []) + (docs_data.get("pending") or []):
-        for rid in doc.get("requirement_ids") or []:
-            missing_by_req.setdefault(key(rid), []).append(doc)
+    docs_by_req, missing_by_req = doc_index(docs_data)
 
     lookup = manifest.get("command") == "lookup"
     background_data = read_json(run / "background.json") if lookup else None  # only a lookup reads the rest
@@ -785,15 +792,15 @@ def cmd_link(run_text: str) -> dict[str, Any]:
     # A contradiction run on part of the product is compared with the rest of it, which is matched, never counted.
     across = manifest.get("command") == "contradiction" and mode == "scoped"
     product_data = read_json(run / "product.json") if across else None
-    outside = None
+    rest = None  # how many requirements and test cases the rest of the product holds
     if product_data is not None:
         in_scope_ids = {key(c.get("id")) for c in in_scope}
-        outside = (len({key(r.get("id")) for r in requirement_list(product_data)} - set(by_id) - {""}),
-                   sum(1 for c in cases if key(c.get("id")) not in in_scope_ids))
+        rest = (len({key(r.get("id")) for r in requirement_list(product_data)} - set(by_id) - {""}),
+                sum(1 for c in cases if key(c.get("id")) not in in_scope_ids))
     mismatches = verify_run(config, manifest, requirements_data, cases_data, background_data, product_data)
     lines, missing, enrichment = report_lines(
         config, requirements_data, requirements, cases_data, cases, docs_data, background_data, expect_background,
-        outside, across,
+        rest, across,
     )
 
     bundles = run / "bundles"
@@ -879,9 +886,9 @@ def cmd_link(run_text: str) -> dict[str, Any]:
     if slicing:
         links["slices"] = slice_run(run, pieces)
         # Items in different slices, or outside the scope, are matched by the subject lines their readers save.
-        links["subject_lines"] = len(links["slices"]) > 1 or bool(outside and any(outside))
-        if outside is not None:
-            links["outside"] = {"requirements": outside[0], "test_cases": outside[1]}
+        links["subject_lines"] = len(links["slices"]) > 1 or bool(rest and any(rest))
+        if rest is not None:
+            links["outside"] = {"requirements": rest[0], "test_cases": rest[1]}
         clear_pairs(run)
     write_json(run / "links.json", links)
     update_manifest(run, linked_at=links["linked_at"], readiness=readiness, counts=counts, lines=lines, missing=missing, mismatches=mismatches)
@@ -1407,10 +1414,9 @@ def verify_run(
 def report_lines(
     config: dict[str, Any], requirements_data: Any, requirements: list[dict[str, Any]],
     cases_data: Any, cases: list[dict[str, Any]], docs_data: dict[str, Any],
-    background_data: Any = None, expect_background: bool = False,
-    outside: tuple[int, int] | None = None, expect_product: bool = False,
+    background_data: Any, expect_background: bool, rest: tuple[int, int] | None, expect_product: bool,
 ) -> tuple[list[str], list[str], dict[str, Any]]:
-    """The Fetch and Enrichment lines, from the files the servers and scripts wrote — not from any model. ``outside``
+    """The Fetch and Enrichment lines, from the files the servers and scripts wrote — not from any model. ``rest``
     counts the requirements and test cases a run on part of the product read from the rest of it."""
     lines: list[str] = []
     missing: list[str] = []
@@ -1428,9 +1434,9 @@ def report_lines(
     elif expect_background:
         lines.append("Fetch: background → FAILED — no background file in the run")
         missing.append("background")
-    if outside is not None:
-        lines.append(f"Fetch: the rest of the product → {plural(outside[0], 'requirement')} and "
-                     f"{plural(outside[1], 'test case')} outside the scope, to compare it with, never counted")
+    if rest is not None:
+        lines.append(f"Fetch: the rest of the product → {plural(rest[0], 'requirement')} and "
+                     f"{plural(rest[1], 'test case')} outside the scope, to compare it with, never counted")
     elif expect_product:
         lines.append("Fetch: the rest of the product → FAILED — no file in the run")
         missing.append("the rest of the product")
@@ -1981,6 +1987,10 @@ def cmd_show(run_text: str, ids_text: str) -> str:
     background: dict[str, dict[str, Any]] = {}
     for item in requirement_list(read_json(run / "background.json")):
         background.setdefault(key(item.get("id")), item)
+    elsewhere: dict[str, dict[str, Any]] = {}  # a run on part of the product: the rest of it
+    for item in requirement_list(read_json(run / "product.json")):
+        if key(item.get("id")) not in requirements:
+            elsewhere.setdefault(key(item.get("id")), item)
     cases = case_list(read_json(run / "test_cases.json"))
     cases_by_id = {key(c.get("id")): c for c in cases}
     tested_by: dict[str, list[dict[str, Any]]] = {}
@@ -1991,8 +2001,11 @@ def cmd_show(run_text: str, ids_text: str) -> str:
     missing = []
     for raw in wanted:
         item = requirements.get(key(raw))
+        outside = item is None and key(raw) in elsewhere
+        item = elsewhere.get(key(raw)) if outside else item
         if item is not None:
-            lines = [f"## {title_of(item)}", *requirement_body(item, {}, {})]
+            heading = f"## {title_of(item)}" + (f" — in {item.get('feature') or NO_FEATURE}, outside this run's scope" if outside else "")
+            lines = [heading, *requirement_body(item, {}, {})]
             url = (item.get("raw_fields") or {}).get("url")
             if url:
                 lines.append(f"Link: {url}")
@@ -2133,6 +2146,8 @@ def cmd_subjects(run_text: str, number: int, add_text: str) -> dict[str, Any]:
         raise RunError("this run needs no subject lines: it is one slice, with nothing outside it to compare it with.")
     if entry.get("kind") == "pairs":
         raise RunError(f"slice {number} holds pairs: their items' lines were saved with the slices they come from.")
+    if (run / "pairs.json").is_file():
+        raise RunError("this run is matched already, from the lines saved before: collect a new run to change them.")
     try:
         batch = json.loads(add_text)
     except ValueError as exc:
@@ -2240,26 +2255,26 @@ def line_vector(line: str) -> dict[str, float]:
 
 
 def closest(vectors: list[dict[str, float]], queries: list[int], allowed: Any) -> dict[int, list[int]]:
-    """For each query, the documents most like it, at most MATCHES_PER_ITEM above SAME_SUBJECT: the cosine of their
-    words, each weighted by how rare it is. A word more than half the documents use names no subject."""
+    """For each query, the items most like it, at most MATCHES_PER_ITEM above SAME_SUBJECT: the cosine of their words,
+    each weighted by how rare it is, where a word either item names as its subject counts as a subject word for both.
+    A word more than half the items use names no subject."""
     total = len(vectors)
     seen = Counter(term for vector in vectors for term in vector)
     rarity = {term: math.log(total / n) for term, n in seen.items() if n <= COMMON * total}
-    units: list[dict[str, float]] = []
+    kept = [{term: weight for term, weight in vector.items() if term in rarity} for vector in vectors]
+    norms = [math.sqrt(sum((weight * rarity[term]) ** 2 for term, weight in vector.items())) or 1.0 for vector in kept]
     postings: dict[str, list[tuple[int, float]]] = {}
-    for i, vector in enumerate(vectors):
-        weighted = {term: weight * rarity[term] for term, weight in vector.items() if term in rarity}
-        norm = math.sqrt(sum(x * x for x in weighted.values())) or 1.0
-        units.append({term: x / norm for term, x in weighted.items()})
-        for term, x in units[-1].items():
-            postings.setdefault(term, []).append((i, x))
+    for i, vector in enumerate(kept):
+        for term, weight in vector.items():
+            postings.setdefault(term, []).append((i, weight))
     found: dict[int, list[int]] = {}
     for i in queries:
-        scores: dict[int, float] = {}
-        for term, x in units[i].items():
-            for j, y in postings[term]:
+        shared: dict[int, float] = {}
+        for term, weight in kept[i].items():
+            for j, other in postings[term]:
                 if j != i:
-                    scores[j] = scores.get(j, 0.0) + x * y
+                    shared[j] = shared.get(j, 0.0) + (max(weight, other) * rarity[term]) ** 2
+        scores = {j: min(1.0, s / (norms[i] * norms[j])) for j, s in shared.items()}
         alike = sorted((j for j, s in scores.items() if s >= SAME_SUBJECT and allowed(i, j)), key=lambda j: (-scores[j], j))
         found[i] = alike[:MATCHES_PER_ITEM]
     return found
@@ -2272,10 +2287,11 @@ def clear_pairs(run: Path) -> None:
         old.unlink()
 
 
-def item_text(rid: str, requirements: dict[str, Any], cases: dict[str, Any]) -> str:
+def item_text(rid: str, requirements: dict[str, Any], cases: dict[str, Any], docs_by_req: dict[str, list[dict[str, Any]]],
+              missing_by_req: dict[str, list[dict[str, Any]]]) -> str:
     kind, item = find_item(rid, requirements, cases)
     if kind == "requirement":
-        return "\n".join([f"### {title_of(item)}", *requirement_body(item, {}, {})]).rstrip() + "\n\n"
+        return "\n".join([f"### {title_of(item)}", *requirement_body(item, docs_by_req, missing_by_req)]).rstrip() + "\n\n"
     return case_block(item)
 
 
@@ -2310,28 +2326,31 @@ def cmd_match(run_text: str) -> dict[str, Any]:
     requirements, cases = run_items(run)
     lines = saved_lines(run)
     where: dict[str, set[int]] = {}
-    docs: list[str] = []
+    items: list[str] = []  # the items to match: the scope's, by their subject lines, then the rest of the product's
     for n, entry in enumerate(feature_slices, start=1):
         for rid in slice_items(entry):
             if key(rid) not in where and key(rid) in lines:
-                docs.append(rid)
+                items.append(rid)
             where.setdefault(key(rid), set()).add(n)
-    vectors = [line_vector(lines[key(rid)]) for rid in docs]
-    inside = len(docs)
-    if links.get("outside"):  # the rest of the product, matched by its own words: titles name the subject
+    vectors = [line_vector(lines[key(rid)]) for rid in items]
+    in_scope = len(items)
+    if links.get("outside"):  # the rest of the product, matched by its own words: its titles name the subject
         for item in [*requirements.values(), *cases.values()]:
             if str(item.get("id") or "") and key(item.get("id")) not in where:
-                docs.append(str(item["id"]))
-                vectors.append(subject_vector(item.get("title"), item.get("description")))
+                expected = [step.get("expected") for step in (item.get("raw_fields") or {}).get("steps") or []
+                            if isinstance(step, dict)]
+                items.append(str(item["id"]))
+                vectors.append(subject_vector(item.get("title"), flat_text([item.get("description"), *expected])))
 
     def allowed(i: int, j: int) -> bool:
-        return j >= inside or not where[key(docs[i])] & where[key(docs[j])]
+        return j >= in_scope or not where[key(items[i])] & where[key(items[j])]
 
-    best = closest(vectors, list(range(inside)), allowed)
+    best = closest(vectors, list(range(in_scope)), allowed)
     matched = sorted({(min(i, j), max(i, j)) for i, alike in best.items() for j in alike})
+    docs_by_req, missing_by_req = doc_index(read_json(run / "docs.json") or {})
     units, texts = [], {}
     for n, (i, j) in enumerate(matched, start=1):
-        ids = [docs[i], docs[j]]
+        ids = [items[i], items[j]]
         context: list[str] = []
         for rid in ids:
             kind, item = find_item(rid, requirements, cases)
@@ -2346,10 +2365,13 @@ def cmd_match(run_text: str) -> dict[str, Any]:
         if context:
             head += f"Also here, to tell which side is right: {', '.join(context)} — what the pair's test cases test.\n"
         for rid in ids + context:
-            texts.setdefault(rid, item_text(rid, requirements, cases))
-        units.append({"n": n, "ids": ids, "context": context, "head": head + "\n"})
-    sizes = {rid: text_bytes(text) for rid, text in texts.items()}
-    groups = split_evenly([(text_bytes(u["head"]), u["ids"] + u["context"]) for u in units], sizes, SLICE_BYTES) if units else []
+            texts.setdefault(rid, item_text(rid, requirements, cases, docs_by_req, missing_by_req))
+        docs = feature_docs([requirements[key(rid)] for rid in ids + context if key(rid) in requirements], docs_by_req)
+        units.append({"n": n, "ids": ids, "context": context, "docs": docs, "head": head + "\n"})
+    sizes = {**{doc: file_bytes(run, [doc]) for unit in units for doc in unit["docs"]},
+             **{rid: text_bytes(text) for rid, text in texts.items()}}
+    weights = [(text_bytes(u["head"]), u["ids"] + u["context"] + u["docs"]) for u in units]
+    groups = split_evenly(weights, sizes, SLICE_BYTES) if units else []
     made = []
     (run / "pairs").mkdir(mode=0o700, exist_ok=True)
     for number, group in enumerate(groups, start=len(feature_slices) + 1):
@@ -2374,7 +2396,7 @@ def cmd_match(run_text: str) -> dict[str, Any]:
         made.append({
             "kind": "pairs",
             "features": list(dict.fromkeys(item_feature(rid, requirements, cases) for rid in members)),
-            "parts": names, "docs": [],
+            "parts": names, "docs": list(dict.fromkeys(doc for i in group for doc in units[i]["docs"])),
             "requirements": [rid for rid in members if find_item(rid, requirements, cases)[0] == "requirement"],
             "test_cases": [rid for rid in members if find_item(rid, requirements, cases)[0] == "test case"],
             "pairs": [units[i]["ids"] for i in group],
@@ -2570,8 +2592,7 @@ def run_items(run: Path) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str,
 def find_item(rid: str, requirements: dict[str, Any], cases: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
     if key(rid) in requirements:
         return "requirement", requirements[key(rid)]
-    number = re.fullmatch(r"(?i)(?:tc-?|c)?(\d+)", rid.strip())
-    found = cases.get(key(rid)) or (cases.get(key(f"TC-{number.group(1)}")) if number else None)
+    found = cases.get(key(rid)) or cases.get(as_case_key(rid))
     return ("test case", found) if found else ("", None)
 
 
@@ -2585,7 +2606,7 @@ def outside_items(run: Path, requirements: dict[str, Any], cases: dict[str, Any]
 
 
 def check_item(entry: Any, severity: str, requirements: dict[str, Any], cases: dict[str, Any],
-               outside: dict[str, str] | None = None) -> tuple[dict[str, Any] | None, str]:
+               elsewhere: dict[str, str]) -> tuple[dict[str, Any] | None, str]:
     """One side of a finding, looked up in the run with its quote found — or the reason it can't be."""
     if not isinstance(entry, dict) or not str(entry.get("id") or "").strip():
         return None, 'each item is {"id": …, "quote": …}'
@@ -2614,8 +2635,8 @@ def check_item(entry: Any, severity: str, requirements: dict[str, Any], cases: d
             hint = f" The closest is {near}." if near else ""
             return None, f'{found["id"]}: "{one_line(quote)[:240]}" is not in its text.{hint}'
         found.update(match)
-    if outside and key(found["id"]) in outside:
-        found["outside"] = outside[key(found["id"])]
+    if key(found["id"]) in elsewhere:
+        found["outside"] = elsewhere[key(found["id"])]
     return found, ""
 
 
@@ -2640,7 +2661,7 @@ def fix_of(value: Any, items: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any],
-                  outside: dict[str, str] | None = None) -> tuple[dict[str, Any] | None, list[str]]:
+                  elsewhere: dict[str, str]) -> tuple[dict[str, Any] | None, list[str]]:
     if not isinstance(raw, dict):
         return None, ["a finding is a JSON object: items, severity, why, fix"]
     problems: list[str] = []
@@ -2652,7 +2673,7 @@ def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any],
         problems.append(f"items: 2 to {MAX_FINDING_ITEMS} — each side, or two places in an item that contradicts itself")
     items = []
     for entry in entries[:MAX_FINDING_ITEMS]:
-        item, problem = check_item(entry, severity, requirements, cases, outside)
+        item, problem = check_item(entry, severity, requirements, cases, elsewhere)
         if item:
             items.append(item)
         else:
@@ -2729,11 +2750,11 @@ def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "", slic
         if read_json(run / "requirements.json") is None:
             raise RunError("requirements.json is missing — collect the run before saving findings.")
         requirements, cases = run_items(run)
-        outside = outside_items(run, requirements, cases)
+        elsewhere = outside_items(run, requirements, cases)
         saved: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
         for n, raw in enumerate(batch, start=1):
-            finding, problems = check_finding(raw, requirements, cases, outside)
+            finding, problems = check_finding(raw, requirements, cases, elsewhere)
             if finding:
                 saved.append(finding)
             else:
@@ -2826,7 +2847,7 @@ def and_list(items: list[str]) -> str:
 
 
 def report_blocks(links: dict[str, Any], extra: list[str], partial: str, findings: list[dict[str, Any]],
-                  unchecked: list[int], total_slices: int = 0, pairs: int | None = None) -> list[tuple[str, str]]:
+                  unchecked: list[int], total_slices: int, pairs: int | None) -> list[tuple[str, str]]:
     scope = str((links.get("scope") or {}).get("input") or "").strip()
     title = f"# Contradictions — {scope}" if scope and scope.casefold() != "all" else "# Contradictions — the whole project"
     more = f"{title} (continued)\n\n"
