@@ -62,8 +62,8 @@ Use the run summary's `counts`:
 - **`test_cases_in_scope` is 0** → name the likely cause, a scope name that matches no test case or an error from
   the test case tool, and ask whether to continue with requirements only or stop.
 
-One feature with no test cases, while others have some, is a missing-alignment finding for that feature: carry
-on.
+One feature with no test cases, while others have some, shows in the report's count of requirements without a
+test case: carry on.
 
 **Done when** both counts are above zero, or the user chose to continue.
 
@@ -73,57 +73,65 @@ In the order of the summary's `features`, for each feature:
 
 1. Run `python3 '<plugin root>/scripts/bc_run.py' summary --run '<run_dir>' --feature '<feature>'`. Read every
    bundle part it lists, in order, one part per view, and each linked doc you have not read yet in this run.
-2. Apply `howtos/detect-contradictions.md`, types 1–4, 6, and 7. When the scope is one feature, check type 5
-   inside it too.
-3. Check each board ticket that touches this feature, because its `linked_ids` name one of the feature's
-   requirements or its `feature` matches. Treat the ticket as proposed behavior, check it against the feature's
-   requirements with the same types, and name the ticket and its link in each finding.
-4. Note each requirement as `{id, feature, title, key_constraint}`, its core constraint in one line, for step 6.
+2. Compare each requirement with the test cases under it, and the feature's requirements with each other, by
+   `howtos/detect-contradictions.md`.
+3. Compare each board ticket that touches this feature — its `linked_ids` name one of the feature's
+   requirements, or its `feature` matches — with the feature's requirements. A ticket is proposed behavior, judged
+   by the same rules.
+4. Save the feature's findings: `howtos/detect-contradictions.md` → *Saving*.
+5. Note each requirement as `{id, feature, title, key_constraint}`, its core constraint in one line, for step 6.
 
-**Done when** every feature in `features` has its findings and its one-line constraints.
+**Done when** every feature in `features` has its findings saved and its one-line constraints noted.
 
 ### 6. Check across features
 
 Skip this step when the scope is one feature.
 
 From the one-line constraints, list the pairs of requirements in different features whose constraints may
-clash (type 5). Read each pair in full with
-`python3 '<plugin root>/scripts/bc_run.py' show --run '<run_dir>' --ids '<A>,<B>'`, and keep a pair only when
-the full text confirms the clash.
+clash. Read each pair in full with
+`python3 '<plugin root>/scripts/bc_run.py' show --run '<run_dir>' --ids '<A>,<B>'`, and save a pair as a finding
+only when the full text confirms the clash.
 
-**Done when** every listed pair is confirmed or dropped.
+**Done when** every listed pair is saved or dropped.
 
 ### 7. Report
 
-Write one report in the format of `howtos/detect-contradictions.md` → *Report*, holding every finding from steps
-5 and 6. Mark it **PARTIAL**, naming the missing source, when the user chose to continue without one. With no
-findings, say so, with the scope and the counts.
+Code writes the report from the saved findings. Run, as its own command:
 
-**Done when** every finding appears once, in one report.
+```
+python3 '<plugin root>/scripts/bc_run.py' report --run '<run_dir>' --lines '<json>'
+```
+
+`--lines` is a JSON list on one line, with every `'` written as `\u0027`: the `lines` from step 1 and the board's
+line from step 3. When the user chose to go on without a source, add `--partial '<source>: <error>'`. It answers
+with the report's `parts` and `fix_test_cases`. Read each part with your view tool and show it exactly as
+written, in order.
+
+**Done when** every part is shown, unchanged.
 
 ### 8. Offer to fix test cases
 
-When at least one finding's **Fix** line names a test case, end with one question:
+When `fix_test_cases` from step 7 isn't empty, end with one question:
 
 ```
-3 findings are test cases that contradict their requirement. I can update those cases to match —
+Findings 1, 4 and 7 are test cases that contradict their requirement. I can update those cases to match —
 you'll see every change before it's written. Want me to? (all / pick some / no)
 ```
 
-- Offer only the findings whose **Fix** line names a test case. Findings that fix the requirement or need a
-  decision, board ticket findings, and requirement-versus-requirement findings (types 3 and 5) stay in the
-  report: this plugin changes no requirement.
-- `pick some` → list the offered findings with numbers, and let the user choose.
-- On a yes, follow `howtos/update-test-cases.md` → *Path `contradictions`*, passing the chosen findings, each
-  with the requirement text it conflicts with. Write only what the user chose.
+- The list holds only conflicts whose fix is a test case and whose quotes code checked. Requirements and board
+  tickets stay as they are: this plugin changes neither.
+- `pick some` → the user chooses among those numbers.
+- On a yes, follow `howtos/update-test-cases.md` → *Path `contradictions`*, with the run folder and the numbers
+  chosen. Write only what the user chose.
 - With nothing to offer, ask nothing: an offer on every run teaches people to skip it.
 
 **Done when** the user has answered, or there was nothing to offer.
 
 ## Follow-up questions
 
-- **About this run** ("explain the critical one", "what does CWA-REQ-85 say?") → answer from the findings and
-  the run: the bundles hold the exact text, and `bc_run.py show --ids` prints one record with its link.
+- **About this run** ("explain the critical one", "what does CWA-REQ-85 say?") → answer from the run:
+  `bc_run.py findings --run '<run_dir>' --numbers '<n>'` prints a finding in full, the bundles hold the exact
+  text, and `bc_run.py show --ids` prints one record with its link.
 - **About a requirement or feature outside this run** → say it wasn't part of this run, and offer a run for it:
   "CWA-REQ-48 wasn't part of this run, which covered Patient Monitoring. Want me to run
   `/bc:contradiction CWA-REQ-48`?"

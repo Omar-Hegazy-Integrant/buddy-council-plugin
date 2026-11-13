@@ -52,6 +52,10 @@ _Avoid_: slash command
 A plain instruction file that a command or agent reads by path, such as `howtos/fetch-requirements.md`. It never loads on its own.
 _Avoid_: skill, internal skill
 
+**Finding**:
+One problem `/bc:contradiction` reports, such as a test case that expects a different result than its requirement: the exact words from each side, why they conflict, how serious it is, and what to change.
+_Avoid_: issue, conflict (alone)
+
 ### Stories
 
 **Platform**:

@@ -1028,6 +1028,128 @@ class Enrich(RunFolderTest):
         self.assertEqual(json.loads((self.run / "docs.json").read_text())["strategy"], "mcp")
 
 
+SNOOZE_STEPS = [
+    {"content": "Silence the alarm", "expected": "The alarm stays quiet for 15 minutes"},
+    {"content": "Wait until the snooze ends", "expected": "The alarm sounds again"},
+]
+
+
+class Findings(RunFolderTest):
+    def setUp(self):
+        super().setUp()
+        self.run = self.new_run(command="contradiction")
+        reqs = [requirement(r["id"], r["title"], r["feature"], url=f"https://req.test/{r['id']}") for r in REQUIREMENTS]
+        cases = [*CASES, case(20, "Snooze a sounding alarm", "CWA-REQ-3", steps=SNOOZE_STEPS)]
+        cases[-1]["raw_fields"]["url"] = "https://tc.test/20"
+        self.write(self.run, "requirements.json", {"requirements": reqs})
+        self.write(self.run, "test_cases.json", {"test_cases": cases})
+        bc_run.cmd_link(str(self.run))
+
+    def add(self, *findings):
+        return bc_run.cmd_findings(str(self.run), add_text=json.dumps(list(findings)))
+
+    def snooze(self, severity="critical", fix="TC-20", why="The test passes an alarm that stays quiet three times as long."):
+        return {"severity": severity, "fix": fix, "why": why, "items": [
+            {"id": "CWA-REQ-3", "quote": "silence  ALARMS for 5 minutes"},
+            {"id": "C20", "quote": "\u201cThe alarm stays quiet for 15 minutes\u201d"}]}
+
+    def test_a_finding_is_saved_only_when_its_ids_and_quotes_are_in_the_run(self):
+        result = self.add(
+            self.snooze(),
+            {"severity": "high", "fix": "TC-20", "why": "x", "items": [
+                {"id": "CWA-REQ-3", "quote": "for 5 minutes"}, {"id": "TC-20", "quote": "5 minutes"}]},
+            {"severity": "high", "fix": "decide", "why": "x", "items": [
+                {"id": "CWA-REQ-99", "quote": "anything"}, {"id": "TC-20", "quote": "The alarm sounds again"}]},
+            {"severity": "high", "fix": "TC-10", "why": "x", "items": [
+                {"id": "CWA-REQ-3", "quote": "silence alarms"}, {"id": "TC-20", "quote": "The alarm sounds again"}]},
+        )
+        self.assertEqual((result["saved"], result["total"]), (1, 1))
+        problems = {r["finding"]: " ".join(r["problems"]) for r in result["rejected"]}
+        self.assertEqual(sorted(problems), [2, 3, 4])
+        self.assertIn('"5 minutes" is not in its text', problems[2], "a quote never matches inside a longer number")
+        self.assertIn('The closest is step 1, expected result: "The alarm stays quiet for 15 minutes"', problems[2])
+        self.assertIn("CWA-REQ-99 is not in this run", problems[3])
+        self.assertIn("fix: the ID of the item to change (CWA-REQ-3, TC-20)", problems[4])
+        saved = bc_run.cmd_findings(str(self.run), numbers_text="1")["findings"][0]
+        self.assertEqual(saved["kind"], "requirement ↔ test case")
+        self.assertEqual([(i["id"], i["where"], i["quote"]) for i in saved["items"]], [
+            ("CWA-REQ-3", "description", "silence alarms for 5 minutes"),
+            ("TC-20", "step 1, expected result", "The alarm stays quiet for 15 minutes")])
+        self.assertEqual(saved["fix"], {"id": "TC-20", "type": "test case", "where": "step 1, expected result"})
+
+    def test_a_quote_copied_with_its_bundle_prefix_is_placed_and_a_long_one_is_sent_back(self):
+        result = self.add(
+            {"severity": "high", "fix": "TC-20", "why": "x", "items": [
+                {"id": "TC-20", "quote": "Expected: The alarm sounds again"}, {"id": "TC-20", "quote": "Preconditions: device paired"}]},
+            {"severity": "high", "fix": "TC-20", "why": "x", "items": [
+                {"id": "CWA-REQ-3", "quote": "Silence alarms " * 40}, {"id": "TC-20", "quote": "1. Silence the alarm"}]},
+        )
+        self.assertEqual(result["saved"], 1)
+        self.assertIn("at most 500 characters", " ".join(result["rejected"][0]["problems"]))
+        saved = bc_run.cmd_findings(str(self.run), numbers_text="1")["findings"][0]
+        self.assertEqual([(i["where"], i["quote"]) for i in saved["items"]], [
+            ("step 2, expected result", "The alarm sounds again"), ("preconditions", "Preconditions: device paired")])
+
+    def test_kinds_gaps_and_a_finding_saved_again(self):
+        self.add(
+            {"severity": "medium", "fix": "TC-20", "why": "It silences the alarm, then expects it to sound.", "items": [
+                {"id": "TC-20", "quote": "Wait until … ends"}, {"id": "TC-20", "quote": "Silence the alarm"}]},
+            {"severity": "medium", "fix": "decide", "why": "Both describe the alarm differently.", "items": [
+                {"id": "CWA-REQ-1", "quote": "sound an audible alarm"}, {"id": "CWA-REQ-2", "quote": "show a visual alarm"}]},
+        )
+        self.add({**self.snooze(), "severity": "high"})
+        self.add(self.snooze(why="Saved again with a sharper reason."))
+        found = bc_run.cmd_findings(str(self.run))
+        self.assertEqual([(f["n"], f["severity"], f["kind"]) for f in found["findings"]], [
+            (1, "critical", "requirement ↔ test case"),
+            (2, "medium", "test case contradicts itself"),
+            (3, "medium", "requirement ↔ requirement")])
+        first = bc_run.cmd_findings(str(self.run), numbers_text="1, 2")["findings"]
+        self.assertEqual(first[0]["why"], "Saved again with a sharper reason.")
+        self.assertEqual(first[1]["items"][0]["quote"], "Wait until … ends")
+        self.assertEqual(first[1]["fix"]["where"], "step 2", "the fix points at the first quote of the item to change")
+
+    def test_the_report_links_both_sides_and_offers_only_checked_test_case_fixes(self):
+        self.add(
+            self.snooze(),
+            self.snooze(severity="low", why="A weak test.") | {"items": [
+                {"id": "CWA-REQ-4", "quote": "display heart rate"}, {"id": "TC-14"}], "fix": "TC-14"},
+            {"severity": "high", "fix": "PROJ-7", "why": "The ticket shortens the snooze.", "items": [
+                {"id": "PROJ-7", "quote": "Snooze for 1 minute", "board": {"title": "Shorter snooze", "url": "https://jira.test/PROJ-7"}},
+                {"id": "CWA-REQ-3", "quote": "silence alarms for 5 minutes"}]},
+        )
+        result = bc_run.cmd_report(str(self.run), lines_text='["Fetch: board issues \u2192 4 fetched from board 9"]')
+        self.assertEqual(result["findings"], {"critical": 1, "high": 1, "medium": 0, "low": 1})
+        self.assertEqual(result["fix_test_cases"], [1], "never a low finding, a board finding, or an unchecked quote")
+        report = Path(result["parts"][0]).read_text()
+        self.assertTrue(report.startswith("# Contradictions — the whole project\n"))
+        self.assertIn("Fetch: board issues \u2192 4 fetched from board 9", report)
+        self.assertIn("**Links:** 1 requirement has no test case and 3 test cases have no requirement. "
+                      "`/bc:coverage` lists and repairs them.", report)
+        self.assertIn("- **CWA-REQ-3** [Silence alarms for 5 minutes](https://req.test/CWA-REQ-3) — description: "
+                      "\"silence alarms for 5 minutes\"", report)
+        self.assertIn("- **TC-20** [Snooze a sounding alarm](https://tc.test/20) — step 1, expected result: "
+                      "\"The alarm stays quiet for 15 minutes\"", report)
+        self.assertIn("- **Fix:** change TC-20, step 1, expected result.", report)
+        self.assertLess(report.index("### 1. Requirement ↔ test case"), report.index("### 2. Requirement ↔ test case"))
+        self.assertIn("## Board tickets\n\n### 3. High: board ticket ↔ requirement", report)
+        self.assertIn("\"Snooze for 1 minute\" _(not checked: board tickets aren't saved in the run)_", report)
+        self.assertIn("1 finding names a test case to change: 1.", report)
+
+    def test_a_long_report_comes_in_parts_small_enough_for_one_read(self):
+        self.add(*[self.snooze(why=f"Reason {n}: " + "the alarm stays quiet too long. " * 12) | {"items": [
+            {"id": "CWA-REQ-3", "quote": "silence alarms for 5 minutes"},
+            {"id": "TC-20", "quote": "The alarm stays quiet for 15 minutes"}, {"id": "TC-20", "quote": word}]}
+            for n, word in enumerate(["Silence the alarm", "Wait until the snooze ends", "The alarm sounds again"])])
+        with mock.patch.object(bc_run, "PART_BYTES", 1500):
+            result = bc_run.cmd_report(str(self.run), partial="board issues: 401")
+            parts = [Path(p).read_text() for p in result["parts"]]
+            self.assertGreater(len(parts), 1)
+            self.assertTrue(all(len(p.encode("utf-8")) <= bc_run.PART_BYTES for p in parts))
+        self.assertIn("**PARTIAL** — not read: board issues: 401.", parts[0])
+        self.assertTrue(parts[1].startswith("# Contradictions — the whole project (continued)\n\n## Critical"))
+
+
 class Cli(RunFolderTest):
     def test_each_subcommand_prints_one_json_object(self):
         out = io.StringIO()
@@ -1063,6 +1185,20 @@ class Cli(RunFolderTest):
             code = bc_run.main(["link", "--run", self.tmp.name])
         self.assertEqual(code, 1)
         self.assertFalse(json.loads(out.getvalue())["ok"])
+
+    def test_findings_and_report_print_json(self):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": REQUIREMENTS})
+        self.write(run, "test_cases.json", {"test_cases": CASES})
+        bc_run.cmd_link(str(run))
+        finding = {"severity": "high", "fix": "TC-10", "why": "It expects a sound the requirement doesn\u0027t ask for.",
+                   "items": [{"id": "CWA-REQ-2", "quote": "show a visual alarm"}, {"id": "TC-10", "quote": "It happens"}]}
+        for argv in (["findings", "--run", str(run), "--add", json.dumps(finding)], ["report", "--run", str(run)]):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(bc_run.main(argv), 0)
+            self.assertTrue(json.loads(out.getvalue())["ok"])
+        self.assertEqual(json.loads(out.getvalue())["fix_test_cases"], [1])
 
 
 if __name__ == "__main__":

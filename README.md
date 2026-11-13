@@ -403,19 +403,18 @@ so it works whatever your PATH is — and records an `automation` block in that 
 
 A feature is a **Jama folder** — by default one of the folders your linked requirements sit in, inside the document `/bc:setup` anchored on your test suite, with deeper folders rolled into it. The scope covers everything under it; a sub-folder name narrows to just that part, and a path such as `"Software Requirements/Patient Monitoring"` picks between folders that share a name. The same holds for `/bc:coverage`, `/bc:onboarding`, and `/bc:codemap`. Test cases are found by their requirement links, whatever their TestRail folders are called.
 
-It reads the requirements, the test cases, and the in-flight tickets on your Jira dev board, code links them, and your assistant checks them for 7 types of contradictions:
+It reads the requirements, the test cases, and the in-flight tickets on your Jira dev board, code links them, and your assistant compares each requirement with its test cases, the requirements with each other, and the board tickets with the requirements. Each finding is named by what it compares — such as *requirement ↔ test case* — and rated by what could go wrong:
 
-| Type | Severity |
-|------|----------|
-| Direct conflicts | CRITICAL |
-| Behavioral conflicts | HIGH |
-| Test vs requirement conflicts | HIGH |
-| Scope overlaps | MEDIUM |
-| Cross-feature tensions | MEDIUM |
-| Temporal/state conflicts | MEDIUM |
-| Missing alignment | LOW |
+| Severity | Meaning |
+|----------|---------|
+| Critical | A broken product would still pass the test |
+| High | The items ask for different results in the same situation |
+| Medium | They may conflict, and a person decides |
+| Low | A test case doesn't really test its requirement |
 
-Every requirement-versus-test finding names the side to fix. When at least one says **the test case** is wrong, the report ends with a one-line offer to update those cases so they match the requirement — only the conflicting precondition, step, or expected result, never the requirement links. Answer `all`, `pick some`, or `no`; you see every before → after change before anything is written. Findings where the requirement looks wrong, or that need a decision, are never offered: requirements live in Jama, and the plugin never writes them.
+Code checks every finding before you see it: each ID must be in the run, and each quote must be the item's own words. Code then writes the report — each finding with a link to every item, their exact words, why they conflict, and what to change. Requirements without test cases and test cases without requirements are one line of counts there; `/bc:coverage` lists and repairs them.
+
+When at least one finding says **the test case** is wrong, the report ends with a one-line offer to update those cases so they match the requirement — only the conflicting precondition, step, or expected result, never the requirement links. Answer `all`, `pick some`, or `no`; you see every before → after change before anything is written. Findings where the requirement looks wrong, or that need a decision, are never offered: requirements live in Jama, and the plugin never writes them.
 
 ### Check Coverage
 
@@ -612,8 +611,8 @@ These commands read the most data, so they split the work by what it needs:
 | Work | Runs on |
 |---|---|
 | Fetching requirements, every test case in the suite, and the GitHub docs — for a lookup on Jama, the rest of the project as background too; waiting out a slow Jama read | the `data-collector` sub-agent on a **low-cost model** — `claude-haiku-4.5`, else `gpt-5-mini`, in Copilot CLI; Haiku in Claude Code; your session's model in assistants that don't load plugin agents |
-| Cross-linking IDs and counting untested requirements, orphans, stranded links, coverage per feature; ranking requirements and background against a lookup | **code** (`scripts/bc_run.py`) — no model at all |
-| Contradictions, weak coverage, severity, the report, every question to you, every write | **your session's model**, reading one feature at a time |
+| Cross-linking IDs and counting untested requirements, orphans, stranded links, coverage per feature; ranking requirements and background against a lookup; checking every contradiction finding's IDs and quotes against the run, and writing the contradiction report | **code** (`scripts/bc_run.py`) — no model at all |
+| Judging contradictions and weak coverage, severity, the coverage report, every question to you, every write | **your session's model**, reading one feature at a time |
 
 The data travels as files, never as a model's retelling: the servers write it straight into a **run folder** in your project, `.buddy-council/runs/<run-id>/`, and your model reads the counts through `bc_run.py summary` and then each feature's bundle — its requirements, verbatim, with their custom fields (platform, product, version), each followed by the test cases that link to it with theirs (applicable OS, product version, CtQ, priority) — plus the GitHub docs the feature links to. The low-cost model is never taken at its word: the link step checks the run against your `sources.json` and writes the `Fetch:`, `Enrichment:` and `Readiness:` lines itself, and a run that doesn't match the config is collected again by your session's model. If the sub-agent can't run, you'll see `Collect: ran inline — …` and your session's model does the same steps itself.
 
@@ -631,7 +630,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture docum
 - **Jama is read-only by construction.** The vendored Jama server has no write tools at all: every tool is `jama_get_*`, its HTTP client can only issue GET requests, and its test suite fails if that ever changes. That is why the hook can auto-approve the `jama_get_*` glob. Jama's own hosted MCP server is deliberately not used — it exposes create/edit/move tools and has no bulk reads
 - The Jama key lives in the key store and nowhere else — the server reads it only from the key store, never from environment variables. Prefer an API client ID/secret on a read-only Jama account; it is revocable without touching the account password
 - The hook's TestRail allowlist is the glob `testrail_get_*`, which is safe only because every TestRail write tool is named `testrail_add_*` or `testrail_update_*`. Never name a write tool `testrail_get_*` — the server's test suite fails if one is
-- **Run folders hold requirement and test case text on disk.** `/bc:coverage`, `/bc:contradiction`, and `/bc:ask` lookups write what they fetch to `.buddy-council/runs/` in your project — inside `.buddy-council/`, which `/bc:setup` keeps out of git — with files readable only by you (`chmod 600`). Only the newest 5 runs are kept, none longer than a week; delete the folder any time. The read tools' `save_to` option is the servers' only local write, and it accepts nothing but a `.json` file directly inside an existing run folder — never a symbolic link, never anywhere else
+- **Run folders hold requirement and test case text on disk.** `/bc:coverage`, `/bc:contradiction`, and `/bc:ask` lookups write what they fetch to `.buddy-council/runs/` in your project — and `/bc:contradiction` writes its findings and report beside it — inside `.buddy-council/`, which `/bc:setup` keeps out of git — with files readable only by you (`chmod 600`). Only the newest 5 runs are kept, none longer than a week; delete the folder any time. The read tools' `save_to` option is the servers' only local write, and it accepts nothing but a `.json` file directly inside an existing run folder — never a symbolic link, never anywhere else
 - **Updates guard what was there.** The update tools read every case first and send only what differs, refuse to remove a requirement link unless the user asked for that explicitly, refuse to overwrite a case edited since it was read, verify every field against what TestRail stored (it silently discards unknown custom fields), and never move a case or change its template. No path deletes a test case
 - **`/bc:vnv-sprint-prep` is dry-run by default** because it writes to tickets other teams own — and, in phase 7, to the team's TestRail suite. A plain run creates nothing, comments nowhere, relabels nothing, and writes or updates no test cases; `--apply` executes after one batch confirmation per phase
 - The Jira token is the Jira site's key and nowhere else. The Jira connector gives it to that site's mcp-atlassian copy in an env file that exists only while the copy starts (`chmod 600`, in a private folder), never on a command line or in a process's environment, and strips every other Jira or Confluence setting from the copy's environment. The site's key file is the single place to rotate or revoke it

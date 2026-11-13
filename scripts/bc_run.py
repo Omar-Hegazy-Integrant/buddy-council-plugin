@@ -10,6 +10,8 @@ step to the analysis as files, so the data itself never passes through a model:
   docs/, docs.json   GitHub docs the requirements link to (``enrich``, the cli strategy)
   links.json         requirement <-> test case links, untested, orphans, stranded links (``link``)
   bundles/*.md       one feature at a time, verbatim text, each part small enough for one read (``link``)
+  findings/*.json    what /bc:contradiction found, each checked against the run (``findings``)
+  report-N.md        the contradiction report, written from the findings, in parts (``report``)
   manifest.json      what was collected, when, and the counts
 
 Subcommands, each printing one JSON object to stdout:
@@ -29,6 +31,11 @@ Subcommands, each printing one JSON object to stdout:
   recent --project DIR [--max-age-minutes N]           the newest complete, verified run of the whole scope
   doc    --url URL [--max-chars N]                     print one GitHub doc, read with the first sign-in that
                                                        works (for commands that enrich without a run folder)
+  findings --run DIR --add JSON                        check findings against the run: save each whose IDs and
+                                                       quotes are in it, send back the rest with the reason
+  findings --run DIR [--numbers 'N, N']                the saved findings, numbered as in the report
+  report --run DIR [--lines JSON] [--partial TEXT]     write the contradiction report from the saved findings,
+                                                       in parts small enough for one read
 
 It also saves the progress logs beside the settings, so neither prompts:
 
@@ -37,8 +44,8 @@ It also saves the progress logs beside the settings, so neither prompts:
   note     --project DIR --title TEXT --text TEXT      append one entry to onboarding-notes.md
   archive  --project DIR --log onboarding|vnv          set a log (and its notes) aside under a dated name
 
-``--patch`` is JSON on one line, with every ' written as \u0027, so the command stays one plain line the bash hook
-can approve. It merges like the settings do — objects key by key, anything else replaces — except that the log's
+``--patch``, ``--add``, and ``--lines`` are JSON on one line, with every ' written as \u0027, so the command stays one
+plain line the bash hook can approve. It merges like the settings do — objects key by key, anything else replaces — except that the log's
 own list merges item by item: onboarding ``features`` by ``name``, V&V ``stories`` by ``dev_key``.
 
 Nothing here talks to Jama, TestRail, or Jira, and nothing is written outside the project's .buddy-council folder.
@@ -53,6 +60,7 @@ import concurrent.futures
 import contextlib
 import copy
 import datetime
+import difflib
 import json
 import math
 import os
@@ -63,6 +71,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1848,6 +1857,444 @@ def cmd_recent(project_text: str, max_age_minutes: int = RECENT_MINUTES) -> dict
 
 
 # ---------------------------------------------------------------------------
+# findings, report — /bc:contradiction's findings, checked against the run, and the report written from them
+# ---------------------------------------------------------------------------
+
+SEVERITIES = ("critical", "high", "medium", "low")
+SEVERITY_MEANS = {
+    "critical": "a broken product would still pass the test",
+    "high": "the items ask for different results in the same situation",
+    "medium": "they may conflict, and a person decides",
+    "low": "a test case doesn't really test its requirement",
+}
+BOARD = "board ticket"
+ITEM_TYPES = (BOARD, "requirement", "test case")  # the order a finding's kind names them in
+DECIDE = "decide"
+MAX_FINDING_ITEMS = 8
+MAX_QUOTE_CHARS = 500  # a phrase or a sentence: enough to find the place, and a report part stays one read
+MAX_WHY_CHARS = 600
+CLOSEST_RATIO = 0.5  # a sentence this much like a quote that isn't in an item is offered as the likely fix
+BUNDLE_PREFIX = re.compile(r"^(?:\d+\. )?(?:expected(?: result)?: ?)?")  # what a bundle prints before a step's text
+LABELLED = re.compile(r"([A-Z][A-Za-z ]{2,30}): ")  # a description paragraph such as "Preconditions: device paired"
+LOOKALIKES = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'", "\u2032": "'", "\u00b4": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"', "\u00ab": '"', "\u00bb": '"',
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2015": "-", "\u2212": "-",
+})
+WRAPPING = "\"'\u201c\u201d\u2018\u2019 \t\r\n"
+
+
+def folded(text: str) -> tuple[str, list[int]]:
+    """Text as a quote is checked against it — case, spacing, and the style of quote marks and dashes set aside —
+    and, for each of its characters, the position it came from in the original."""
+    chars: list[str] = []
+    origin: list[int] = []
+    for position, char in enumerate(text):
+        for piece in unicodedata.normalize("NFKC", char).translate(LOOKALIKES).casefold():
+            if piece.isspace():
+                if chars and chars[-1] != " ":
+                    chars.append(" ")
+                    origin.append(position)
+            else:
+                chars.append(piece)
+                origin.append(position)
+    if chars and chars[-1] == " ":
+        chars.pop()
+        origin.pop()
+    return "".join(chars), origin
+
+
+def quote_fragments(quote: str) -> tuple[list[str], bool, bool]:
+    """A quote's folded fragments — "…" marks words left out — and whether it starts and ends mid-text. A step
+    number or "Expected:" copied from a bundle along with the words is set aside."""
+    text = BUNDLE_PREFIX.sub("", folded(str(quote).strip(WRAPPING))[0], count=1)
+    fragments = [piece.strip() for piece in text.split("...") if piece.strip()]
+    return fragments, text.startswith("..."), text.endswith("...")
+
+
+def find_words(text: str, fragment: str, start: int) -> int:
+    """Where a fragment starts in folded text, at or after start, on word edges: "30 mins" is not in "130 mins"."""
+    while True:
+        at = text.find(fragment, start)
+        if at < 0:
+            return -1
+        end = at + len(fragment)
+        clean_start = at == 0 or not (text[at - 1].isalnum() and fragment[0].isalnum())
+        clean_end = end == len(text) or not (text[end].isalnum() and fragment[-1].isalnum())
+        if clean_start and clean_end:
+            return at
+        start = at + 1
+
+
+def description_spots(description: Any) -> list[tuple[str, Any]]:
+    """A test case's description, one spot per paragraph, each named by its label: "Preconditions: …" is the
+    preconditions."""
+    spots: list[tuple[str, Any]] = []
+    for paragraph in re.split(r"\n\s*\n", str(description or "")):
+        label = LABELLED.match(paragraph.strip())
+        spots.append((label.group(1).casefold() if label else "description", paragraph))
+    return spots
+
+
+def spots_of(item: dict[str, Any], kind: str) -> list[tuple[str, str]]:
+    """An item's text, field by field, each with the name a finding gives its place: "step 3, expected result".
+    The title comes last, so words it shares with the body are placed in the body."""
+    raw = item.get("raw_fields") or {}
+    spots: list[tuple[str, Any]]
+    if kind == "requirement":
+        spots = [("description", item.get("description")), ("rationale", item.get("rationale")),
+                 ("status", item.get("status"))]
+        spots += [(label, flat_text(value)) for label, value in raw.items() if label not in BOOKKEEPING]
+    else:
+        spots = description_spots(item.get("description"))
+        for n, step in enumerate(raw.get("steps") or [], start=1):
+            if isinstance(step, dict):
+                spots += [(f"step {n}", step.get("content")), (f"step {n}, expected result", step.get("expected"))]
+        spots += [(label, flat_text(value)) for label, value in (raw.get("custom") or {}).items()]
+    spots.append(("title", item.get("title")))
+    return [(label, str(text)) for label, text in spots if str(text or "").strip()]
+
+
+def match_quote(quote: str, spots: list[tuple[str, str]]) -> dict[str, str] | None:
+    """Where in an item a quote is, and its words as the item has them — or None when it isn't there."""
+    fragments, opens_mid, ends_mid = quote_fragments(quote)
+    if not fragments:
+        return None
+    for label, text in spots:
+        flat, origin = folded(text)
+        spans: list[tuple[int, int]] = []
+        start = 0
+        for fragment in fragments:
+            at = find_words(flat, fragment, start)
+            if at < 0:
+                break
+            spans.append((at, at + len(fragment)))
+            start = at + len(fragment)
+        if len(spans) == len(fragments):
+            words_ = " … ".join(one_line(text[origin[a]:origin[b - 1] + 1]) for a, b in spans)
+            return {"where": label, "quote": f"{'…' if opens_mid else ''}{words_}{'…' if ends_mid else ''}"}
+    return None
+
+
+def likeness(wanted: str, flat: str) -> float:
+    """How alike a quote is to a sentence, or to the run of words in it the quote's length."""
+    found, size = flat.split(), max(1, len(wanted.split()))
+    windows = [flat] if len(found) <= size + 2 else [" ".join(found[i:i + size]) for i in range(len(found) - size + 1)]
+    return max(difflib.SequenceMatcher(None, wanted, window).ratio() for window in windows)
+
+
+def closest_text(quote: str, spots: list[tuple[str, str]]) -> str:
+    """The sentence of an item most like a quote that isn't in it, so the quote can be corrected without a re-read."""
+    wanted = " ".join(quote_fragments(quote)[0])
+    best, score = "", CLOSEST_RATIO
+    for label, text in spots:
+        for sentence in re.split(r"(?<=[.!?;])\s+|\n+", text):
+            flat = folded(sentence)[0]
+            ratio = likeness(wanted, flat) if flat and wanted else 0.0
+            if ratio > score:
+                best, score = f'{label}: "{one_line(sentence)[:240]}"', ratio
+    return best
+
+
+def run_items(run: Path) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    requirements: dict[str, dict[str, Any]] = {}
+    for item in requirement_list(read_json(run / "requirements.json")):
+        requirements.setdefault(key(item.get("id")), item)
+    cases: dict[str, dict[str, Any]] = {}
+    for item in case_list(read_json(run / "test_cases.json")):
+        cases.setdefault(key(item.get("id")), item)
+    return requirements, cases
+
+
+def find_item(rid: str, requirements: dict[str, Any], cases: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    if key(rid) in requirements:
+        return "requirement", requirements[key(rid)]
+    number = re.fullmatch(r"(?i)(?:tc-?|c)?(\d+)", rid.strip())
+    found = cases.get(key(rid)) or (cases.get(key(f"TC-{number.group(1)}")) if number else None)
+    return ("test case", found) if found else ("", None)
+
+
+def check_item(entry: Any, severity: str, requirements: dict[str, Any], cases: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    """One side of a finding, looked up in the run with its quote found — or the reason it can't be."""
+    if not isinstance(entry, dict) or not str(entry.get("id") or "").strip():
+        return None, 'each item is {"id": …, "quote": …}'
+    rid = str(entry["id"]).strip()
+    quote = str(entry.get("quote") or "").strip()
+    if not quote and severity != "low":
+        return None, f"{rid}: quote its exact words"
+    if len(quote) > MAX_QUOTE_CHARS:
+        return None, f"{rid}: quote a phrase or a sentence, at most {MAX_QUOTE_CHARS} characters — not the whole text"
+    board = entry.get("board")
+    if board is not None:
+        if not isinstance(board, dict) or not one_line(board.get("title")):
+            return None, f'{rid}: a board ticket carries "board": {{"title": …, "url": …}}'
+        return {"id": rid, "type": BOARD, "title": one_line(board.get("title")), "url": str(board.get("url") or "").strip(),
+                "where": "", "quote": one_line(quote), "checked": False}, ""
+    kind, item = find_item(rid, requirements, cases)
+    if item is None:
+        return None, f'{rid} is not in this run: check the ID. A board ticket carries "board": {{"title": …, "url": …}}'
+    found = {"id": str(item.get("id")), "type": kind, "title": one_line(item.get("title")),
+             "url": str((item.get("raw_fields") or {}).get("url") or ""), "where": "", "quote": "", "checked": True}
+    if quote:
+        spots = spots_of(item, kind)
+        match = match_quote(quote, spots)
+        if match is None:
+            near = closest_text(quote, spots)
+            hint = f" The closest is {near}." if near else ""
+            return None, f'{found["id"]}: "{one_line(quote)[:240]}" is not in its text.{hint}'
+        found.update(match)
+    return found, ""
+
+
+def kind_of(items: list[dict[str, Any]]) -> str:
+    types = [t for t in ITEM_TYPES if any(i["type"] == t for i in items)]
+    if len({key(i["id"]) for i in items}) == 1:
+        return f"{types[0]} contradicts itself"
+    return f"{types[0]} ↔ {types[0]}" if len(types) == 1 else " ↔ ".join(types)
+
+
+def fix_of(value: Any, items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The item a finding says to change, at the place of its first quote — or "decide"."""
+    text = str((value.get("id") if isinstance(value, dict) else value) or "").strip()
+    if key(text) == DECIDE:
+        return {"decide": True}
+    number = re.fullmatch(r"(?i)(?:tc-?|c)?(\d+)", text)
+    wanted = {key(text), key(f"TC-{number.group(1)}") if number else ""} - {""}
+    target = next((i for i in items if key(i["id"]) in wanted), None)
+    if target is None:
+        return None
+    return {"id": target["id"], "type": target["type"], "where": target["where"]}
+
+
+def check_finding(raw: Any, requirements: dict[str, Any], cases: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    if not isinstance(raw, dict):
+        return None, ["a finding is a JSON object: items, severity, why, fix"]
+    problems: list[str] = []
+    severity = str(raw.get("severity") or "").strip().casefold()
+    if severity not in SEVERITIES:
+        problems.append(f"severity: one of {', '.join(SEVERITIES)}")
+    entries = raw.get("items") if isinstance(raw.get("items"), list) else []
+    if not 2 <= len(entries) <= MAX_FINDING_ITEMS:
+        problems.append(f"items: 2 to {MAX_FINDING_ITEMS} — each side, or two places in an item that contradicts itself")
+    items = []
+    for entry in entries[:MAX_FINDING_ITEMS]:
+        item, problem = check_item(entry, severity, requirements, cases)
+        if item:
+            items.append(item)
+        else:
+            problems.append(problem)
+    why = one_line(raw.get("why"))
+    if not why or len(why) > MAX_WHY_CHARS:
+        problems.append(f"why: one plain sentence on why they conflict, at most {MAX_WHY_CHARS} characters")
+    fix = fix_of(raw.get("fix"), items)
+    if fix is None and not problems:
+        ids = ", ".join(dict.fromkeys(i["id"] for i in items))
+        problems.append(f'fix: the ID of the item to change ({ids}), or "decide" when a person must choose')
+    if problems:
+        return None, problems
+    return {"severity": severity, "kind": kind_of(items), "items": items, "why": why, "fix": fix}, []
+
+
+def finding_key(finding: dict[str, Any]) -> str:
+    """The same sides and quotes are the same finding: saving it again replaces it."""
+    return json.dumps(sorted([key(i.get("id")), folded(i.get("quote") or "")[0]] for i in finding.get("items") or []))
+
+
+def saved_findings(run: Path) -> list[dict[str, Any]]:
+    """Every finding saved in the run, in the order first saved; a finding saved again keeps its place."""
+    found: list[dict[str, Any]] = []
+    place: dict[str, int] = {}
+    folder = run / "findings"
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        data = read_json(path)
+        for finding in (data.get("findings") or []) if isinstance(data, dict) else []:
+            name = finding_key(finding)
+            if name in place:
+                found[place[name]] = finding
+            else:
+                place[name] = len(found)
+                found.append(finding)
+    return found
+
+
+def on_board(finding: dict[str, Any]) -> bool:
+    return any(i.get("type") == BOARD for i in finding.get("items") or [])
+
+
+def numbered(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The findings in report order — by severity, board tickets last — numbered from 1."""
+    ordered = sorted(findings, key=lambda f: (on_board(f), SEVERITIES.index(f["severity"])))
+    return [{"n": n, **finding} for n, finding in enumerate(ordered, start=1)]
+
+
+def fixes_a_test_case(finding: dict[str, Any]) -> bool:
+    """A conflict whose fix is a test case, every quote checked: what the fix offer covers."""
+    return (finding["severity"] != "low" and (finding.get("fix") or {}).get("type") == "test case"
+            and all(i.get("checked") for i in finding["items"]))
+
+
+def cmd_findings(run_text: str, add_text: str = "", numbers_text: str = "") -> dict[str, Any]:
+    run = run_folder(run_text)
+    if add_text.strip():
+        try:
+            batch = json.loads(add_text)
+        except ValueError as exc:
+            raise RunError(f"--add isn't JSON ({exc}). Pass it on one line, with every ' written as \\u0027.") from None
+        if isinstance(batch, dict):
+            batch = batch["findings"] if isinstance(batch.get("findings"), list) else [batch]
+        if not isinstance(batch, list) or not batch:
+            raise RunError("--add takes a finding, or a list of them.")
+        requirements, cases = run_items(run)
+        if not requirements:
+            raise RunError("requirements.json is missing or empty — collect the run before saving findings.")
+        saved: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+        for n, raw in enumerate(batch, start=1):
+            finding, problems = check_finding(raw, requirements, cases)
+            if finding:
+                saved.append(finding)
+            else:
+                entries = raw.get("items") if isinstance(raw, dict) and isinstance(raw.get("items"), list) else []
+                rejected.append({"finding": n, "ids": [str(e.get("id")) for e in entries if isinstance(e, dict)],
+                                 "problems": problems})
+        if saved:
+            folder = run / "findings"
+            folder.mkdir(mode=0o700, exist_ok=True)
+            write_json(folder / f"{time.time_ns():020d}-{os.getpid()}.json", {"saved_at": utc_now(), "findings": saved})
+        return {"saved": len(saved), "rejected": rejected, "total": len(saved_findings(run))}
+    findings = numbered(saved_findings(run))
+    if numbers_text.strip():
+        wanted = [int(n) for n in re.findall(r"\d+", numbers_text)]
+        by_number = {f["n"]: f for f in findings}
+        return {"findings": [by_number[n] for n in wanted if n in by_number],
+                "not_found": [n for n in wanted if n not in by_number]}
+    return {
+        "total": len(findings),
+        "findings": [{"n": f["n"], "severity": f["severity"], "kind": f["kind"],
+                      "ids": list(dict.fromkeys(i["id"] for i in f["items"])), "fix": fix_sentence(f["fix"])}
+                     for f in findings],
+        "fix_test_cases": [f["n"] for f in findings if fixes_a_test_case(f)],
+    }
+
+
+def plural(count: int, word: str) -> str:
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def link_text(title: str, url: str) -> str:
+    title = one_line(title).replace("[", "\\[").replace("]", "\\]")
+    url = str(url or "").strip()
+    if url.startswith(("https://", "http://")):
+        return f"[{title or 'open'}]({url.replace(' ', '%20').replace(')', '%29')})"
+    return title
+
+
+def fix_sentence(fix: dict[str, Any]) -> str:
+    if fix.get("decide"):
+        return "a person decides which side is right."
+    return f"change {fix['id']}{', ' + fix['where'] if fix.get('where') else ''}."
+
+
+def finding_block(finding: dict[str, Any], severity_in_heading: bool = False) -> str:
+    kind = finding["kind"]
+    heading = f"{finding['severity'].capitalize()}: {kind}" if severity_in_heading else kind[:1].upper() + kind[1:]
+    lines = [f"### {finding['n']}. {heading}"]
+    named: set[str] = set()
+    for item in finding["items"]:
+        text = f"**{item['id']}**"
+        if key(item["id"]) not in named:
+            named.add(key(item["id"]))
+            title = link_text(item.get("title") or "", item.get("url") or "")
+            text += f" {title}" if title else ""
+        if item.get("where"):
+            text += f" — {item['where']}"
+        if item.get("quote"):
+            text += f': "{item["quote"]}"'
+            if not item.get("checked"):
+                text += " _(not checked: board tickets aren't saved in the run)_"
+        lines.append(f"- {text}")
+    lines += [f"- **Why:** {finding['why']}", f"- **Fix:** {fix_sentence(finding['fix'])}"]
+    return "\n".join(lines) + "\n\n"
+
+
+def links_line(counts: dict[str, Any]) -> str:
+    untested, orphans = int(counts.get("untested") or 0), int(counts.get("orphans") or 0)
+    if not untested and not orphans:
+        return "**Links:** every requirement has a test case, and every test case has a requirement."
+    parts = []
+    if untested:
+        parts.append(f"{plural(untested, 'requirement')} {'has' if untested == 1 else 'have'} no test case")
+    if orphans:
+        parts.append(f"{plural(orphans, 'test case')} {'has' if orphans == 1 else 'have'} no requirement")
+    return f"**Links:** {' and '.join(parts)}. `/bc:coverage` lists and repairs them."
+
+
+def report_blocks(links: dict[str, Any], extra: list[str], partial: str, findings: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    scope = str((links.get("scope") or {}).get("input") or "").strip()
+    title = f"# Contradictions — {scope}" if scope and scope.casefold() != "all" else "# Contradictions — the whole project"
+    more = f"{title} (continued)\n\n"
+    lines = list(links.get("lines") or [])
+    lines += [line for line in (one_line(x) for x in extra) if line and line not in lines]
+    head = [title, ""]
+    if lines:
+        head += ["```text", *lines, "```", ""]
+    missing = [*(links.get("missing") or []), *([one_line(partial)] if one_line(partial) else [])]
+    if missing:
+        head += [f"**PARTIAL** — not read: {'; '.join(missing)}.", ""]
+    counts = links.get("counts") or {}
+    tally = ", ".join(f"{sum(1 for f in findings if f['severity'] == s)} {s}" for s in SEVERITIES)
+    head += [
+        f"**Checked:** {plural(int(counts.get('requirements') or 0), 'requirement')} and "
+        f"{plural(int(counts.get('test_cases_in_scope') or 0), 'test case')}.  ",
+        f"**Found:** {tally}.  " if findings else "**Found:** no contradictions.  ",
+        links_line(counts),
+    ]
+    blocks = [("\n".join(head) + "\n\n", "")]
+    sections = [(f"## {s.capitalize()} — {SEVERITY_MEANS[s]}", [f for f in findings if not on_board(f) and f["severity"] == s], False)
+                for s in SEVERITIES]
+    sections.append(("## Board tickets", [f for f in findings if on_board(f)], True))
+    for heading, group, severity_in_heading in sections:
+        for n, finding in enumerate(group):
+            block = finding_block(finding, severity_in_heading)
+            blocks.append(((f"{heading}\n\n" if n == 0 else "") + block, f"{more}{heading} (continued)\n\n"))
+    offered = [str(f["n"]) for f in findings if fixes_a_test_case(f)]
+    if offered:
+        verb = "names" if len(offered) == 1 else "name"
+        blocks.append((f"## Test cases to fix\n\n{plural(len(offered), 'finding')} {verb} a test case to change: "
+                       f"{', '.join(offered)}.\n", more))
+    return blocks
+
+
+def cmd_report(run_text: str, lines_text: str = "", partial: str = "") -> dict[str, Any]:
+    """The contradiction report, written by code from the saved findings, in parts small enough for one read."""
+    run = run_folder(run_text)
+    links = read_json(run / "links.json")
+    if not isinstance(links, dict):
+        raise RunError("links.json is missing — the link step did not run, so there is no run to report on.")
+    extra: Any = []
+    if lines_text.strip():
+        try:
+            extra = json.loads(lines_text)
+        except ValueError as exc:
+            raise RunError(f"--lines isn't JSON ({exc}). Pass a list on one line, with every ' written as \\u0027.") from None
+    if not isinstance(extra, list) or not all(isinstance(line, str) for line in extra):
+        raise RunError("--lines takes a JSON list of lines.")
+    findings = numbered(saved_findings(run))
+    parts = pack_blocks(report_blocks(links, extra, partial, findings))
+    for old in run.glob("report-*.md"):
+        old.unlink()
+    paths = []
+    for n, text in enumerate(parts, start=1):
+        write_private(run / f"report-{n}.md", text)
+        paths.append(str(run / f"report-{n}.md"))
+    return {
+        "parts": paths,
+        "findings": {s: sum(1 for f in findings if f["severity"] == s) for s in SEVERITIES},
+        "fix_test_cases": [f["n"] for f in findings if fixes_a_test_case(f)],
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -2005,6 +2452,14 @@ def main(argv: list[str] | None = None) -> int:
     archive = sub.add_parser("archive", help="set a progress log aside under a dated name")
     archive.add_argument("--project", required=True)
     archive.add_argument("--log", required=True, choices=sorted(LOGS))
+    findings = sub.add_parser("findings", help="check findings against the run and save them, or print the saved ones")
+    findings.add_argument("--run", required=True)
+    findings.add_argument("--add", default="", help="a finding or a list of them, JSON on one line; write every ' as \\u0027")
+    findings.add_argument("--numbers", default="", help="print these findings in full, by their numbers in the report")
+    report = sub.add_parser("report", help="write the contradiction report from the saved findings")
+    report.add_argument("--run", required=True)
+    report.add_argument("--lines", default="", help="more lines for its top, as a JSON list: the board's and the settings'")
+    report.add_argument("--partial", default="", help="a source the user chose to go on without")
     args = parser.parse_args(argv)
     try:
         if args.action == "show":
@@ -2029,6 +2484,10 @@ def main(argv: list[str] | None = None) -> int:
             result = cmd_note(args.project, args.title, args.text)
         elif args.action == "archive":
             result = cmd_archive(args.project, args.log)
+        elif args.action == "findings":
+            result = cmd_findings(args.run, args.add, args.numbers)
+        elif args.action == "report":
+            result = cmd_report(args.run, args.lines, args.partial)
         else:
             result = cmd_link(args.run)
     except (RunError, OSError) as exc:
