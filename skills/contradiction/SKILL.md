@@ -7,7 +7,7 @@ disable-model-invocation: true
 # /bc:contradiction — Detect Contradictions Between Requirements and Test Cases
 
 Find where requirements and test cases disagree — with each other, or inside one item — and where in-flight board
-tickets disagree with the requirements.
+tickets disagree with the requirements or will break test cases.
 
 **Plugin root:** two folders above this skill's base directory, which is `<plugin root>/skills/contradiction/`. Every file these instructions name — `howtos/…`, `scripts/…` — is a path from the plugin root, and so is every file those files name.
 
@@ -125,18 +125,27 @@ does: one yourself; several with a helper each, given the same prompt.
 
 ### 7. Check the board tickets
 
-Skip this step when step 3 found no ticket. A ticket is proposed behavior, judged by the rules of
-`howtos/detect-contradictions.md`: read it now if you haven't. Compare each ticket with the requirements it touches:
+Skip this step when step 3 found no ticket. A ticket is work in progress, judged by
+`howtos/detect-ticket-contradictions.md` — the rules `/bc:validate` uses — against the requirements and test cases
+on its subject. Read it now.
 
-- **Its `linked_ids` name requirements in the run** → those.
-- **It names none** → the ones on its subject: the first five in the `top` of
-  `python3 '<plugin root>/scripts/bc_run.py' search --run '<run_dir>' --query '<its title, apostrophes dropped>'`.
+1. Save every ticket in one command, each with a subject line: what it is about, then what it will change, as
+   `howtos/detect-contradictions.md` → *Subject lines* describes.
 
-Read the requirements you haven't read in this session with
-`python3 '<plugin root>/scripts/bc_run.py' show --run '<run_dir>' --ids '<IDs>'`, up to 20 IDs a call. Save every
-ticket's findings in one command: `howtos/detect-contradictions.md` → *Saving*.
+   ```
+   python3 '<plugin root>/scripts/bc_run.py' tickets --run '<run_dir>' --add '<json>'
+   ```
 
-**Done when** every ticket has been compared, and its findings saved.
+   `--add` is a JSON list on one line, with every `'` written as `\u0027`: each ticket's `id`, `title`, link as
+   `url`, `linked_ids`, and `line` — *(made-up)*
+   `{"id": "PROJ-12", "title": "Remove the Help button", "url": "<link>", "linked_ids": ["CWA-REQ-90"], "line": "Help button: removed from the settings screen."}`.
+   Code finds, for each ticket, the requirements it links to and the requirements and test cases on its subject,
+   and answers with the new `slices` that hold them; a ticket in `alone` has nothing to compare. When it answers
+   `rejected`, it saved nothing: fix those tickets and save the whole list again.
+2. Check each new slice yourself, one at a time: `howtos/detect-contradictions.md` → *Checking a slice*. Only you
+   hold the tickets' text, so no helper checks these.
+
+**Done when** `slices` shows every slice `checked: true`.
 
 ### 8. Report
 
@@ -164,6 +173,8 @@ you'll see every change before it's written. Want me to? (all / pick some / no)
 
 - The list holds only conflicts whose fix is a test case and whose quotes code checked. Requirements and board
   tickets stay as they are: this plugin changes neither.
+- A board ticket's findings are never on it: the ticket hasn't shipped and may still change, so the report lists
+  the test cases to update when it does.
 - `pick some` → the user chooses among those numbers.
 - On a yes, follow `howtos/update-test-cases.md` → *Path `contradictions`*, with the run folder and the numbers
   chosen. Write only what the user chose.

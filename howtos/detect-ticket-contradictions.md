@@ -1,15 +1,14 @@
 # Detect Ticket Contradictions
 
-Analyze a ticket description against related requirements to find contradictions, conflicts, and inconsistencies before the ticket is created.
-
-## When to Use
-
-In the ticket validation workflow, after finding related requirements and before checking for gaps. This how-to prevents tickets from being created that would conflict with existing system requirements.
+The rules for whether a ticket contradicts a requirement — and whether a ticket already on the board will break a test
+case. Every command that judges a ticket uses them, so a ticket gets the same answer from each.
 
 ## Input
 
-- `ticket_description`: The raw ticket description text provided by the user
-- `related_requirements`: Array of requirement objects (from the find-related-requirements how-to) with relevance scores
+| Caller | The ticket | Compare it with |
+|---|---|---|
+| `/bc:validate`, `/bc:vnv-sprint-prep` | `ticket_description`: the text the user typed for a new ticket, or a sprint story's | `related_requirements`: the requirements `howtos/find-related-requirements.md` found, each with a relevance score |
+| `/bc:contradiction` | a **board ticket**: its key, title, link, and the text that says what it should do, from the session's board read | the requirements and test cases its slice lists under it: the ones it links to, and the ones code found on its subject |
 
 ## Contradiction Types to Detect
 
@@ -61,6 +60,14 @@ The ticket has dependencies or timing expectations that conflict with requiremen
 - **Ticket description**: "Add patient search feature (no mention of audit logging)"
 - **Conflict**: The ticket proposes a patient data feature without addressing the prerequisite
 
+### 7. Breaking a Test Case — board tickets only
+The ticket changes, removes, or replaces behavior a test case checks, so the test case fails once the ticket ships.
+
+**Example** *(made-up)*:
+- **Test case (TC-55)**: "Tap Help. Expected: the help page opens"
+- **Ticket (PROJ-12)**: "Remove the Help button from the settings screen"
+- **Conflict**: Once the ticket ships, TC-55 taps a button that is gone
+
 ## Analysis Approach
 
 For each related requirement (starting with highest relevance scores):
@@ -84,10 +91,16 @@ For each related requirement (starting with highest relevance scores):
    - Does the ticket add functionality to a restricted area?
    - Does the ticket use an incompatible implementation approach?
 
+   **A board ticket against each test case:** does a step or an expected result rely on behavior the ticket
+   changes, removes, or replaces?
+
 4. **Weight by relevance:**
    - Conflicts with high-relevance requirements (score >= 0.8) are CRITICAL
    - Conflicts with medium-relevance requirements (score 0.5-0.8) are HIGH
    - Conflicts with low-relevance requirements (score < 0.5) are MEDIUM
+
+   A board ticket's requirements come without scores: one the ticket links to counts as high relevance, and one
+   code found on its subject as medium — high when its words govern exactly what the ticket changes.
 
 ## What NOT to Flag as Contradictions
 
@@ -95,8 +108,11 @@ For each related requirement (starting with highest relevance scores):
 - **Implementation details**: Requirement says "display data", ticket says "display in a table" (table is a specific implementation, not a contradiction)
 - **Refinements**: Ticket makes something more specific without contradicting it
 - **Stylistic differences**: Different wording that means the same thing
+- **Test cases the ticket leaves alone**: A test case on the same subject that checks behavior the ticket doesn't change
 
 ## Output Format
+
+### `/bc:validate` and `/bc:vnv-sprint-prep`
 
 Return a JSON array of contradictions (empty if none found):
 
@@ -123,6 +139,32 @@ Return a JSON array of contradictions (empty if none found):
 ]
 ```
 
+### `/bc:contradiction`
+
+Save each conflict as a finding of the run — `howtos/detect-contradictions.md` → *A finding* and *Saving*:
+
+- **`items`** — the ticket's key with its words, and each requirement or test case with its own.
+- **`severity`** — the level from *Severity Classification*, in lower case.
+- **`why`** — the explanation, in one sentence.
+- **`fix`** — the ticket's key, when it should change to agree with a requirement; `"decide"`, when the ticket may
+  mean the requirement itself is changing; or the test cases the ticket breaks — one ID, or a list — to update when
+  it ships. The ticket hasn't shipped and may still change, so code never offers these as test case fixes.
+
+*(made-up)*
+
+```json
+{
+  "items": [
+    {"id": "PROJ-12", "quote": "Remove the Help button from the settings screen"},
+    {"id": "TC-55", "quote": "Tap Help"},
+    {"id": "TC-56", "quote": "Tap Help"}
+  ],
+  "severity": "high",
+  "why": "Both test cases tap the Help button the ticket removes, so they fail once it ships.",
+  "fix": ["TC-55", "TC-56"]
+}
+```
+
 ## Severity Classification
 
 | Severity | Criteria |
@@ -130,6 +172,9 @@ Return a JSON array of contradictions (empty if none found):
 | **CRITICAL** | Ticket directly violates a high-relevance requirement (score >= 0.8) — opposite behavior, explicit constraint violation |
 | **HIGH** | Ticket conflicts with medium-relevance requirement (score 0.5-0.8), or removes required functionality |
 | **MEDIUM** | Ticket conflicts with low-relevance requirement (score < 0.5), or potential conflict that needs human judgment |
+
+A test case a board ticket breaks is **HIGH** when the ticket changes exactly what it checks, and **MEDIUM** when it
+may.
 
 ## Edge Cases
 
