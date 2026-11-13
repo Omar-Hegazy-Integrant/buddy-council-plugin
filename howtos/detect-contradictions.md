@@ -1,17 +1,43 @@
 # Detect Contradictions
 
-What to compare inside a feature, how to judge it, and how to save each finding so code can check it.
+What to compare in a slice of the run, how to judge it, and how to save each finding so code can check it.
 
 ## What you read
 
-A feature's bundle lists every requirement as written — status, folder, description, rationale, custom fields,
-linked docs — and, under each one, the test cases that link to it, steps and expected results included. Code
-resolved the links, so a requirement's `Test cases:` line is exact. Code also counted the requirements with no
-test case and the test cases with no requirement, and the report states those counts.
+Code cut the run into **slices**, each small enough to check at once: a few whole features, or some of the
+requirements of a big one. A slice's bundle parts list each of its requirements as written — status, folder,
+description, rationale, custom fields, linked docs — and, under each one, the test cases that link to it, steps and
+expected results included, then the test cases that link to no requirement. Code resolved the links, so a
+requirement's `Test cases:` line is exact. A requirement with more test cases than one slice holds is written out
+again, marked `(continued)`, above each share of them. Code also counted the requirements with no test case and the
+test cases with no requirement, and the report states those counts.
+
+## Checking a slice
+
+Whoever checks a slice — a helper, or the session itself — does this once. Run each command exactly as shown, as
+its own command, and read files with your view tool.
+
+1. List the slice:
+
+   ```
+   python3 '<plugin root>/scripts/bc_run.py' slices --run '<run_dir>' --slice <n>
+   ```
+
+   It answers with the slice's bundle `parts` and the `docs` they cite, as paths.
+2. Read each part and each doc once, in order, one per view. Together they are the whole slice.
+3. Make every comparison in *What to compare*, and judge each by the rules below.
+4. Save the slice's findings in one command, as *Saving* shows, with `--slice <n>`. When the slice holds no
+   conflict, save `[]`: the save is what records the slice as checked.
+
+**Done when** every part and doc has been read once, every comparison made, and the slice saved.
+
+A **helper** works from its slice alone — its parts and the docs they name — and leaves every question to the
+session that started it. Its last message is one line of JSON: `{"slice": <n>, "saved": <how many>}`, or
+`{"slice": <n>, "error": "<what stopped it>"}`.
 
 ## What to compare
 
-Make every comparison across everything the feature's parts hold:
+Make every comparison across everything the slice holds:
 
 1. **Each requirement with its test cases.**
 2. **The requirements with each other.**
@@ -85,12 +111,13 @@ with care. Code saves a test case as `fix` only when a requirement is among the 
 
 ## Saving
 
-Save a feature's findings together, as their own command:
+Save a slice's findings together, as their own command:
 
 ```
-python3 '<plugin root>/scripts/bc_run.py' findings --run '<run_dir>' --add '<json>'
+python3 '<plugin root>/scripts/bc_run.py' findings --run '<run_dir>' --slice <n> --add '<json>'
 ```
 
+`--slice` names the slice they come from; leave it out for findings from no slice, such as the board tickets'.
 `--add` takes one finding or a list, as JSON on one line, with every `'` written as `\u0027`. Code checks each
 one: every ID must be in the run, and every quote must be in its item, whatever its case, spacing, or quote
 marks. It answers `saved`, `total`, and `rejected`. A rejected finding comes back with its problems, and a quote

@@ -56,6 +56,14 @@ _Avoid_: skill, internal skill
 One problem `/bc:contradiction` reports, such as a test case that expects a different result than its requirement: the exact words from each side, why they conflict, how serious it is, and what to change.
 _Avoid_: issue, conflict (alone)
 
+**Slice**:
+A share of the requirements and test cases a command checks, small enough for one reader to check at once: a few whole features, or some of the requirements of a big one, each with its test cases.
+_Avoid_: chunk, batch
+
+**Helper**:
+A fresh AI session the assistant starts to check one Slice for `/bc:contradiction`, side by side with the helpers for the other Slices.
+_Avoid_: worker, agent (alone)
+
 ### Stories
 
 **Platform**:

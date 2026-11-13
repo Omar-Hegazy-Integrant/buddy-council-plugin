@@ -105,6 +105,21 @@ class RunScriptApproval(unittest.TestCase):
         ]:
             self.assertNotAllowed(command)
 
+    def test_slices_and_a_slice_s_save_are_approved_as_one_plain_command(self):
+        for command in [
+            f"python3 {SCRIPT} slices --run {RUN}",
+            f"python3 '{SCRIPT}' slices --run '{RUN}' --slice 3",
+            f"python3 {SCRIPT} findings --run {RUN} --slice '2' --add '[]'",
+        ]:
+            self.assertAllowed(command, "claude")
+            self.assertAllowed(command, "copilot")
+        for command in [
+            f"python3 {SCRIPT} slices --run {RUN} --slice 3; rm -rf ~/x",
+            f"python3 {SCRIPT} slices --run {RUN} --slice $(id -u)",
+            f"python3 {SCRIPT} slices --run {RUN} --feature Alarms",
+        ]:
+            self.assertNotAllowed(command)
+
     def test_a_symlinked_path_to_the_same_script_is_approved(self):
         with tempfile.TemporaryDirectory() as tmp:
             link = Path(tmp, "plugin")

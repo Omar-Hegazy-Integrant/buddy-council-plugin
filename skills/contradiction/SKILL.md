@@ -33,9 +33,9 @@ ended the command.
 
 ### 2. Collect the run
 
-Follow `howtos/collect-artifacts.md` with `command: contradiction` and the scope. The data collector reads every
-requirement and test case into a run folder, and code links and counts them, so the run is the data: read it,
-take its counts as given, and quote its text exactly.
+Follow `howtos/collect-artifacts.md`, Steps 1 and 2, with `command: contradiction` and the scope. The data
+collector reads every requirement and test case into a run folder, and code links and counts them, so the run is
+the data: read it, take its counts as given, and quote its text exactly.
 
 **Done when** you hold `run_dir`, you have printed the run's `lines`, and every missing source has the user's
 answer.
@@ -67,32 +67,54 @@ test case: carry on.
 
 **Done when** both counts are above zero, or the user chose to continue.
 
-### 5. Check each feature
+### 5. Check each slice
 
-In the order of the summary's `features`, for each feature:
+Code cut the run into **slices**, each small enough to check at once. List them, as its own command:
 
-1. Run `python3 '<plugin root>/scripts/bc_run.py' summary --run '<run_dir>' --feature '<feature>'`. Read every
-   bundle part it lists, in order, one part per view, and each linked doc you have not read yet in this run.
-2. Make every comparison in `howtos/detect-contradictions.md` → *What to compare*, and judge each by its rules.
-3. Compare each board ticket that touches this feature — its `linked_ids` name one of the feature's
-   requirements, or its `feature` matches — with the feature's requirements. A ticket is proposed behavior, judged
-   by the same rules.
-4. Save the feature's findings: `howtos/detect-contradictions.md` → *Saving*.
-5. Note each requirement as `{id, feature, title, key_constraint}`, its core constraint in one line, for step 6.
+```
+python3 '<plugin root>/scripts/bc_run.py' slices --run '<run_dir>'
+```
 
-**Done when** every feature in `features` has had every comparison, its findings saved, and its one-line
-constraints noted.
+- **One slice** → check it yourself: `howtos/detect-contradictions.md` → *Checking a slice*.
+- **Several** → start one **helper** per slice, all in one message, so they run side by side. A helper is your
+  assistant's own general-purpose sub-agent, on the model one step below the top, at normal effort:
+  - **Claude Code** — your sub-agent tool takes `subagent_type`: pass `subagent_type: "general-purpose"` and
+    **`model: "sonnet"`**.
+  - **Copilot CLI** — your sub-agent tool takes `agent_type`: pass `agent_type: "general-purpose"`, **`model`: the
+    newest Claude Sonnet it lists**, and `reasoning_effort: "medium"`. When it lists no Sonnet, pass no `model`.
+  - **Any other assistant whose sub-agent tool starts a general-purpose agent** — the same, with whichever of
+    those settings it takes.
 
-### 6. Check across features
+  Print `Check: <N> slices, one helper each`, then give each helper this prompt, with its own slice number:
 
-Skip this step when the scope is one feature.
+  ```
+  You are a helper in a /bc:contradiction run: follow <plugin root>/howtos/detect-contradictions.md → Checking a slice.
+  plugin_root: <plugin root>
+  run_dir: <run_dir>
+  slice: <n>
+  ```
+- **No sub-agent tool** (Codex, Cursor) → check every slice yourself, one at a time, in order. Print
+  `Check: <N> slices, read here one at a time — this assistant has no helpers`.
 
-From the one-line constraints, list the pairs of requirements in different features whose constraints may
-clash. Read each pair in full with
-`python3 '<plugin root>/scripts/bc_run.py' show --run '<run_dir>' --ids '<A>,<B>'`, and save a pair as a finding
-only when the full text confirms the clash.
+Then list the slices again. Check each one still `checked: false` yourself — its helper stopped or never saved —
+and print `Check: slice <n> read here — <what its helper answered>`.
 
-**Done when** every listed pair is saved or dropped.
+**Done when** `slices` shows every slice `checked: true`.
+
+### 6. Check the board tickets
+
+Skip this step when step 3 found no ticket. A ticket is proposed behavior, judged by the rules of
+`howtos/detect-contradictions.md`: read it now if you haven't. Compare each ticket with the requirements it touches:
+
+- **Its `linked_ids` name requirements in the run** → those.
+- **It names none** → the ones on its subject: the first five in the `top` of
+  `python3 '<plugin root>/scripts/bc_run.py' search --run '<run_dir>' --query '<its title, apostrophes dropped>'`.
+
+Read the requirements you haven't read in this session with
+`python3 '<plugin root>/scripts/bc_run.py' show --run '<run_dir>' --ids '<IDs>'`, up to 20 IDs a call. Save every
+ticket's findings in one command, without `--slice`: `howtos/detect-contradictions.md` → *Saving*.
+
+**Done when** every ticket has been compared, and its findings saved.
 
 ### 7. Report
 

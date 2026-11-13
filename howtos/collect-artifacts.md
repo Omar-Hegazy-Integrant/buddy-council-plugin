@@ -74,10 +74,10 @@ python3 '<plugin root>/scripts/bc_run.py' summary --run '<run_dir>'
    named.
 5. **`enrichment.failed` is not empty** → list the docs that could not be fetched (URL and error), and ask
    once whether to continue without them.
-6. **`enrichment.pending` is above zero** (the `mcp` enrichment strategy) → fetch those docs yourself: the
-   URLs are under `pending` in `<run_dir>/docs.json`; follow
-   `providers/github/fetch-mcp.md` for each, as the analysis reaches the requirements
-   that cite them, and print `Enrichment: fetched K of N GitHub-linked requirement docs`.
+6. **`enrichment.pending` is above zero** (the `mcp` enrichment strategy) → those docs are read through the
+   assistant's own GitHub connection, `providers/github/fetch-mcp.md`, by whoever reads the requirements that cite
+   them: each bundle names them under those requirements. When that is you, print
+   `Enrichment: fetched K of N GitHub-linked requirement docs` after the last.
 7. Relay every entry of `warnings`.
 
 ## Step 3: Read the run
@@ -97,8 +97,8 @@ python3 '<plugin root>/scripts/bc_run.py' summary --run '<run_dir>'
   Each requirement appears with its status, folder, description, rationale, custom fields (platform, product,
   version, trace fields), linked docs, and the test cases that link to it — each case with its priority, type,
   custom fields (applicable OS, product version, CtQ), and steps. A case linked to several requirements is
-  written out once and referred to after that. Each feature ends with its orphan cases. Release a feature's text
-  before reading the next.
+  written out once and referred to after that — once per slice, when a feature too big for one reader is cut into
+  slices. Each feature ends with its orphan cases. Release a feature's text before reading the next.
 - **A single record** — its text, fields, Jama link, and the cases that test it:
   `python3 '<plugin root>/scripts/bc_run.py' show --run '<run_dir>' --ids '<ID>'`. For a raw field it doesn't
   print (a case's `updated_on`), search `test_cases.json` or `requirements.json` for the ID with your grep tool.

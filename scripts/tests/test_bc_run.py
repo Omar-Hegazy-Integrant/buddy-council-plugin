@@ -10,6 +10,7 @@ import datetime
 import io
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -321,6 +322,16 @@ class Link(RunFolderTest):
         links = json.loads((run / "links.json").read_text())
         self.assertEqual(links["features"][0]["docs"], ["docs/01-a-1.md", "docs/01-a-2.md"])
 
+    def test_a_doc_left_to_the_assistant_s_own_connection_says_how_to_read_it(self):
+        run = self.new_run()
+        self.write(run, "requirements.json", {"requirements": REQUIREMENTS[:1]})
+        self.write(run, "docs.json", {"strategy": "mcp", "docs": [], "failed": [], "pending": [
+            {"url": "https://github.com/o/r/blob/main/c.md", "requirement_ids": ["CWA-REQ-1"]}]})
+        bc_run.cmd_link(str(run))
+        self.assertIn("Linked doc not in this run: https://github.com/o/r/blob/main/c.md — read it once through your "
+                      "GitHub connection: providers/github/fetch-mcp.md", (run / "bundles" / "01-alarms-1.md").read_text(),
+                      "whoever reads the bundle, a helper included, reads it")
+
     def test_custom_fields_are_shown_and_noise_is_not(self):
         run = self.new_run()
         req = requirement("CWA-REQ-1", "Sound an audible alarm", "Alarms")
@@ -373,6 +384,131 @@ class Link(RunFolderTest):
         for bad in (self.tmp.name, str(self.project / ".buddy-council")):
             with self.assertRaises(bc_run.RunError):
                 bc_run.cmd_link(bad)
+
+
+class Slices(RunFolderTest):
+    def link(self, requirements, cases, docs=None, doc_files=None):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": requirements})
+        self.write(run, "test_cases.json", {"test_cases": cases})
+        if docs:
+            self.write(run, "docs.json", {"docs": docs})
+            (run / "docs").mkdir()
+            for name, text in (doc_files or {}).items():
+                (run / name).write_text(text)
+        bc_run.cmd_link(str(run))
+        return run
+
+    def test_a_run_that_fits_one_slice_is_one_slice_with_every_part(self):
+        run = self.link(REQUIREMENTS, CASES)
+        listed = bc_run.cmd_slices(str(run))
+        self.assertEqual(listed["total"], 1)
+        self.assertEqual({k: listed["slices"][0][k] for k in ("slice", "features", "requirements", "test_cases", "checked")},
+                         {"slice": 1, "features": ["Alarms", "Vitals", "No feature"], "requirements": 5, "test_cases": 6,
+                          "checked": False})
+        one = bc_run.cmd_slices(str(run), 1)
+        self.assertEqual(one["parts"], [str(run / "bundles" / name) for name in
+                                        ("01-alarms-1.md", "02-vitals-1.md", "03-no-feature-1.md")])
+        with self.assertRaises(bc_run.RunError) as caught:
+            bc_run.cmd_slices(str(run), 2)
+        self.assertIn("this run has 1", str(caught.exception))
+
+    def slice_texts(self, run):
+        return ["".join(Path(p).read_text() for p in bc_run.cmd_slices(str(run), n)["parts"])
+                for n in range(1, bc_run.cmd_slices(str(run))["total"] + 1)]
+
+    def test_a_feature_too_big_for_one_slice_is_cut_between_requirements_and_each_slice_stands_alone(self):
+        text = "The pump shall stop when occluded, and say so on the screen. " * 25
+        reqs = [requirement(f"CWA-REQ-{n}", f"Requirement {n}", "Pump", text) for n in range(1, 13)]
+        cases = [case(100 + n, f"Case {n}", f"CWA-REQ-{n}", section="Pump") for n in range(1, 13)]
+        cases.append(case(200, "Shared by the first and the last", "CWA-REQ-1, CWA-REQ-12", section="Pump"))
+        with mock.patch.object(bc_run, "SLICE_BYTES", 8_000), mock.patch.object(bc_run, "PART_BYTES", 3_000):
+            run = self.link(reqs, cases)
+        listed = bc_run.cmd_slices(str(run))
+        self.assertGreater(listed["total"], 2)
+        self.assertEqual({tuple(row["features"]) for row in listed["slices"]}, {("Pump",)})
+        sizes = [piece["bytes"] for piece in json.loads((run / "links.json").read_text())["slices"]]
+        self.assertLess(max(sizes), 8_000 + 1_000, "a slice holds no more than one reader checks, part headers aside")
+        self.assertLess(max(sizes), 2 * min(sizes), "slices come out about the same size")
+        texts = self.slice_texts(run)
+        for n in range(1, 13):
+            self.assertEqual(sum(f"## CWA-REQ-{n} — Requirement {n}\n" in t for t in texts), 1, n)
+        for slice_text in texts:
+            first = next(line for line in slice_text.splitlines() if line.startswith("## "))
+            self.assertFalse(first.endswith("(continued)"), "a slice never opens in the middle of a requirement")
+            for shown in re.findall(r"### (TC-\d+) — shown above", slice_text):
+                self.assertRegex(slice_text, rf"### {shown} — (?!shown above)", "a pointer stays inside its slice")
+        self.assertEqual(sum("### TC-200 — Shared by the first and the last" in t for t in texts), 2,
+                         "a case its two requirements' slices both need is written out in each")
+        parts = bc_run.cmd_summary(str(run), "Pump")["feature"]["bundles"]
+        self.assertEqual(parts, [p for n in range(1, listed["total"] + 1) for p in bc_run.cmd_slices(str(run), n)["parts"]])
+        self.assertIn(f"— part {len(parts)} of {len(parts)}", Path(parts[-1]).read_text().splitlines()[0])
+
+    def test_a_requirement_with_more_test_cases_than_one_slice_holds_comes_with_each_share_of_them(self):
+        steps = [{"content": f"Snooze the alarm and wait, round {n}", "expected": "The alarm stays quiet for 5 minutes"}
+                 for n in range(1, 6)]
+        snooze = requirement("CWA-REQ-7", "Snooze alarms", "Alarms", "The system shall snooze a sounding alarm for 5 minutes.")
+        cases = [case(300 + n, f"Snooze case {n}", "CWA-REQ-7", steps=steps) for n in range(1, 41)]
+        with mock.patch.object(bc_run, "SLICE_BYTES", 6_000):
+            run = self.link([snooze], cases)
+        texts = self.slice_texts(run)
+        self.assertGreater(len(texts), 1)
+        for slice_text in texts:
+            self.assertIn("The system shall snooze a sounding alarm for 5 minutes.", slice_text,
+                          "each share's reader has the requirement to compare its cases with")
+        written = [cid for t in texts for cid in re.findall(r"### (TC-\d+) — Snooze case", t)]
+        self.assertEqual(sorted(written), sorted(f"TC-{300 + n}" for n in range(1, 41)), "every case once, none left out")
+        self.assertIn("## CWA-REQ-7 — Snooze alarms (continued)\n", texts[1])
+
+    def test_the_docs_a_slice_cites_count_toward_its_size_once_and_come_with_it(self):
+        run = self.two_slices()
+        listed = bc_run.cmd_slices(str(run))
+        self.assertEqual([row["features"] for row in listed["slices"]], [["Alarms"], ["Vitals", "No feature"]],
+                         "alone the bundles fit one slice; with their docs they need two, and the alarms doc that "
+                         "two requirements cite counts once")
+        self.assertEqual([[Path(d).name for d in bc_run.cmd_slices(str(run), n)["docs"]] for n in (1, 2)],
+                         [["01-alarms-1.md"], ["02-vitals-1.md"]])
+
+    def two_slices(self):
+        docs = [{"url": "https://github.com/o/r/blob/main/alarms.md", "files": ["docs/01-alarms-1.md"],
+                 "requirement_ids": ["CWA-REQ-1", "CWA-REQ-2"]},
+                {"url": "https://github.com/o/r/blob/main/vitals.md", "files": ["docs/02-vitals-1.md"],
+                 "requirement_ids": ["CWA-REQ-4"]}]
+        files = {"docs/01-alarms-1.md": "a" * 3_000, "docs/02-vitals-1.md": "v" * 3_000}
+        with mock.patch.object(bc_run, "SLICE_BYTES", 6_000):
+            return self.link(REQUIREMENTS, CASES, docs, files)
+
+    def test_the_report_names_a_slice_no_one_checked(self):
+        run = self.two_slices()
+        bc_run.cmd_findings(str(run), add_text="[]", slice_number=1)
+        result = bc_run.cmd_report(str(run))
+        self.assertEqual(result["unchecked"], [2])
+        self.assertIn("**Not checked:** slice 2 of 2, so any conflicts in it are missing from this report.",
+                      Path(result["parts"][0]).read_text())
+        bc_run.cmd_findings(str(run), add_text="[]", slice_number=2)
+        result = bc_run.cmd_report(str(run))
+        self.assertEqual(result["unchecked"], [])
+        self.assertNotIn("Not checked", Path(result["parts"][0]).read_text())
+
+    def test_a_save_for_a_slice_marks_it_checked_even_when_it_found_nothing(self):
+        with mock.patch.object(bc_run, "SLICE_BYTES", 1_000):
+            run = self.link(REQUIREMENTS, CASES)
+        total = bc_run.cmd_slices(str(run))["total"]
+        self.assertGreater(total, 2)
+        found = {"severity": "high", "fix": "TC-10", "why": "It expects a sound where the requirement asks for a light.",
+                 "items": [{"id": "CWA-REQ-2", "quote": "show a visual alarm"}, {"id": "TC-10", "quote": "It happens"}]}
+        self.assertEqual(bc_run.cmd_findings(str(run), add_text=json.dumps([found]), slice_number=1)["saved"], 1)
+        self.assertEqual(bc_run.cmd_findings(str(run), add_text="[]", slice_number=2),
+                         {"saved": 0, "rejected": [], "total": 1})
+        listed = bc_run.cmd_slices(str(run))
+        self.assertEqual([(row["checked"], row["findings"]) for row in listed["slices"]],
+                         [(True, 1), (True, 0)] + [(False, 0)] * (total - 2))
+        self.assertEqual(listed["checked"], 2)
+        with self.assertRaises(bc_run.RunError):
+            bc_run.cmd_findings(str(run), add_text="[]")
+        with self.assertRaises(bc_run.RunError) as caught:
+            bc_run.cmd_findings(str(run), add_text="[]", slice_number=total + 1)
+        self.assertIn(f"this run has {total}", str(caught.exception))
 
 
 JAMA_CONFIG = {
@@ -1220,6 +1356,19 @@ class Cli(RunFolderTest):
                 self.assertEqual(bc_run.main(argv), 0)
             self.assertTrue(json.loads(out.getvalue())["ok"])
         self.assertEqual(json.loads(out.getvalue())["fix_test_cases"], [1])
+
+    def test_slices_print_json_and_a_save_names_its_slice(self):
+        run = self.new_run(command="contradiction")
+        self.write(run, "requirements.json", {"requirements": REQUIREMENTS})
+        bc_run.cmd_link(str(run))
+        for argv, check in ((["findings", "--run", str(run), "--slice", "1", "--add", "[]"], "saved"),
+                            (["slices", "--run", str(run)], "slices"), (["slices", "--run", str(run), "--slice", "1"], "parts")):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(bc_run.main(argv), 0, argv)
+            result = json.loads(out.getvalue())
+            self.assertTrue(result["ok"] and check in result, argv)
+        self.assertEqual(result["checked"], True)
 
 
 if __name__ == "__main__":
