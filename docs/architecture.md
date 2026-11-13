@@ -80,11 +80,12 @@ User runs /bc:contradiction [scope]
   │    │
   │    Step 3a: Board issues — skills/fetch-board-issues/ (session's model)
   │    Step 4: Readiness gate from links.json counts
-  │    Step 5: One feature at a time — read its bundle parts, detect contradictions, board pass
+  │    Step 5: One feature at a time — read its bundle parts, judge, board pass
+  │            └─ bc_run.py findings --add → findings/*.json   (code checks every ID and quote)
   │    Step 6: Cross-feature pass from a compact index; re-read two bundles to confirm
-  │    Step 7: Human-readable report
+  │    Step 7: bc_run.py report → report-N.md, shown as written   (code: no model)
   │
-  └─ Output: Markdown report grouped by severity
+  └─ Output: Markdown report grouped by severity, every item linked
 ```
 
 The other commands (`/bc:ask`, `/bc:validate`, `/bc:onboarding`, `/bc:codemap`, `/bc:vnv-sprint-prep`) still

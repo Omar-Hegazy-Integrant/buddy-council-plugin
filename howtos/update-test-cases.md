@@ -123,16 +123,18 @@ Rules for this path:
 
 ## Path `contradictions` — make a case agree with its requirement (`/bc:contradiction`)
 
-Input: findings of types 1, 2, 4, or 7 whose **Fix** line names the test case side, each with the case id, the
-step or field in conflict, and the requirement text it conflicts with.
+Input: the run folder and the numbers the user chose from the report's *Test cases to fix*. Read those findings
+with `python3 '<plugin root>/scripts/bc_run.py' findings --run '<run_dir>' --numbers '<n, n>'`: each one's `fix`
+names the case and the place to change, and its `items` quote, checked by code, the text the case conflicts with.
 
-- **Only the case side.** When a finding's fix is the requirement, or it needs a decision, propose no case
-  change. Say that requirements live in Jama, and that this plugin never writes them.
-- **Minimal edit.** Change only the conflicting precondition, step, or expected result, so it states what the
-  requirement states. Quote the requirement next to the before → after. Leave every other step as it is.
+- **Only the numbers the report lists.** Code lists only conflicts whose fix is a test case. A finding whose fix
+  is the requirement, or that needs a decision, gets no case change: requirements live in their own tool, and
+  this plugin never writes them.
+- **Minimal edit.** Change only the conflicting precondition, step, or expected result — the place `fix` names —
+  so it agrees with the text quoted against it. Quote that text next to the before → after. Leave every other
+  step as it is.
 - **Never on this path:** links, title (unless the title itself states the contradicted value), type,
   priority, or estimate.
-- **Board findings and requirement-versus-requirement findings** (types 3 and 5) never become case updates.
 - The user picks which findings to apply: `all`, `pick some`, or `no`.
 
 ## Path `scenarios` — refresh V&V cases (`/bc:vnv-sprint-prep` phase 7)

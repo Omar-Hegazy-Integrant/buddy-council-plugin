@@ -83,6 +83,28 @@ class RunScriptApproval(unittest.TestCase):
         ]:
             self.assertNotAllowed(command)
 
+    def test_findings_and_the_report_are_approved_as_one_line_of_single_quoted_json(self):
+        finding = ('{"severity": "high", "fix": "TC-55", "why": "The test doesn\\u0027t wait; $(not run) | `nor this`", '
+                   '"items": [{"id": "CWA-REQ-1", "quote": "within 30 seconds… the App shall"}, '
+                   '{"id": "TC-55", "quote": "Expected: \\"Done\\" & back"}]}')
+        commands = [
+            f"python3 {SCRIPT} findings --run {RUN} --add '{finding}'",
+            f"python3 '{SCRIPT}' findings --run '{RUN}' --numbers '1, 5'",
+            f"python3 {SCRIPT} findings --run {RUN}",
+            f"python3 {SCRIPT} report --run {RUN} --lines '[\"Fetch: board issues → 4 fetched from board 9\"]' "
+            "--partial 'board issues: 401'",
+        ]
+        for command in commands:
+            self.assertAllowed(command, "claude")
+            self.assertAllowed(command, "copilot")
+        for command in [
+            f"python3 {SCRIPT} findings --run {RUN} --add '{{\"why\": \"it's\"}}'",
+            f"python3 {SCRIPT} findings --run {RUN} --add \"$(cat findings.json)\"",
+            f"python3 {SCRIPT} report --run {RUN} && echo done",
+            f"python3 {SCRIPT} report --run {RUN} --force yes",
+        ]:
+            self.assertNotAllowed(command)
+
     def test_a_symlinked_path_to_the_same_script_is_approved(self):
         with tempfile.TemporaryDirectory() as tmp:
             link = Path(tmp, "plugin")
