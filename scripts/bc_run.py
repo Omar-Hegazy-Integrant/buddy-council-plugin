@@ -198,6 +198,8 @@ def cmd_new(project_text: str, command: str, scope: str, keep: int = KEEP_RUNS) 
     }
     if command == "lookup":  # only a lookup searches the rest of the project
         paths["background"] = str(run / "background.json")
+    if command == "contradiction" and scope.strip().casefold() not in ("", "all"):
+        paths["product"] = str(run / "product.json")  # a run on part of the product is compared with the rest of it
     return {**paths, "pruned": pruned}
 
 
@@ -771,9 +773,18 @@ def cmd_link(run_text: str) -> dict[str, Any]:
     lookup = manifest.get("command") == "lookup"
     background_data = read_json(run / "background.json") if lookup else None  # only a lookup reads the rest
     expect_background = lookup and (config.get("requirements") or {}).get("provider") == "jama"
-    mismatches = verify_run(config, manifest, requirements_data, cases_data, background_data)
+    # A contradiction run on part of the product is compared with the rest of it, which is matched, never counted.
+    across = manifest.get("command") == "contradiction" and mode == "scoped"
+    product_data = read_json(run / "product.json") if across else None
+    outside = None
+    if product_data is not None:
+        in_scope_ids = {key(c.get("id")) for c in in_scope}
+        outside = (len({key(r.get("id")) for r in requirement_list(product_data)} - set(by_id) - {""}),
+                   sum(1 for c in cases if key(c.get("id")) not in in_scope_ids))
+    mismatches = verify_run(config, manifest, requirements_data, cases_data, background_data, product_data)
     lines, missing, enrichment = report_lines(
-        config, requirements_data, requirements, cases_data, cases, docs_data, background_data, expect_background
+        config, requirements_data, requirements, cases_data, cases, docs_data, background_data, expect_background,
+        outside, across,
     )
 
     bundles = run / "bundles"
@@ -1299,8 +1310,32 @@ def site_problems(provider: str, configured: Any, data: dict[str, Any], what: st
     return [] if got == wanted else [f"{what} were read from {got}, but the config names {wanted}."]
 
 
+def jama_requirements_problems(req: dict[str, Any], data: dict[str, Any], what: str) -> list[str]:
+    """How a requirements file the Jama server wrote differs from the config: its site, project, and arguments."""
+    got = data.get("args") or {}
+    inference = req.get("feature_inference") or {}
+    problems = site_problems("jama", req.get("base_url"), data, what)
+    if data.get("project_id") != req.get("project_id"):
+        problems.append(f"{what} were read from Jama project {data.get('project_id')}, not {req.get('project_id')}.")
+    problems += jama_arg_problems(req, got, what)
+    if req.get("roots") and int(got.get("feature_depth") or 1) != int(inference.get("depth") or 1):
+        problems.append(f"{what} were read with feature_depth={got.get('feature_depth')}, but the config says {inference.get('depth') or 1}.")
+    if str(got.get("feature_item_type") or "Folder").casefold() != str(inference.get("folder_item_type") or "Folder").casefold():
+        problems.append(f"{what} were read with feature_item_type={got.get('feature_item_type')}, but the config says {inference.get('folder_item_type')}.")
+    wanted = {k: v for k, v in (req.get("field_mapping") or {}).items() if v}
+    used = {k: v for k, v in (got.get("field_mapping") or {}).items() if v}
+    if wanted != used:
+        problems.append(f"{what} were read with field_mapping={used or 'none'}, but the config says {wanted}.")
+    return problems
+
+
+def is_jama_requirements(data: Any) -> bool:
+    return isinstance(data, dict) and data.get("source") == "jama" and data.get("kind", "requirements") == "requirements"
+
+
 def verify_run(
     config: dict[str, Any], manifest: dict[str, Any], requirements_data: Any, cases_data: Any, background_data: Any = None,
+    product_data: Any = None,
 ) -> list[str]:
     """What in the run differs from the project's config — each entry means the collector called a tool wrongly."""
     problems: list[str] = []
@@ -1312,23 +1347,19 @@ def verify_run(
     elif provider and provider != "jama":
         problems.append(f"the project reads requirements from {provider!r}, but only Jama is read now — run /bc:setup with a link to the Jama project.")
     elif is_jama_file:
-        got = requirements_data.get("args") or {}
-        inference = req.get("feature_inference") or {}
-        problems += site_problems("jama", req.get("base_url"), requirements_data, "requirements")
-        if requirements_data.get("project_id") != req.get("project_id"):
-            problems.append(f"requirements were read from Jama project {requirements_data.get('project_id')}, not {req.get('project_id')}.")
-        problems += jama_arg_problems(req, got, "requirements")
-        if req.get("roots") and int(got.get("feature_depth") or 1) != int(inference.get("depth") or 1):
-            problems.append(f"requirements were read with feature_depth={got.get('feature_depth')}, but the config says {inference.get('depth') or 1}.")
-        if str(got.get("feature_item_type") or "Folder").casefold() != str(inference.get("folder_item_type") or "Folder").casefold():
-            problems.append(f"requirements were read with feature_item_type={got.get('feature_item_type')}, but the config says {inference.get('folder_item_type')}.")
-        wanted = {k: v for k, v in (req.get("field_mapping") or {}).items() if v}
-        used = {k: v for k, v in (got.get("field_mapping") or {}).items() if v}
-        if wanted != used:
-            problems.append(f"requirements were read with field_mapping={used or 'none'}, but the config says {wanted}.")
+        problems += jama_requirements_problems(req, requirements_data, "requirements")
         scope = (requirements_data.get("scope") or {}).get("input")
         if not same_scope(scope, manifest.get("scope")):
             problems.append(f"requirements were read for scope {scope!r}, but this run is for {manifest.get('scope')!r}.")
+    if product_data is not None and provider == "jama":
+        if not is_jama_requirements(product_data):
+            problems.append("product.json was not written by the Jama server.")
+        else:
+            problems += jama_requirements_problems(req, product_data, "the product's requirements")
+            scope = (product_data.get("scope") or {}).get("input")
+            if not same_scope(scope, ""):
+                problems.append(f"the product's requirements were read for scope {scope!r}, but the whole product is read "
+                                "with scope all.")
     if background_data is not None and provider == "jama":
         if not (isinstance(background_data, dict) and background_data.get("source") == "jama"
                 and background_data.get("kind") == "background"):
@@ -1363,8 +1394,10 @@ def report_lines(
     config: dict[str, Any], requirements_data: Any, requirements: list[dict[str, Any]],
     cases_data: Any, cases: list[dict[str, Any]], docs_data: dict[str, Any],
     background_data: Any = None, expect_background: bool = False,
+    outside: tuple[int, int] | None = None, expect_product: bool = False,
 ) -> tuple[list[str], list[str], dict[str, Any]]:
-    """The Fetch and Enrichment lines, from the files the servers and scripts wrote — not from any model."""
+    """The Fetch and Enrichment lines, from the files the servers and scripts wrote — not from any model. ``outside``
+    counts the requirements and test cases a run on part of the product read from the rest of it."""
     lines: list[str] = []
     missing: list[str] = []
     if isinstance(requirements_data, dict) and requirements_data.get("source") == "jama":
@@ -1381,6 +1414,12 @@ def report_lines(
     elif expect_background:
         lines.append("Fetch: background → FAILED — no background file in the run")
         missing.append("background")
+    if outside is not None:
+        lines.append(f"Fetch: the rest of the product → {plural(outside[0], 'requirement')} and "
+                     f"{plural(outside[1], 'test case')} outside the scope, to compare it with, never counted")
+    elif expect_product:
+        lines.append("Fetch: the rest of the product → FAILED — no file in the run")
+        missing.append("the rest of the product")
     if cases_data is None and (config.get("test_cases") or {}).get("provider") != "testrail":
         lines.append("Fetch: test cases → skipped, not used in this project")
     elif cases_data is None:

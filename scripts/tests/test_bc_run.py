@@ -591,7 +591,7 @@ class Checks(RunFolderTest):
         super().setUp()
         (self.project / ".buddy-council" / "sources.json").write_text(json.dumps(JAMA_CONFIG))
 
-    def link(self, requirements_file, cases_file, docs=None, scope="", command="coverage", background=None):
+    def link(self, requirements_file, cases_file, docs=None, scope="", command="coverage", background=None, product=None):
         run = self.new_run(command=command, scope=scope)
         self.write(run, "requirements.json", requirements_file)
         if cases_file is not None:
@@ -600,7 +600,36 @@ class Checks(RunFolderTest):
             self.write(run, "docs.json", docs)
         if background is not None:
             self.write(run, "background.json", background)
+        if product is not None:
+            self.write(run, "product.json", product)
         return bc_run.cmd_link(str(run))
+
+    def test_a_contradiction_run_on_part_of_the_product_reads_the_whole_product_too(self):
+        self.assertEqual(Path(bc_run.cmd_new(str(self.project), "contradiction", "Vitals")["product"]).name, "product.json")
+        for command, scope in (("contradiction", ""), ("contradiction", "all"), ("coverage", "Vitals"), ("lookup", "Vitals")):
+            self.assertNotIn("product", bc_run.cmd_new(str(self.project), command, scope), (command, scope))
+
+    def test_the_rest_of_the_product_is_read_to_compare_with_and_never_counted(self):
+        vitals = jama_file([r for r in REQUIREMENTS if r["feature"] == "Vitals"], scope="Vitals")
+        result = self.link(vitals, testrail_file(CASES), scope="Vitals", command="contradiction", product=jama_file(REQUIREMENTS))
+        self.assertEqual((result["mismatches"], result["missing"]), ([], []))
+        self.assertEqual(result["lines"][1], "Fetch: the rest of the product → 3 requirements and 6 test cases outside the "
+                                             "scope, to compare it with, never counted")
+        self.assertEqual((result["counts"]["requirements"], result["counts"]["test_cases_in_scope"]), (2, 1))
+
+        result = self.link(vitals, testrail_file(CASES), scope="Vitals", command="contradiction")
+        self.assertEqual(result["missing"], ["the rest of the product"])
+        self.assertIn("Fetch: the rest of the product → FAILED — no file in the run", result["lines"])
+
+        wrong = jama_file(REQUIREMENTS, scope="Vitals", root_ids=[])
+        result = self.link(vitals, testrail_file(CASES), scope="Vitals", command="contradiction", product=wrong)
+        self.assertIn("the product's requirements were read for scope 'Vitals', but the whole product is read with "
+                      "scope all.", result["mismatches"])
+        self.assertIn("the product's requirements were read with root_ids=none, but the config says [7].", result["mismatches"])
+
+        whole = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), command="contradiction", product=wrong)
+        self.assertEqual((whole["mismatches"], whole["missing"]), ([], []), "a run of the whole product needs no more")
+        self.assertFalse([line for line in whole["lines"] if "rest of the product" in line])
 
     def test_a_run_that_matches_the_config_passes_and_reports_from_the_files(self):
         result = self.link(jama_file(REQUIREMENTS), testrail_file(CASES), docs={"docs": [{"truncated": True}], "failed": [{"url": "u"}]})
