@@ -2344,7 +2344,7 @@ def cmd_match(run_text: str) -> dict[str, Any]:
         if said:
             head += f"Subject lines: {' · '.join(said)}\n"
         if context:
-            head += f"Here too, to tell which side is right: {', '.join(context)}, the requirements its test cases test.\n"
+            head += f"Also here, to tell which side is right: {', '.join(context)} — what the pair's test cases test.\n"
         for rid in ids + context:
             texts.setdefault(rid, item_text(rid, requirements, cases))
         units.append({"n": n, "ids": ids, "context": context, "head": head + "\n"})
